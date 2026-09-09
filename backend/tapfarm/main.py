@@ -13,6 +13,7 @@ import pathlib
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from solana.rpc.async_api import AsyncClient
+from solana.rpc.commitment import Confirmed
 from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 
@@ -158,8 +159,10 @@ async def claim_prepare(body: ClaimPrepareIn) -> ClaimPrepareOut:
     mint = _mint()
 
     # Fetch the blockhash last: it expires in ~60s, so anything slow should
-    # happen before this, not after.
-    async with AsyncClient(cfg.rpc_url) as rpc:
+    # happen before this, not after. Confirmed rather than the default
+    # finalized, so the hash is as fresh as possible and the wallet has the
+    # full validity window to get a signature back.
+    async with AsyncClient(cfg.rpc_url, commitment=Confirmed) as rpc:
         blockhash = (await rpc.get_latest_blockhash()).value.blockhash
 
     tx = build_claim_transaction(

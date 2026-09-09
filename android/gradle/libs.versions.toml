@@ -1,15 +1,17 @@
-# Versions resolved against Maven Central on 2026-09-09.
+# Resolved against Google Maven and Maven Central on 2026-09-09, then verified
+# by an actual build.
 #
-# agp/kotlin are a known-good conservative pair, not the newest - Android Studio
-# will offer to upgrade AGP and accepting is fine. mwa 2.2.0 is the current
-# stable (a 2.2.0-agp9-beta1 also exists if you move to AGP 9).
+# compileSdk 37 and AGP 9 are not optional: mobile-wallet-adapter 2.2.0 requires
+# consumers to compile against API 37 or later, and androidx.core 1.19 requires
+# AGP 9.1+. Note the SDK platform package is "platforms;android-37.0" - Android
+# platforms are minor-versioned now.
 [versions]
-agp = "8.7.3"
-kotlin = "2.0.21"
-composeBom = "2024.12.01"
-coreKtx = "1.15.0"
-lifecycle = "2.8.7"
-activityCompose = "1.9.3"
+agp = "9.4.0"
+kotlin = "2.4.20"
+composeBom = "2026.08.00"
+coreKtx = "1.19.0"
+lifecycle = "2.11.0"
+activityCompose = "1.13.0"
 mwa = "2.2.0"
 okhttp = "4.12.0"
 
@@ -29,5 +31,4 @@ okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhtt
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

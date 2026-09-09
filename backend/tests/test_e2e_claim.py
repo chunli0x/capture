@@ -1,0 +1,118 @@
+"""End-to-end claim against a real ledger.
+
+Every other test here is offline. This one submits the claim transaction to a
+validator and checks that SKR actually moves, which is the only way to know the
+runtime accepts it rather than that it is merely well-formed.
+
+Skipped unless a validator is reachable, so the default suite stays fast and
+offline. To run it:
+
+    solana-test-validator --reset --quiet &
+    CLUSTER=localhost ./scripts/bootstrap_devnet.sh
+    cd backend && TAPFARM_E2E=1 TAPFARM_RPC_URL=http://localhost:8899 \
+      TAPFARM_SKR_MINT=<mint from bootstrap> pytest tests/test_e2e_claim.py -v
+
+A local validator is preferable to devnet: no faucet rate limit, and devnet
+airdrops fail routinely from shared or cloud IPs.
+
+The contributor's signature is applied here with a local keypair, standing in
+for what the wallet does on the phone over MWA. That is the only simulated
+step.
+"""
+
+from __future__ import annotations
+
+import base64
+import os
+import pathlib
+
+import pytest
+from fastapi.testclient import TestClient
+from solana.rpc.async_api import AsyncClient
+from solana.rpc.commitment import Confirmed
+from solders.keypair import Keypair
+from solders.pubkey import Pubkey
+from solders.transaction import Transaction
+from spl.token.instructions import get_associated_token_address
+
+from tapfarm import main as main_mod
+from tapfarm.config import Settings
+
+pytestmark = [
+    pytest.mark.skipif(
+        os.environ.get("TAPFARM_E2E") != "1",
+        reason="set TAPFARM_E2E=1 with a reachable validator to run",
+    ),
+    pytest.mark.asyncio,
+]
+
+REWARD_PER_TASK = 1000
+TASKS = 6
+# Enough for the fee plus rent on the contributor's new SKR token account.
+CONTRIBUTOR_LAMPORTS = 1_000_000_000
+
+
+@pytest.fixture
+def live_settings(monkeypatch) -> Settings:
+    mint = os.environ.get("TAPFARM_SKR_MINT")
+    if not mint:
+        pytest.skip("TAPFARM_SKR_MINT not set; run scripts/bootstrap_devnet.sh")
+
+    treasury = pathlib.Path(__file__).parent.parent / "treasury.json"
+    if not treasury.exists():
+        pytest.skip(f"no treasury at {treasury}; run scripts/bootstrap_devnet.sh")
+
+    settings = Settings(
+        rpc_url=os.environ.get("TAPFARM_RPC_URL", "http://localhost:8899"),
+        skr_mint=mint,
+        skr_decimals=6,
+        treasury_keypair_path=str(treasury),
+        reward_per_task=REWARD_PER_TASK,
+    )
+    monkeypatch.setattr("tapfarm.main.settings", lambda: settings)
+    main_mod._EARNED.clear()
+    return settings
+
+
+async def test_claim_moves_skr_on_chain(live_settings):
+    contributor = Keypair()
+    mint = Pubkey.from_string(live_settings.skr_mint)
+    client = TestClient(main_mod.app)
+
+    # commitment=Confirmed matters: send_raw_transaction runs preflight against
+    # the client's commitment, and the default (finalized) lags far enough on a
+    # fresh validator that a just-airdropped account looks nonexistent -
+    # surfacing as a misleading "no record of a prior credit" error.
+    async with AsyncClient(live_settings.rpc_url, commitment=Confirmed) as rpc:
+        airdrop = await rpc.request_airdrop(contributor.pubkey(), CONTRIBUTOR_LAMPORTS)
+        await rpc.confirm_transaction(airdrop.value, commitment=Confirmed)
+
+        who = str(contributor.pubkey())
+        assert client.post(
+            "/spike/grant", json={"contributor": who, "tasks": TASKS}
+        ).status_code == 200
+
+        prepared = client.post("/claim/prepare", json={"contributor": who})
+        assert prepared.status_code == 200, prepared.text
+        body = prepared.json()
+        assert body["amount"] == TASKS * REWARD_PER_TASK
+        assert body["fee_payer"] == who
+
+        tx = Transaction.from_bytes(base64.b64decode(body["transaction"]))
+
+        # The backend must have left our signature slot open.
+        assert tx.message.account_keys[0] == contributor.pubkey()
+        with pytest.raises(Exception):
+            tx.verify()
+
+        # What the wallet does over MWA.
+        tx.partial_sign([contributor], tx.message.recent_blockhash)
+        tx.verify()
+
+        sent = await rpc.send_raw_transaction(bytes(tx))
+        await rpc.confirm_transaction(sent.value, commitment=Confirmed)
+
+        ata = get_associated_token_address(contributor.pubkey(), mint)
+        balance = await rpc.get_token_account_balance(ata, commitment=Confirmed)
+        assert int(balance.value.amount) == TASKS * REWARD_PER_TASK
+        assert balance.value.decimals == live_settings.skr_decimals

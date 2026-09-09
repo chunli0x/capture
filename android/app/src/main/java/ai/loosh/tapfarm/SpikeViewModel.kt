@@ -45,7 +45,7 @@ class SpikeViewModel : ViewModel() {
     private val adapter = MobileWalletAdapter(
         connectionIdentity = ConnectionIdentity(
             identityUri = Uri.parse("https://tapfarm.loosh.ai"),
-            iconRelativeUri = Uri.parse("favicon.ico"),
+            iconUri = Uri.parse("favicon.ico"),
             identityName = "Tap Farm",
         )
     ).apply { blockchain = Solana.Devnet }
@@ -63,7 +63,7 @@ class SpikeViewModel : ViewModel() {
             is TransactionResult.NoWalletFound ->
                 fail("No MWA wallet found. Install a Solana wallet, or run on a Seeker.")
             is TransactionResult.Failure ->
-                fail("Wallet connection failed: ${result.e.message ?: "unknown error"}")
+                fail("Wallet connection failed: ${result.message}")
         }
     }
 
@@ -99,7 +99,7 @@ class SpikeViewModel : ViewModel() {
             is TransactionResult.Failure ->
                 // A declined approval lands here too. The backend has already
                 // zeroed the balance in the spike; see the note in main.py.
-                fail("Claim not signed: ${result.e.message ?: "declined"}")
+                fail("Claim not signed: ${result.message}")
         }
     }
 

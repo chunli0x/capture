@@ -6,9 +6,11 @@ phone and are paid to the wallet already built into it.
 Built for [CLOCK IN](https://docs.solanamobile.com/hackathon/) — Solana Mobile ×
 RadiantsDAO, September 8 – October 8 2026.
 
-> **Status: week 1 of 4.** The claim path spike is built and the backend is
-> tested; the labeling UI is not written yet. See [docs/SPIKE.md](docs/SPIKE.md)
-> for exactly what works today and what does not.
+> **Status: week 1 of 4.** The claim path is proven end to end on-chain - the
+> contributor-signed claim transaction lands SKR in their token account, and a
+> test asserts it against a live validator. The app compiles to an APK. The
+> labeling UI and the SKR stake program are not written yet. See
+> [docs/SPIKE.md](docs/SPIKE.md) for exactly what is verified and what is not.
 
 ## The idea
 
@@ -143,8 +145,13 @@ has to be denominated in something whose value tracks the network's success.
 ## Development
 
 ```bash
-cd backend && pip install -r requirements.txt && pytest -q
+cd backend && pip install -r requirements.txt && pytest -q   # 94 offline
 cd android && ./gradlew installDebug -PtapfarmApiBase=http://<LAN-IP>:8000
 ```
 
-Full setup, including devnet bootstrap: [docs/SPIKE.md](docs/SPIKE.md).
+Toolchain floors worth knowing before you build: **compileSdk 37 and AGP 9**,
+because mobile-wallet-adapter 2.2.0 requires API 37+ and androidx.core 1.19
+requires AGP 9.1+. Verified against AGP 9.4.0 / Kotlin 2.4.20 / Gradle 9.7.1.
+
+Full setup, the on-chain test, and the toolchain gotchas that cost build cycles:
+[docs/SPIKE.md](docs/SPIKE.md).
