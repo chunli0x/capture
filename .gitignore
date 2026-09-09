@@ -27,3 +27,4 @@ captures/
 
 # Generated datasets (rebuild with tapfarm.generator.dataset)
 backend/data/
+backend/.solana-cli.yml

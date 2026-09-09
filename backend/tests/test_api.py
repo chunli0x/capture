@@ -59,8 +59,10 @@ def client(monkeypatch, treasury_file):
     async def _stub_client(_url):
         yield _StubRpc()
 
+    # Accept **kwargs so the stub keeps working as the real call site gains
+    # options (it passes commitment=Confirmed).
     monkeypatch.setattr(
-        "tapfarm.main.AsyncClient", lambda url: _stub_client(url)
+        "tapfarm.main.AsyncClient", lambda url, **_kwargs: _stub_client(url)
     )
 
     main_mod._EARNED.clear()

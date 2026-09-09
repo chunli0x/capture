@@ -77,25 +77,73 @@ default (`10.0.2.2`) is the emulator's host alias.
 Then: **Connect wallet** → **Credit 6 test tasks** → **Claim to wallet**. A
 devnet signature means the spike passed.
 
-## Known unknowns
+## Verification status
 
-Two things are unverified, both flagged honestly rather than papered over.
+**The claim path is proven on-chain.** `backend/tests/test_e2e_claim.py` submits
+the real claim transaction to a validator and asserts SKR lands in the
+contributor's token account. It is skipped by default so the suite stays
+offline; run it with a local validator:
 
-**The Kotlin has not been compiled.** This repo's CI container is firewalled off
-from `dl.google.com`, so the Android SDK cannot be installed and no build has
-run. The backend is fully tested; the app is not. Dependency versions were
-resolved against Maven Central (MWA `2.2.0` is current stable), but the MWA call
-sites are written from the documented 2.x API and may need small adjustments
-against the official sample at
-<https://github.com/solana-mobile/mobile-wallet-adapter>. The three places most
-likely to need a touch-up:
+```bash
+solana-test-validator --reset --quiet &
+CLUSTER=localhost ./scripts/bootstrap_devnet.sh
+cd backend && TAPFARM_E2E=1 TAPFARM_RPC_URL=http://localhost:8899 \
+  TAPFARM_SKR_MINT=<mint from bootstrap> pytest -q
+```
 
-- `MobileWalletAdapter(connectionIdentity = ConnectionIdentity(...))` construction
-- the `TransactionResult` subtype names in `SpikeViewModel`
-- `signAndSendTransactions(...)` inside the `adapter.transact { }` scope
+95 tests pass with a validator, 94 without. Prefer the local validator over
+devnet: no faucet rate limit, and devnet airdrops fail routinely from shared or
+cloud IPs.
 
-**AGP 8.7.3 / Kotlin 2.0.21** are a deliberately conservative pair, not the
-newest. Android Studio will likely offer to upgrade AGP; accepting is fine.
+**The app compiles.** `./gradlew assembleDebug` produces a 13 MB
+`ai.loosh.tapfarm` debug APK against compileSdk 37.
+
+**Still unverified: the on-device MWA handshake.** Everything up to and
+including transaction construction and submission is tested, but no wallet has
+authorized this app yet. That is what the Seeker run is for, and it is the one
+remaining unknown in the claim path.
+
+## Toolchain notes
+
+Several of these cost a build cycle to discover, so they are written down.
+
+**compileSdk 37 and AGP 9 are not optional.** mobile-wallet-adapter 2.2.0
+requires consumers to compile against API 37 or later, and androidx.core 1.19
+requires AGP 9.1+. The versions that work: AGP 9.4.0, Kotlin 2.4.20, Gradle
+9.7.1, compose-bom 2026.08.00.
+
+**The SDK platform package is `platforms;android-37.0`,** not `android-37` -
+Android platforms are minor-versioned now, so `sdkmanager --install
+"platforms;android-37"` fails with "Failed to find package".
+
+**AGP 9 breaks two things in any pre-9 build file.** The
+`org.jetbrains.kotlin.android` plugin must be *removed* (AGP 9 has built-in
+Kotlin support and fails the build if it is applied), and the `kotlinOptions`
+block no longer exists - `jvmTarget` moves to a top-level `kotlin {
+compilerOptions { } }` block.
+
+**MWA 2.2.0 API details** that differ from what the older docs suggest:
+
+- `ConnectionIdentity(identityUri, iconUri, identityName)` - the parameter is
+  `iconUri`, not `iconRelativeUri`.
+- `connect()` returns `TransactionResult<Unit>`, so the account does *not* come
+  from the payload. `TransactionResult.Success` carries a separate `authResult`,
+  and the public key is `authResult.accounts.first().publicKey` (a `ByteArray`).
+- `TransactionResult.Failure` exposes both `message` and `e`.
+- `signAndSendTransactions(arrayOf(txBytes))` returns a result whose
+  `signatures` is `Array<ByteArray>`.
+
+**solana-py 0.40 removed a lot.** No sync `Client`, no `spl.token.client`, and
+`solana.rpc.types.TxOpts` is gone. `simulate_transaction` accepts only
+`VersionedTransaction`, and `send_transaction` likewise - legacy transactions go
+through `send_raw_transaction(bytes(tx))`.
+
+**Set `commitment=Confirmed` on the RPC client.** `send_raw_transaction` runs
+preflight at the client's commitment, and the default is *finalized*. On a fresh
+validator a just-airdropped account is confirmed but not finalized, so preflight
+simulates against a bank where it does not exist and fails with "Attempt to
+debit an account but found no record of a prior credit" - which reads like a
+funding bug and is not one. This cost the most time of anything here.
 
 ## Deliberately not in the spike
 

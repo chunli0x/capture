@@ -1,17 +1,20 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
+    // AGP 9 has built-in Kotlin support, so org.jetbrains.kotlin.android must
+    // NOT be applied - AGP fails the build if it is.
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
 
 android {
     namespace = "ai.loosh.tapfarm"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "ai.loosh.tapfarm"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 37
         versionCode = 1
         versionName = "0.1.0-spike"
 
@@ -39,8 +42,14 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
+}
+
+// AGP 9's built-in Kotlin dropped the `kotlinOptions` block; jvmTarget moves to
+// the top-level kotlin extension. Set explicitly rather than via jvmToolchain
+// so the build uses the JDK already present instead of provisioning another.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
     }
 }
 
