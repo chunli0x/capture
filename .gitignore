@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.db
+
+# Secrets — the treasury keypair is a real signing key. Never commit it.
+backend/.env
+backend/treasury.json
+*.json.key
+
+# Android / Gradle
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.apk
+*.aab
+.idea/
+*.iml
+captures/
+
+# OS
+.DS_Store
