@@ -146,7 +146,7 @@ private fun Header(state: UiState) {
         if (state.wallet != null) {
             Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    "%.4f TAP".format(state.uiBalance),
+                    "%.4f TAP".format(state.uiTotalClaimable),
                     fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold,
                     fontFamily = FontFamily.Monospace,
@@ -201,8 +201,16 @@ private fun CampaignsScreen(
             enabled = state.claimable && state.busy == null,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (state.claimable) "Claim %.4f TAP".format(state.uiBalance) else "Claim")
+            Text(
+                if (state.claimable) {
+                    "Claim %.4f TAP".format(state.uiTotalClaimable)
+                } else {
+                    "Claim"
+                }
+            )
         }
+
+        ReferralCard(state)
 
         state.lastSignature?.let { signature ->
             Card(Modifier.fillMaxWidth()) {
@@ -303,6 +311,56 @@ private fun EligibilityCard(state: UiState) {
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
             )
+        }
+    }
+}
+
+/**
+ * Referral standing.
+ *
+ * A referrer is paid out of the platform's margin, never out of the referee's
+ * earnings, so nothing here reduces what a referred contributor takes home.
+ */
+@Composable
+private fun ReferralCard(state: UiState) {
+    val referral = state.referral ?: return
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("Referrals", fontSize = 12.sp, color = Accent)
+                Text(
+                    "${referral.referees} joined",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                )
+            }
+            Text(
+                "%.4f TAP earned".format(referral.uiEarned),
+                fontSize = 16.sp,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                referral.reason,
+                fontSize = 11.sp,
+                color = if (referral.eligible) {
+                    Accent
+                } else {
+                    Warn
+                },
+            )
+            if (state.uiReferralUnclaimed > 0.0) {
+                Text(
+                    "%.4f TAP of your claimable balance is referral earnings".format(
+                        state.uiReferralUnclaimed
+                    ),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                )
+            }
         }
     }
 }

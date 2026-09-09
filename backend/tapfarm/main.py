@@ -26,6 +26,8 @@ from tapfarm.claim_tx import (
     treasury_sign,
 )
 from tapfarm.config import settings
+from tapfarm.referrals import ReferralError, ReferralLedger
+from tapfarm.stake_reader import StakeReader
 from tapfarm.tasks import TaskExhausted, TaskStore, UnknownTask
 
 app = FastAPI(title="Tap Farm", version="0.2.0")
@@ -37,6 +39,42 @@ def task_store() -> TaskStore:
     return TaskStore(
         pathlib.Path(cfg.dataset_dir), reward_per_task=cfg.reward_per_task
     )
+
+
+@functools.lru_cache(maxsize=1)
+def referrals() -> ReferralLedger:
+    return ReferralLedger(settings=settings())
+
+
+@functools.lru_cache(maxsize=1)
+def stake_reader() -> StakeReader:
+    cfg = settings()
+    program_id = (
+        Pubkey.from_string(cfg.stake_program_id) if cfg.stake_program_id else None
+    )
+    return StakeReader(
+        cfg.rpc_url, program_id, ttl_seconds=cfg.stake_cache_ttl_seconds
+    )
+
+
+async def _credit_referrer(referee: str, task_value: int) -> None:
+    """Pay the referee's direct referrer out of the platform fee.
+
+    Eligibility is resolved before crediting because it needs an on-chain read;
+    the ledger itself stays synchronous and chain-free.
+    """
+    ledger = referrals()
+    referrer = ledger.referrer_of(referee)
+    if referrer is None:
+        return
+
+    cfg = settings()
+    eligible = await stake_reader().is_referral_eligible(
+        referrer,
+        min_tap_stake=cfg.min_tap_stake,
+        min_skr_stake=cfg.min_skr_stake,
+    )
+    ledger.credit_for_task(referee, task_value, is_eligible=lambda _who: eligible)
 
 
 def _mount_images() -> None:
@@ -131,6 +169,23 @@ class SubmitOut(BaseModel):
     reason: str
 
 
+class ReferralRegisterIn(BaseModel):
+    referrer: str
+    referee: str
+
+
+class ReferralOut(BaseModel):
+    contributor: str
+    referrer: str | None
+    referees: int
+    earned: int
+    ui_earned: float
+    unclaimed: int
+    ui_unclaimed: float
+    eligible: bool
+    reason: str
+
+
 class ClaimPrepareIn(BaseModel):
     contributor: str
 
@@ -142,6 +197,8 @@ class ClaimPrepareOut(BaseModel):
     mint: str
     fee_payer: str
     cluster: str
+    task_amount: int
+    referral_amount: int
 
 
 @app.get("/health")
@@ -175,7 +232,7 @@ def next_task(contributor: str) -> TaskOut:
 
 
 @app.post("/task/submit", response_model=SubmitOut)
-def submit_task(body: SubmitIn) -> SubmitOut:
+async def submit_task(body: SubmitIn) -> SubmitOut:
     _parse_pubkey(body.contributor)
     cfg = settings()
     try:
@@ -190,6 +247,12 @@ def submit_task(body: SubmitIn) -> SubmitOut:
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
+    # Referral pay is a share of our margin on work that actually earned, so it
+    # follows the reward: a failed gold task pays the contributor nothing and
+    # therefore pays their referrer nothing.
+    if result.reward > 0:
+        await _credit_referrer(body.contributor, result.reward)
+
     return SubmitOut(
         graded=result.graded,
         correct=result.correct,
@@ -203,20 +266,82 @@ def submit_task(body: SubmitIn) -> SubmitOut:
     )
 
 
+@app.post("/referral/register", response_model=ReferralOut)
+async def register_referral(body: ReferralRegisterIn) -> ReferralOut:
+    """Record that `referee` was brought in by `referrer`.
+
+    Registration is separate from earning: it is allowed before the referrer has
+    staked anything. Eligibility is evaluated per task at credit time, so a
+    referrer who unstakes simply stops earning rather than losing the link.
+    """
+    _parse_pubkey(body.referrer)
+    _parse_pubkey(body.referee)
+    try:
+        referrals().register(body.referrer, body.referee)
+    except ReferralError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return await _referral_out(body.referrer)
+
+
+@app.get("/referral/{contributor}", response_model=ReferralOut)
+async def referral_summary(contributor: str) -> ReferralOut:
+    _parse_pubkey(contributor)
+    return await _referral_out(contributor)
+
+
+async def _referral_out(contributor: str) -> ReferralOut:
+    cfg = settings()
+    ledger = referrals()
+    stats = ledger.stats(contributor)
+
+    eligible = await stake_reader().is_referral_eligible(
+        contributor,
+        min_tap_stake=cfg.min_tap_stake,
+        min_skr_stake=cfg.min_skr_stake,
+    )
+    if eligible:
+        reason = "earning referral rewards"
+    elif not cfg.stake_program_id:
+        reason = "staking is not configured on this deployment"
+    else:
+        reason = (
+            f"stake at least {cfg.min_tap_stake / 10**cfg.tap_decimals:g} TAP and "
+            f"{cfg.min_skr_stake / 10**cfg.skr_decimals:g} SKR to earn referral rewards"
+        )
+
+    return ReferralOut(
+        contributor=contributor,
+        referrer=ledger.referrer_of(contributor),
+        referees=stats.referees,
+        earned=stats.earned,
+        ui_earned=stats.earned / (10**cfg.tap_decimals),
+        unclaimed=stats.unclaimed,
+        ui_unclaimed=stats.unclaimed / (10**cfg.tap_decimals),
+        eligible=eligible,
+        reason=reason,
+    )
+
+
 @app.get("/contributor/{contributor}")
 def contributor(contributor: str) -> dict[str, object]:
     _parse_pubkey(contributor)
     cfg = settings()
     state = task_store().state(contributor)
     eligibility = state.record.eligibility(cfg.min_accuracy_to_claim)
+    referral_unclaimed = referrals().unclaimed(contributor)
+    total = state.balance + referral_unclaimed
     return {
         "contributor": contributor,
         "balance": state.balance,
         "ui_balance": state.balance / (10**cfg.tap_decimals),
+        "referral_unclaimed": referral_unclaimed,
+        "ui_referral_unclaimed": referral_unclaimed / (10**cfg.tap_decimals),
+        "total_claimable": total,
+        "ui_total_claimable": total / (10**cfg.tap_decimals),
         "solved": len(state.seen) - len(state.outstanding),
         "accuracy": eligibility.accuracy,
         "gold_samples": eligibility.samples,
-        "claimable": eligibility.allowed and state.balance > 0,
+        "claimable": eligibility.allowed and total > 0,
         "reason": eligibility.reason,
     }
 
@@ -227,6 +352,12 @@ async def claim_prepare(body: ClaimPrepareIn) -> ClaimPrepareOut:
 
     Eligibility is enforced here rather than only in the UI: the accuracy gate
     is worthless if the endpoint behind it will pay anyone who asks.
+
+    It gates referral earnings too, which is intentional and load-bearing. A
+    contributor who has never passed probation cannot withdraw referral rewards,
+    so there is no such thing as a pure recruiter account - you have to be a
+    working contributor in good standing to collect for bringing others in. That
+    is most of what stops this looking like a pyramid from the inside.
     """
     cfg = settings()
     contributor_key = _parse_pubkey(body.contributor)
@@ -237,7 +368,9 @@ async def claim_prepare(body: ClaimPrepareIn) -> ClaimPrepareOut:
     if not eligibility.allowed:
         raise HTTPException(403, eligibility.reason)
 
-    amount = state.balance
+    ledger = referrals()
+    referral_amount = ledger.unclaimed(body.contributor)
+    amount = state.balance + referral_amount
     if amount <= 0:
         raise HTTPException(409, "nothing to claim")
 
@@ -261,10 +394,12 @@ async def claim_prepare(body: ClaimPrepareIn) -> ClaimPrepareOut:
     )
     treasury_sign(tx, treasury)
 
-    # Debit optimistically. A declined wallet approval loses the credit; week 2
-    # moves this behind a claim record keyed on the transaction signature so an
-    # unsubmitted claim can be reopened.
+    # Debit optimistically. A declined wallet approval loses the credit; the fix
+    # is a claim record keyed on the transaction signature so an unsubmitted
+    # claim can be reopened. Both balances are debited together so a partial
+    # failure cannot leave the referral side double-claimable.
     state.balance = 0
+    ledger.claim(body.contributor)
 
     return ClaimPrepareOut(
         transaction=serialize_for_wallet(tx),
@@ -273,4 +408,6 @@ async def claim_prepare(body: ClaimPrepareIn) -> ClaimPrepareOut:
         mint=str(mint),
         fee_payer=body.contributor,
         cluster=cfg.cluster,
+        task_amount=amount - referral_amount,
+        referral_amount=referral_amount,
     )

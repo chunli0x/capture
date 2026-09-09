@@ -52,6 +52,9 @@ data class UiState(
     val goldSamples: Int = 0,
     val claimable: Boolean = false,
     val eligibilityReason: String = "",
+    val referral: Referral? = null,
+    val uiReferralUnclaimed: Double = 0.0,
+    val uiTotalClaimable: Double = 0.0,
     val busy: String? = null,
     val error: String? = null,
     val lastSignature: String? = null,
@@ -177,14 +180,18 @@ class TapFarmViewModel : ViewModel() {
     private suspend fun refresh() {
         val wallet = _state.value.wallet ?: return
         val summary = api.contributor(wallet)
+        val referral = runCatching { api.referral(wallet) }.getOrNull()
         _state.update {
             it.copy(
                 solved = summary.solved,
                 uiBalance = summary.uiBalance,
+                uiReferralUnclaimed = summary.uiReferralUnclaimed,
+                uiTotalClaimable = summary.uiTotalClaimable,
                 accuracy = summary.accuracy,
                 goldSamples = summary.goldSamples,
                 claimable = summary.claimable,
                 eligibilityReason = summary.reason,
+                referral = referral ?: it.referral,
             )
         }
     }

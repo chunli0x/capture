@@ -45,10 +45,21 @@ data class Submission(
 data class Contributor(
     val balance: Int,
     val uiBalance: Double,
+    val uiReferralUnclaimed: Double,
+    val uiTotalClaimable: Double,
     val solved: Int,
     val accuracy: Double,
     val goldSamples: Int,
     val claimable: Boolean,
+    val reason: String,
+)
+
+data class Referral(
+    val referrer: String?,
+    val referees: Int,
+    val uiEarned: Double,
+    val uiUnclaimed: Double,
+    val eligible: Boolean,
     val reason: String,
 )
 
@@ -133,10 +144,24 @@ class TapFarmApi(private val baseUrl: String = BuildConfig.API_BASE) {
         Contributor(
             balance = o.getInt("balance"),
             uiBalance = o.getDouble("ui_balance"),
+            uiReferralUnclaimed = o.getDouble("ui_referral_unclaimed"),
+            uiTotalClaimable = o.getDouble("ui_total_claimable"),
             solved = o.getInt("solved"),
             accuracy = o.getDouble("accuracy"),
             goldSamples = o.getInt("gold_samples"),
             claimable = o.getBoolean("claimable"),
+            reason = o.getString("reason"),
+        )
+    }
+
+    suspend fun referral(contributor: String): Referral = withContext(Dispatchers.IO) {
+        val o = get("/referral/$contributor")
+        Referral(
+            referrer = if (o.isNull("referrer")) null else o.getString("referrer"),
+            referees = o.getInt("referees"),
+            uiEarned = o.getDouble("ui_earned"),
+            uiUnclaimed = o.getDouble("ui_unclaimed"),
+            eligible = o.getBoolean("eligible"),
             reason = o.getString("reason"),
         )
     }
