@@ -1,0 +1,9 @@
+# Versions below are the ones actually resolved and tested in this repo.
+fastapi==0.141.1
+uvicorn[standard]==0.34.0
+solders==0.29.0
+solana==0.40.3          # note: 0.40 dropped the sync Client and spl.token.client
+pydantic==2.13.5
+pydantic-settings==2.15.0
+pytest==8.3.4
+httpx==0.28.1           # TestClient

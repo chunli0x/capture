@@ -1,0 +1,42 @@
+"""Configuration. The reward asset lives behind one constant on purpose.
+
+CLOCK IN's SKR track may want SKR token utility specifically rather than plain
+SOL, and the official rules need confirming. Keeping the mint, decimals and
+per-task reward here means answering that question is a config edit, not a
+refactor of the payout path.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="TAPFARM_", env_file=".env")
+
+    rpc_url: str = "https://api.devnet.solana.com"
+    cluster: str = "devnet"
+
+    # Devnet mock SKR. Written by `python -m tapfarm.devnet_setup`.
+    # On mainnet this becomes the canonical SKR mint - same code path.
+    skr_mint: str = ""
+    skr_decimals: int = 6
+
+    # Treasury keypair as a JSON array of 64 ints (Solana CLI keypair format).
+    treasury_keypair_path: str = "treasury.json"
+
+    # Reward per accepted task, in mint base units. 1000 = 0.001 SKR at 6dp.
+    reward_per_task: int = 1000
+
+    # Contributors below this rolling accuracy on gold-standard tasks earn
+    # nothing. See docs/ANTICHEAT.md.
+    min_accuracy_to_claim: float = 0.80
+
+    database_url: str = "sqlite:///./tapfarm.db"
+
+
+@lru_cache
+def settings() -> Settings:
+    return Settings()
