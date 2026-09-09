@@ -37,6 +37,7 @@ from spl.token.instructions import get_associated_token_address
 
 from tapfarm import main as main_mod
 from tapfarm.config import Settings
+from tapfarm.generator.dataset import build_dataset
 
 pytestmark = [
     pytest.mark.skipif(
@@ -47,13 +48,14 @@ pytestmark = [
 ]
 
 REWARD_PER_TASK = 1000
-TASKS = 6
+# Must clear MIN_GOLD_SAMPLES probation for the claim to be allowed.
+TASKS = 12
 # Enough for the fee plus rent on the contributor's new SKR token account.
 CONTRIBUTOR_LAMPORTS = 1_000_000_000
 
 
 @pytest.fixture
-def live_settings(monkeypatch) -> Settings:
+def live_settings(monkeypatch, tmp_path) -> Settings:
     mint = os.environ.get("TAPFARM_SKR_MINT")
     if not mint:
         pytest.skip("TAPFARM_SKR_MINT not set; run scripts/bootstrap_devnet.sh")
@@ -62,15 +64,19 @@ def live_settings(monkeypatch) -> Settings:
     if not treasury.exists():
         pytest.skip(f"no treasury at {treasury}; run scripts/bootstrap_devnet.sh")
 
+    dataset = tmp_path / "data"
+    build_dataset(dataset, count=200, gold_fraction=0.1, seed=21, write_images=False)
+
     settings = Settings(
         rpc_url=os.environ.get("TAPFARM_RPC_URL", "http://localhost:8899"),
         skr_mint=mint,
         skr_decimals=6,
         treasury_keypair_path=str(treasury),
         reward_per_task=REWARD_PER_TASK,
+        dataset_dir=str(dataset),
     )
     monkeypatch.setattr("tapfarm.main.settings", lambda: settings)
-    main_mod._EARNED.clear()
+    main_mod.task_store.cache_clear()
     return settings
 
 
@@ -88,9 +94,19 @@ async def test_claim_moves_skr_on_chain(live_settings):
         await rpc.confirm_transaction(airdrop.value, commitment=Confirmed)
 
         who = str(contributor.pubkey())
-        assert client.post(
-            "/spike/grant", json={"contributor": who, "tasks": TASKS}
-        ).status_code == 200
+        # Earn the balance the way the app does: solve gold tasks correctly
+        # until past probation.
+        main_mod.task_store().gold_rate_for = lambda _tier: 1.0
+        for _ in range(TASKS):
+            task = client.get("/task/next", params={"contributor": who}).json()
+            client.post(
+                "/task/submit",
+                json={
+                    "contributor": who,
+                    "task_id": task["task_id"],
+                    "cells": main_mod.task_store().withheld_truth(task["task_id"]),
+                },
+            )
 
         prepared = client.post("/claim/prepare", json={"contributor": who})
         assert prepared.status_code == 200, prepared.text

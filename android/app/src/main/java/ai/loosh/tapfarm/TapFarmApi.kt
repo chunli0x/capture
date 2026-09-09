@@ -8,23 +8,65 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 
-/** A claim the backend has built and treasury-signed, ready for the wallet. */
+data class Campaign(
+    val id: String,
+    val title: String,
+    val taskType: String,
+    val rewardPerTask: Int,
+    val status: String,
+    val description: String,
+) {
+    val isLive: Boolean get() = status == "live"
+}
+
+/** A task as served. The answer is never part of this - the server keeps it. */
+data class Task(
+    val taskId: String,
+    val prompt: String,
+    val grid: Int,
+    val imageUrl: String,
+)
+
+data class Submission(
+    val graded: Boolean,
+    val correct: Boolean?,
+    val reward: Int,
+    val balance: Int,
+    val uiBalance: Double,
+    val accuracy: Double,
+    val goldSamples: Int,
+    val claimable: Boolean,
+    val reason: String,
+)
+
+data class Contributor(
+    val balance: Int,
+    val uiBalance: Double,
+    val solved: Int,
+    val accuracy: Double,
+    val goldSamples: Int,
+    val claimable: Boolean,
+    val reason: String,
+)
+
 data class PreparedClaim(
     val transactionBase64: String,
     val uiAmount: Double,
     val cluster: String,
 )
 
-data class Balance(val uiEarned: Double, val claimable: Boolean)
+/** Raised for a 4xx the UI is expected to handle rather than show as a crash. */
+class ApiException(val status: Int, message: String) : IOException(message)
 
 /**
  * Backend client.
  *
  * OkHttp plus org.json (part of the Android framework, no dependency) instead of
- * Retrofit + a serialization plugin - the spike has three endpoints and this
- * keeps the build simple.
+ * Retrofit + a serialization plugin - the API is small and this keeps the build
+ * simple.
  */
 class TapFarmApi(private val baseUrl: String = BuildConfig.API_BASE) {
 
@@ -34,53 +76,107 @@ class TapFarmApi(private val baseUrl: String = BuildConfig.API_BASE) {
 
     private val json = "application/json".toMediaType()
 
-    suspend fun balance(contributor: String): Balance = withContext(Dispatchers.IO) {
-        val body = get("/contributor/$contributor")
-        Balance(
-            uiEarned = body.getDouble("ui_earned"),
-            claimable = body.getBoolean("claimable"),
+    /** Task images are served relative to the API root. */
+    fun absoluteUrl(path: String): String =
+        if (path.startsWith("http")) path else baseUrl + path
+
+    suspend fun campaigns(): List<Campaign> = withContext(Dispatchers.IO) {
+        val array = JSONArray(getRaw("/campaigns"))
+        (0 until array.length()).map { i ->
+            val o = array.getJSONObject(i)
+            Campaign(
+                id = o.getString("id"),
+                title = o.getString("title"),
+                taskType = o.getString("task_type"),
+                rewardPerTask = o.getInt("reward_per_task"),
+                status = o.getString("status"),
+                description = o.getString("description"),
+            )
+        }
+    }
+
+    suspend fun nextTask(contributor: String): Task = withContext(Dispatchers.IO) {
+        val o = get("/task/next?contributor=$contributor")
+        Task(
+            taskId = o.getString("task_id"),
+            prompt = o.getString("prompt"),
+            grid = o.getInt("grid"),
+            imageUrl = absoluteUrl(o.getString("image_url")),
         )
     }
 
-    /** Spike-only: credit tasks without solving them. Replaced by task submit. */
-    suspend fun grant(contributor: String, tasks: Int): Unit = withContext(Dispatchers.IO) {
-        post(
-            "/spike/grant",
-            JSONObject().put("contributor", contributor).put("tasks", tasks),
+    suspend fun submit(
+        contributor: String,
+        taskId: String,
+        cells: Set<Int>,
+    ): Submission = withContext(Dispatchers.IO) {
+        val payload = JSONObject()
+            .put("contributor", contributor)
+            .put("task_id", taskId)
+            .put("cells", JSONArray(cells.sorted()))
+        val o = post("/task/submit", payload)
+        Submission(
+            graded = o.getBoolean("graded"),
+            correct = if (o.isNull("correct")) null else o.getBoolean("correct"),
+            reward = o.getInt("reward"),
+            balance = o.getInt("balance"),
+            uiBalance = o.getDouble("ui_balance"),
+            accuracy = o.getDouble("accuracy"),
+            goldSamples = o.getInt("gold_samples"),
+            claimable = o.getBoolean("claimable"),
+            reason = o.getString("reason"),
+        )
+    }
+
+    suspend fun contributor(contributor: String): Contributor = withContext(Dispatchers.IO) {
+        val o = get("/contributor/$contributor")
+        Contributor(
+            balance = o.getInt("balance"),
+            uiBalance = o.getDouble("ui_balance"),
+            solved = o.getInt("solved"),
+            accuracy = o.getDouble("accuracy"),
+            goldSamples = o.getInt("gold_samples"),
+            claimable = o.getBoolean("claimable"),
+            reason = o.getString("reason"),
         )
     }
 
     suspend fun prepareClaim(contributor: String): PreparedClaim = withContext(Dispatchers.IO) {
-        val body = post("/claim/prepare", JSONObject().put("contributor", contributor))
+        val o = post("/claim/prepare", JSONObject().put("contributor", contributor))
         PreparedClaim(
-            transactionBase64 = body.getString("transaction"),
-            uiAmount = body.getDouble("ui_amount"),
-            cluster = body.getString("cluster"),
+            transactionBase64 = o.getString("transaction"),
+            uiAmount = o.getDouble("ui_amount"),
+            cluster = o.getString("cluster"),
         )
     }
 
-    private fun get(path: String): JSONObject =
+    private fun get(path: String): JSONObject = JSONObject(getRaw(path))
+
+    private fun getRaw(path: String): String =
         execute(Request.Builder().url(baseUrl + path).get().build())
 
     private fun post(path: String, payload: JSONObject): JSONObject =
-        execute(
-            Request.Builder()
-                .url(baseUrl + path)
-                .post(payload.toString().toRequestBody(json))
-                .build()
+        JSONObject(
+            execute(
+                Request.Builder()
+                    .url(baseUrl + path)
+                    .post(payload.toString().toRequestBody(json))
+                    .build()
+            )
         )
 
-    private fun execute(request: Request): JSONObject {
+    private fun execute(request: Request): String {
         http.newCall(request).execute().use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 // FastAPI puts the reason in "detail"; surface it rather than a
-                // bare status code, since "nothing to claim" is a normal state.
+                // bare status code, since "not eligible yet" is a normal state
+                // the UI needs to explain.
                 val detail = runCatching { JSONObject(text).getString("detail") }
                     .getOrElse { text.ifBlank { "HTTP ${response.code}" } }
-                throw IOException(detail)
+                throw ApiException(response.code, detail)
             }
-            return JSONObject(text)
+            return text
         }
     }
 }

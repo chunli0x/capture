@@ -67,4 +67,6 @@ dependencies {
 
     implementation(libs.mwa.clientlib.ktx)
     implementation(libs.okhttp)
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
 }
