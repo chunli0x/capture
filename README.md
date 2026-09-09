@@ -33,6 +33,14 @@ a new kind of labeling work is a campaign definition rather than a new app.
 Tap-grid ships first because it is fast to build and fast to demo. Bounding
 boxes are the second campaign and map directly onto YOLO-format training data.
 
+![Sample tap-grid tasks](docs/img/sample_tasks.png)
+
+Sample tasks with ground truth ringed in green. Distractors always include a
+near-miss sharing the target's shape and one sharing its colour, so checking a
+single attribute gets the answer wrong. Objects never straddle a cell border:
+ambiguous tasks would poison gold-standard scoring and punish honest
+contributors.
+
 ## How the payout works
 
 Contributors accrue a balance as their labels are accepted, then claim it in one
@@ -75,10 +83,26 @@ Vault-backed.
 
 ```
 android/    Kotlin + Jetpack Compose app, MWA integration
-backend/    FastAPI + solders: campaigns, claim transaction construction
+backend/
+  tapfarm/generator/   Synthetic scene generation, dataset + YOLO labels
+  tapfarm/scoring.py   Gold-standard grading, claim eligibility
+  tapfarm/claim_tx.py  Two-signer claim transaction
+programs/   Anchor stake program (SKR bond, slashing)
 scripts/    Devnet bootstrap (treasury keypair, mock SKR mint)
 docs/       Spike notes, platform roadmap
 ```
+
+Build the dataset:
+
+```bash
+cd backend
+python -m tapfarm.generator.dataset --out data/tapgrid --count 10000
+```
+
+One generator serves both campaigns and the accuracy-curve model: tap-grid
+answers for `img-grid-v1`, and YOLO-format boxes for `robotics-bbox-v1` and
+model training. Because scenes are built from known ground truth, the
+annotations are exact and cost nothing.
 
 Transaction construction lives in the backend rather than the app on purpose:
 it can be unit tested there instead of only being verifiable on a phone. The
@@ -90,10 +114,31 @@ Labeling networks are only worth what their data quality is worth, so the
 question "what stops someone scripting ten thousand submissions" has to have an
 answer in the product, not the pitch.
 
-**Gold-standard tasks:** the synthetic generator produces ground truth for free,
-so tasks with known answers are seeded into every contributor's stream at an
-undisclosed rate. Rolling accuracy against those gates claiming. Get them wrong
-and you earn nothing, and you cannot tell which task was the check.
+**Gold-standard tasks.** The synthetic generator produces ground truth for
+free, so tasks with known answers are seeded into every contributor's stream at
+an undisclosed rate. Rolling accuracy against those gates claiming, and you
+cannot tell which task was the check.
+
+Three rules do the work, each specified by a test in
+`backend/tests/test_scoring.py`:
+
+- **Exact-set grading.** No partial credit, because partial credit rewards
+  tapping every cell — recall goes to 1.0 for free. With 9 cells there are 512
+  possible subsets, so guessing is not a strategy.
+- **Probation before payout.** Rolling accuracy alone lets a fresh wallet claim
+  after one lucky answer, which makes sybils cheap. Ten verification tasks are
+  required before any claim, and unverified tasks do not count toward it.
+- **A bounded accuracy window.** Only recent results count, so a contributor
+  who was accurate and then starts scripting loses eligibility rather than
+  coasting on history.
+
+**SKR as a quality bond.** Detection alone is a treadmill — a scripter just
+makes new wallets. Contributors stake SKR to unlock higher-rate campaigns, and
+the accuracy above is the slashing oracle: fall below threshold and part of the
+bond is burned back into the campaign reward pool, so honest labelers are paid
+out of dishonest ones. This is what makes SKR load-bearing rather than
+decorative: swap in a stablecoin and the security model breaks, because a bond
+has to be denominated in something whose value tracks the network's success.
 
 ## Development
 

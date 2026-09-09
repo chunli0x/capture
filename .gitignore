@@ -24,3 +24,6 @@ captures/
 
 # OS
 .DS_Store
+
+# Generated datasets (rebuild with tapfarm.generator.dataset)
+backend/data/
