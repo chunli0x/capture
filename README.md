@@ -6,10 +6,9 @@ phone and are paid to the wallet already built into it.
 Built for [CLOCK IN](https://docs.solanamobile.com/hackathon/) — Solana Mobile ×
 RadiantsDAO, September 8 – October 8 2026.
 
-> **Status: week 1 of 4.** The claim path is proven end to end on-chain - the
-> contributor-signed claim transaction lands SKR in their token account, and a
-> test asserts it against a live validator. The app compiles to an APK. The
-> labeling UI and the SKR stake program are not written yet. See
+> **Status: week 1 of 4.** The claim path and the SKR stake program are both
+> proven on-chain against a live validator, and the app compiles to an APK. The
+> labeling UI is not written yet. 118 tests pass. See
 > [docs/SPIKE.md](docs/SPIKE.md) for exactly what is verified and what is not.
 
 ## The idea
@@ -86,11 +85,13 @@ Vault-backed.
 ```
 android/    Kotlin + Jetpack Compose app, MWA integration
 backend/
-  tapfarm/generator/   Synthetic scene generation, dataset + YOLO labels
-  tapfarm/scoring.py   Gold-standard grading, claim eligibility
-  tapfarm/claim_tx.py  Two-signer claim transaction
-programs/   Anchor stake program (SKR bond, slashing)
-scripts/    Devnet bootstrap (treasury keypair, mock SKR mint)
+  tapfarm/generator/     Synthetic scene generation, dataset + YOLO labels
+  tapfarm/scoring.py     Gold-standard grading, claim eligibility
+  tapfarm/claim_tx.py    Two-signer claim transaction
+  tapfarm/stake_client.py Instruction builders for the stake program
+programs/
+  tapfarm-stake/         Anchor program: SKR bond, cooldown, slashing
+scripts/    Devnet bootstrap and program deploy
 docs/       Spike notes, platform roadmap
 ```
 
@@ -145,8 +146,17 @@ has to be denominated in something whose value tracks the network's success.
 ## Development
 
 ```bash
-cd backend && pip install -r requirements.txt && pytest -q   # 94 offline
+cd backend && pip install -r requirements.txt && pytest -q   # 94, offline
+cargo test -p tapfarm-stake --lib                            # 16, program logic
 cd android && ./gradlew installDebug -PtapfarmApiBase=http://<LAN-IP>:8000
+```
+
+The on-chain tests (102 with a validator) need one running:
+
+```bash
+solana-test-validator --reset --quiet &
+CLUSTER=localhost ./scripts/bootstrap_devnet.sh
+./scripts/deploy_stake_program.sh
 ```
 
 Toolchain floors worth knowing before you build: **compileSdk 37 and AGP 9**,

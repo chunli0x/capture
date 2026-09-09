@@ -8,7 +8,8 @@ here so the submission can be honest about the line between built and planned.
 - Android app, MWA wallet connect, campaign-driven task rendering
 - Tap-grid labeling campaign over a synthetic dataset
 - Contributor-signed SKR claim on devnet
-- Gold-standard accuracy gating
+- On-chain SKR stake bond with cooldown and slashing (Anchor)
+- Gold-standard accuracy gating, wired as the slashing oracle
 - Model accuracy curve trained on contributor labels
 
 ## Not built, and why
@@ -33,6 +34,6 @@ does not fit in the same month as a mobile app.
 
 1. Per-contributor PDA reward vaults (Anchor)
 2. Bounding-box campaign — robotics grasp annotation
-3. Cross-contributor agreement scoring alongside gold-standard checks
-4. dApp Store publishing
-5. Buyer-facing campaign creation API
+4. Cross-contributor agreement scoring alongside gold-standard checks
+5. dApp Store publishing
+6. Buyer-facing campaign creation API

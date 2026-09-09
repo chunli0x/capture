@@ -91,7 +91,13 @@ cd backend && TAPFARM_E2E=1 TAPFARM_RPC_URL=http://localhost:8899 \
   TAPFARM_SKR_MINT=<mint from bootstrap> pytest -q
 ```
 
-95 tests pass with a validator, 94 without. Prefer the local validator over
+**The stake program is proven on-chain too.** `backend/tests/test_stake_program.py`
+exercises stake, slash, cooldown and withdraw against the deployed program,
+including that only the slash authority can slash and that a slash during
+cooldown reduces the payout.
+
+Totals: **16** Rust logic tests (`cargo test -p tapfarm-stake --lib`), **94**
+Python tests offline, **102** with a validator and the program deployed. Prefer the local validator over
 devnet: no faucet rate limit, and devnet airdrops fail routinely from shared or
 cloud IPs.
 
@@ -144,6 +150,53 @@ validator a just-airdropped account is confirmed but not finalized, so preflight
 simulates against a bank where it does not exist and fails with "Attempt to
 debit an account but found no record of a prior credit" - which reads like a
 funding bug and is not one. This cost the most time of anything here.
+
+
+## Stake program notes
+
+`programs/tapfarm-stake` is deployed and its lifecycle is tested against a live
+runtime. Build and deploy with `./scripts/deploy_stake_program.sh`.
+
+**The program keypair is not in the repo.** It controls both the program address
+and its upgrade authority, so `programs/*/program-keypair.json` is gitignored.
+To deploy from a fresh clone, generate one and point the code at it:
+
+```bash
+solana-keygen new --no-bip39-passphrase -o programs/tapfarm-stake/program-keypair.json
+solana-keygen pubkey programs/tapfarm-stake/program-keypair.json
+# then update declare_id!() in programs/tapfarm-stake/src/lib.rs
+# and [programs.localnet] in Anchor.toml
+```
+
+**`--arch v3` is mandatory.** SIMD-0500 is active and disables deployment of
+SBPF v0, v1 and v2, while `cargo-build-sbf` still defaults to v0. A v0 binary
+fails to deploy with "Detected sbpf_version required by the executable which are
+not enabled" followed by a generic "invalid account data for instruction" -
+which does not point at the architecture at all.
+
+**cargo does not rebuild when `--arch` changes.** Passing a different `--arch`
+without removing `target/deploy/tapfarm_stake.so` silently redeploys the
+previous binary, so the same error repeats while the flag looks correct. This
+sent me chasing the wrong cause through four deploy attempts. Verify:
+
+```bash
+readelf -h target/deploy/tapfarm_stake.so | grep Flags   # want "CPU Version: 3"
+```
+
+**Failed deploys leave buffer accounts holding real SOL.** Reclaim with
+`solana -C backend/.solana-cli.yml program close --buffers --bypass-warning`
+before retrying, or the next attempt fails on insufficient funds and looks like
+a different problem.
+
+**Anchor 1.x changed `CpiContext`.** It takes the program id as a `Pubkey` now,
+not an `AccountInfo` - so `CpiContext::new(ctx.accounts.token_program.key(), ..)`
+rather than `.to_account_info()`. Note the crate is at 1.2.0; guides written
+against the 0.29/0.31 line will not compile.
+
+**Config is a singleton PDA** (seeds `[b"config"]`), so `initialize` can only
+run once per deployment and the on-chain tests treat it as idempotent. If
+`min_stake` or `cooldown_seconds` need to vary per test, that is the constraint
+to change first.
 
 ## Deliberately not in the spike
 
