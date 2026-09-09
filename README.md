@@ -7,9 +7,9 @@ Built for [CLOCK IN](https://docs.solanamobile.com/hackathon/) — Solana Mobile
 RadiantsDAO, September 8 – October 8 2026.
 
 > **Status: week 2 of 4.** Task serving, the labeling UI, the contributor-signed
-> claim and the two-token stake program are built, and everything on-chain is
-> proven against a live validator. 159 tests pass. Referral accounting and the
-> on-device MWA handshake are the open items. See [docs/SPIKE.md](docs/SPIKE.md)
+> claim, the two-token stake program and referral accounting are built, and
+> everything on-chain is proven against a live validator. 198 tests pass. The
+> on-device MWA handshake is the open item. See [docs/SPIKE.md](docs/SPIKE.md)
 > for the full ledger of what is proven and what is not.
 
 ## Tokens
@@ -47,6 +47,35 @@ the program cannot tell the difference, which is the point.
 That last row is the whole difference between a referral bonus and a pyramid, so
 `Settings.referral_reward` caps the payout at the platform fee structurally
 rather than trusting configuration discipline.
+
+## Referrals
+
+A referrer earns a share of **the platform's margin** on work their referees
+complete. The referee's earnings are never touched — a referred contributor is
+never worse off for having been referred.
+
+"Earn a percentage of the people you recruit" describes both a normal referral
+programme and a pyramid; which one it is depends on whose money it comes from.
+Four rules keep this one on the right side:
+
+- **Depth one.** Only the direct referrer is paid. Chains earn nothing past the
+  first hop, so there is no downline — and a downline is what makes a pyramid.
+- **No self-referral, no mutual referral.** A wallet cannot refer itself, and
+  two wallets cannot refer each other and skim the fee twice for the same work.
+- **Both stakes required.** A referrer needs a slashable TAP bond and the SKR
+  access stake, so they have something at risk if the people they bring in
+  produce garbage.
+- **No pure recruiters.** Referral earnings are gated behind the same accuracy
+  check as everything else, so a wallet that has never passed probation cannot
+  withdraw them. You have to be a working contributor to collect for bringing
+  others in.
+
+On sybils: nothing stops one person opening two wallets, and that is not
+detectable from an address. The defence is economic. A referral only pays when
+the referee *earns*, and earning requires passing gold-standard accuracy — so a
+fake referee that does not label correctly produces nothing to take a share of.
+To farm referrals you have to do real verified work, at which point you are a
+contributor and the 2% is an ordinary acquisition cost.
 
 ## The idea
 
@@ -126,6 +155,8 @@ backend/
   tapfarm/scoring.py     Gold-standard grading, claim eligibility
   tapfarm/claim_tx.py    Two-signer claim transaction
   tapfarm/stake_client.py Instruction builders for the stake program
+  tapfarm/referrals.py   Referral graph, accrual and balances
+  tapfarm/stake_reader.py Cached on-chain stake lookups for eligibility
 programs/
   tapfarm-stake/         Anchor program: TAP bond, SKR access stake, slashing
 scripts/    Devnet bootstrap and program deploy
@@ -184,7 +215,7 @@ never slashed.
 ```bash
 cd backend && pip install -r requirements.txt
 python -m tapfarm.generator.dataset --out data/tapgrid --count 10000
-pytest -q                                                    # 126, offline
+pytest -q                                                    # 165, offline
 cargo test -p tapfarm-stake --lib                            # 21, program logic
 uvicorn tapfarm.main:app --host 0.0.0.0 --port 8000
 
@@ -194,7 +225,7 @@ cd android && ./gradlew installDebug -PtapfarmApiBase=http://<LAN-IP>:8000
 `--host 0.0.0.0` matters: the phone reaches the backend over the LAN, not
 localhost.
 
-The on-chain tests (138 with a validator) need one running:
+The on-chain tests (177 with a validator) need one running:
 
 ```bash
 solana-test-validator --reset --quiet &

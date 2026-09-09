@@ -11,6 +11,8 @@ here so the submission can be honest about the line between built and planned.
 - On-chain two-token stake program (Anchor): slashable TAP bond, non-slashable
   SKR access stake, per-mint vaults, cooldown and slashing
 - Gold-standard accuracy gating, wired as the slashing oracle
+- Referral accounting funded from platform margin, depth one, gated on both
+  stakes and on the referrer's own accuracy record
 - Model accuracy curve trained on contributor labels
 
 ## Not built, and why
@@ -32,12 +34,6 @@ does not fit in the same month as a mobile app.
 **iOS.** MWA is Android-native and Seeker is Android.
 
 ## Decided, not yet built
-
-**Referral earnings.** A referrer earns a percentage of the platform's margin on
-contributors they bring in — **not** a cut skimmed off the referee, whose
-earnings are untouched. Depth one only, self-referral blocked, and referral
-eligibility requires both stakes. Paying it out of our own margin rather than
-the worker's is the difference between a growth incentive and a pyramid.
 
 **One real mainnet SKR stake in the demo.** Everything else runs on devnet with
 TAP; a single genuine mainnet SKR stake transaction shows the SKR integration is
