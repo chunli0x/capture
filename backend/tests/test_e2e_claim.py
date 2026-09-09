@@ -1,7 +1,7 @@
 """End-to-end claim against a real ledger.
 
 Every other test here is offline. This one submits the claim transaction to a
-validator and checks that SKR actually moves, which is the only way to know the
+validator and checks that TAP actually moves, which is the only way to know the
 runtime accepts it rather than that it is merely well-formed.
 
 Skipped unless a validator is reachable, so the default suite stays fast and
@@ -50,15 +50,15 @@ pytestmark = [
 REWARD_PER_TASK = 1000
 # Must clear MIN_GOLD_SAMPLES probation for the claim to be allowed.
 TASKS = 12
-# Enough for the fee plus rent on the contributor's new SKR token account.
+# Enough for the fee plus rent on the contributor's new TAP token account.
 CONTRIBUTOR_LAMPORTS = 1_000_000_000
 
 
 @pytest.fixture
 def live_settings(monkeypatch, tmp_path) -> Settings:
-    mint = os.environ.get("TAPFARM_SKR_MINT")
+    mint = os.environ.get("TAPFARM_TAP_MINT")
     if not mint:
-        pytest.skip("TAPFARM_SKR_MINT not set; run scripts/bootstrap_devnet.sh")
+        pytest.skip("TAPFARM_TAP_MINT not set; run scripts/bootstrap_devnet.sh")
 
     treasury = pathlib.Path(__file__).parent.parent / "treasury.json"
     if not treasury.exists():
@@ -69,8 +69,8 @@ def live_settings(monkeypatch, tmp_path) -> Settings:
 
     settings = Settings(
         rpc_url=os.environ.get("TAPFARM_RPC_URL", "http://localhost:8899"),
-        skr_mint=mint,
-        skr_decimals=6,
+        tap_mint=mint,
+        tap_decimals=6,
         treasury_keypair_path=str(treasury),
         reward_per_task=REWARD_PER_TASK,
         dataset_dir=str(dataset),
@@ -80,9 +80,9 @@ def live_settings(monkeypatch, tmp_path) -> Settings:
     return settings
 
 
-async def test_claim_moves_skr_on_chain(live_settings):
+async def test_claim_moves_tap_on_chain(live_settings):
     contributor = Keypair()
-    mint = Pubkey.from_string(live_settings.skr_mint)
+    mint = Pubkey.from_string(live_settings.tap_mint)
     client = TestClient(main_mod.app)
 
     # commitment=Confirmed matters: send_raw_transaction runs preflight against
@@ -131,4 +131,4 @@ async def test_claim_moves_skr_on_chain(live_settings):
         ata = get_associated_token_address(contributor.pubkey(), mint)
         balance = await rpc.get_token_account_balance(ata, commitment=Confirmed)
         assert int(balance.value.amount) == TASKS * REWARD_PER_TASK
-        assert balance.value.decimals == live_settings.skr_decimals
+        assert balance.value.decimals == live_settings.tap_decimals

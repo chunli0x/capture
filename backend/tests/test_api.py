@@ -37,8 +37,8 @@ def client(monkeypatch, tmp_path):
     build_dataset(dataset, count=300, gold_fraction=0.1, seed=11, write_images=False)
 
     test_settings = Settings(
-        skr_mint=str(mint),
-        skr_decimals=6,
+        tap_mint=str(mint),
+        tap_decimals=6,
         treasury_keypair_path=str(treasury_path),
         reward_per_task=REWARD,
         dataset_dir=str(dataset),

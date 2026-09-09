@@ -22,7 +22,7 @@ from tapfarm.claim_tx import (
 
 BLOCKHASH = Hash.from_string("11111111111111111111111111111111")
 DECIMALS = 6
-AMOUNT = 1_500_000  # 1.5 SKR
+AMOUNT = 1_500_000  # 1.5 TAP
 
 
 @pytest.fixture

@@ -1,27 +1,30 @@
 #!/usr/bin/env bash
-# Devnet bootstrap: treasury keypair + mock SKR mint + initial supply.
+# Bootstrap: treasury keypair, the TAP mint, and a local access-stake mint.
 #
-# Uses the Solana CLI rather than Python because solana-py 0.40+ dropped both
-# its sync client and spl.token.client, so the Python route now means
-# hand-rolling mint creation. The CLI writes keypairs as a JSON array of 64
-# ints, which is exactly what solders' Keypair.from_bytes reads - no conversion.
-#
-# Prereqs: solana + spl-token CLI (https://solana.com/docs/intro/installation)
-# Run from anywhere. Idempotent: re-running reuses an existing treasury.
-#
-#   ./scripts/bootstrap_devnet.sh              # devnet
+#   ./scripts/bootstrap_devnet.sh                     # devnet
 #   CLUSTER=localhost ./scripts/bootstrap_devnet.sh   # solana-test-validator
 #
-# The local validator has no faucet rate limit and is the fastest way to
-# exercise the whole claim path. Devnet airdrops are throttled per IP and fail
-# routinely from shared or cloud addresses.
+# TAP is ours on every cluster - it is what contributors earn and the bond they
+# post - so minting it here is the real thing, not a stand-in.
+#
+# SKR is Solana Mobile's and does not exist on devnet. We deliberately do not
+# mint anything called SKR: putting a counterfeit of someone else's token in
+# front of judges is not a disclaimer problem, it is a don't. But the stake
+# program takes two mints at initialize, so this script also creates a plain
+# local mint to occupy the access-stake slot in tests. It is a test fixture, is
+# never shown to a user as SKR, and on mainnet that slot holds the canonical SKR
+# mint instead - the program cannot tell the difference, which is the point.
+#
+# Prereqs: solana + spl-token CLI (https://solana.com/docs/intro/installation)
+# Idempotent: re-running reuses an existing treasury.
 set -euo pipefail
 
 BACKEND_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../backend" && pwd)"
 TREASURY="$BACKEND_DIR/treasury.json"
 CLI_CONFIG="$BACKEND_DIR/.solana-cli.yml"
 DECIMALS=6
-SUPPLY=10000
+TAP_SUPPLY=1000000
+ACCESS_SUPPLY=1000
 CLUSTER="${CLUSTER:-devnet}"
 
 command -v solana >/dev/null    || { echo "solana CLI not found" >&2; exit 1; }
@@ -44,38 +47,51 @@ solana config set --config "$CLI_CONFIG" --url "$CLUSTER" --keypair "$TREASURY" 
 echo "treasury: $TREASURY_PUBKEY  (cluster: $CLUSTER)"
 
 BALANCE="$(solana -C "$CLI_CONFIG" balance "$TREASURY_PUBKEY" | awk '{print $1}')"
-if (( $(echo "$BALANCE < 0.5" | bc -l) )); then
+if (( $(echo "$BALANCE < 2" | bc -l) )); then
   echo "airdropping 2 SOL..."
-  solana -C "$CLI_CONFIG" airdrop 2 "$TREASURY_PUBKEY" >/dev/null || {
+  solana -C "$CLI_CONFIG" airdrop 2 >/dev/null || {
     echo "airdrop failed - fund $TREASURY_PUBKEY at https://faucet.solana.com," >&2
     echo "or re-run against a local validator: CLUSTER=localhost $0" >&2
     exit 1
   }
 fi
 
-echo "creating mock SKR mint..."
-MINT="$(spl-token -C "$CLI_CONFIG" create-token \
-          --decimals "$DECIMALS" \
-          --mint-authority "$TREASURY_PUBKEY" \
-          --output json \
-        | python3 -c 'import json,sys; print(json.load(sys.stdin)["commandOutput"]["address"])')"
+# $1 = human label, $2 = supply
+create_mint() {
+  local supply="$1" mint
+  mint="$(spl-token -C "$CLI_CONFIG" create-token \
+            --decimals "$DECIMALS" \
+            --mint-authority "$TREASURY_PUBKEY" \
+            --output json \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin)["commandOutput"]["address"])')"
+  spl-token -C "$CLI_CONFIG" create-account "$mint" >/dev/null
+  spl-token -C "$CLI_CONFIG" mint "$mint" "$supply" >/dev/null
+  echo "$mint"
+}
 
-spl-token -C "$CLI_CONFIG" create-account "$MINT" >/dev/null
-spl-token -C "$CLI_CONFIG" mint "$MINT" "$SUPPLY" >/dev/null
+echo "creating TAP mint..."
+TAP_MINT="$(create_mint "$TAP_SUPPLY")"
+
+echo "creating local access-stake mint (test fixture, not SKR)..."
+ACCESS_MINT="$(create_mint "$ACCESS_SUPPLY")"
 
 cat <<EOF
 
 ==============================================================
-  mock SKR mint : $MINT
+  TAP mint      : $TAP_MINT
+  access mint   : $ACCESS_MINT   (local test fixture)
   treasury      : $TREASURY_PUBKEY
-  supply        : $SUPPLY SKR ($DECIMALS decimals)
   cluster       : $CLUSTER
 ==============================================================
 
 Write backend/.env:
 
-  TAPFARM_SKR_MINT=$MINT
-  TAPFARM_SKR_DECIMALS=$DECIMALS
+  TAPFARM_TAP_MINT=$TAP_MINT
+  TAPFARM_TAP_DECIMALS=$DECIMALS
+  TAPFARM_SKR_MINT=$ACCESS_MINT
   TAPFARM_TREASURY_KEYPAIR_PATH=$TREASURY
+
+On mainnet, TAPFARM_SKR_MINT is the canonical SKR mint and this fixture is
+not created at all.
 
 EOF

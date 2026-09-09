@@ -54,6 +54,6 @@ Run the on-chain tests:
 
   cd backend && TAPFARM_E2E=1 \\
     TAPFARM_STAKE_PROGRAM=$PROGRAM_ID \\
-    TAPFARM_SKR_MINT=<mint> pytest -q
+    TAPFARM_TAP_MINT=<tap mint> TAPFARM_SKR_MINT=<access mint> pytest -q
 
 EOF

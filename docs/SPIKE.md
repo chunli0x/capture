@@ -195,8 +195,13 @@ against the 0.29/0.31 line will not compile.
 
 **Config is a singleton PDA** (seeds `[b"config"]`), so `initialize` can only
 run once per deployment and the on-chain tests treat it as idempotent. If
-`min_stake` or `cooldown_seconds` need to vary per test, that is the constraint
-to change first.
+`min_tap_stake`, `min_skr_stake` or `cooldown_seconds` need to vary per test,
+that is the constraint to change first.
+
+**Vaults are per-mint** (seeds `[b"vault", mint]`), so TAP and SKR are held in
+separate token accounts and `stake`/`withdraw` validate that the passed mint
+matches the asset. `slash` takes no asset at all - the only slashable stake is
+TAP.
 
 ## Deliberately not in the spike
 

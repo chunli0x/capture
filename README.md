@@ -7,28 +7,46 @@ Built for [CLOCK IN](https://docs.solanamobile.com/hackathon/) — Solana Mobile
 RadiantsDAO, September 8 – October 8 2026.
 
 > **Status: week 2 of 4.** Task serving, the labeling UI, the contributor-signed
-> claim and the on-chain stake bond are all built; the claim path and the stake
-> program are proven against a live validator. 150 tests pass. The reward token
-> is being renamed (see **Tokens** below) and the on-device MWA handshake is
-> still unverified. See [docs/SPIKE.md](docs/SPIKE.md) for the full ledger of
-> what is proven and what is not.
+> claim and the two-token stake program are built, and everything on-chain is
+> proven against a live validator. 159 tests pass. Referral accounting and the
+> on-device MWA handshake are the open items. See [docs/SPIKE.md](docs/SPIKE.md)
+> for the full ledger of what is proven and what is not.
 
 ## Tokens
 
-Two tokens, doing different jobs.
+Two tokens, two jobs. The split is not cosmetic — it decides what we are allowed
+to destroy.
 
-**TAP** is ours: the earnings token, and the **slashable** quality bond. Get
+**TAP** is ours: what contributors earn, and the **slashable** quality bond. Get
 gold-standard tasks wrong often enough and part of your TAP bond is burned into
 the campaign reward pool.
 
-**SKR** is Solana Mobile's, and we do not mint it. It is a **non-slashable**
-access stake — staking real SKR unlocks higher-rate campaigns and referral
-eligibility. Slashing it was never on the table: it is not our token to burn.
+**SKR** is Solana Mobile's. We never mint it and we never burn it. It is a
+**non-slashable** access stake: locking real SKR signals platform commitment and
+unlocks referral earnings. `slash` has no asset parameter at all, so SKR being
+untouchable is a property of the program's interface rather than of calling it
+carefully — and `test_slashing_never_touches_the_skr_stake` tries a maximal
+slash to prove it.
 
-> The tree currently still says `skr_mint` for the reward asset and the devnet
-> bootstrap mints a stand-in. That was a mistake — minting a token called SKR
-> for a demo is not something a judge should have to squint at — and the rename
-> to TAP is the next change. Tracked in [docs/PLATFORM.md](docs/PLATFORM.md).
+Because SKR does not exist on devnet, the bootstrap script creates a plain local
+mint to occupy the access-stake slot in tests. It is a test fixture, is never
+shown to a user as SKR, and on mainnet that slot holds the canonical SKR mint —
+the program cannot tell the difference, which is the point.
+
+### The numbers
+
+| | Default | Why |
+|---|---|---|
+| Reward per task | 0.01 TAP | 100 tasks to a whole token — visible movement, not dust |
+| Minimum TAP bond | 0.1 TAP (~10 tasks) | Demo-tuned. In production a bond must exceed what a burst of bad labeling extracts before the accuracy window catches it |
+| Minimum SKR stake | 1 SKR | A commitment signal, not collateral — only has to be inconvenient to fake at scale |
+| Unstake cooldown | 24h | Long enough to score a bad actor before they exit, short enough not to feel punitive |
+| Platform fee | 20% of task value | Our margin |
+| Referral share | 10% of that fee (2% of task value) | **Paid from our margin, never from the referee** |
+
+That last row is the whole difference between a referral bonus and a pyramid, so
+`Settings.referral_reward` caps the payout at the platform fee structurally
+rather than trusting configuration discipline.
 
 ## The idea
 
@@ -81,9 +99,9 @@ signature from them at all, and the wallet approval prompt would be decorative.
 Here the transfer cannot land without it, and the tests assert that — the
 transaction fails verification until the wallet signs.
 
-Rewards are denominated in SKR. On devnet that is a mock mint created by
-`scripts/bootstrap_devnet.sh`; on mainnet it is the canonical mint, reached
-through the same code path and one config constant.
+Rewards are denominated in TAP, created by `scripts/bootstrap_devnet.sh`. TAP is
+ours on every cluster, so the devnet mint is the real token rather than a
+stand-in for someone else's.
 
 ## Solana Mobile integration
 
@@ -109,7 +127,7 @@ backend/
   tapfarm/claim_tx.py    Two-signer claim transaction
   tapfarm/stake_client.py Instruction builders for the stake program
 programs/
-  tapfarm-stake/         Anchor program: SKR bond, cooldown, slashing
+  tapfarm-stake/         Anchor program: TAP bond, SKR access stake, slashing
 scripts/    Devnet bootstrap and program deploy
 docs/       Spike notes, platform roadmap
 ```
@@ -154,13 +172,12 @@ Three rules do the work, each specified by a test in
   who was accurate and then starts scripting loses eligibility rather than
   coasting on history.
 
-**SKR as a quality bond.** Detection alone is a treadmill — a scripter just
-makes new wallets. Contributors stake SKR to unlock higher-rate campaigns, and
-the accuracy above is the slashing oracle: fall below threshold and part of the
-bond is burned back into the campaign reward pool, so honest labelers are paid
-out of dishonest ones. This is what makes SKR load-bearing rather than
-decorative: swap in a stablecoin and the security model breaks, because a bond
-has to be denominated in something whose value tracks the network's success.
+**The TAP bond.** Detection alone is a treadmill — a scripter whose accuracy
+collapses just funds a new wallet. Staking TAP puts something at risk: the
+rolling accuracy above is the slashing oracle, and falling below threshold burns
+part of the bond into the campaign reward pool, so honest labelers are paid out
+of dishonest ones. See **Tokens** above for why the bond is TAP and why SKR is
+never slashed.
 
 ## Development
 
@@ -168,7 +185,7 @@ has to be denominated in something whose value tracks the network's success.
 cd backend && pip install -r requirements.txt
 python -m tapfarm.generator.dataset --out data/tapgrid --count 10000
 pytest -q                                                    # 126, offline
-cargo test -p tapfarm-stake --lib                            # 16, program logic
+cargo test -p tapfarm-stake --lib                            # 21, program logic
 uvicorn tapfarm.main:app --host 0.0.0.0 --port 8000
 
 cd android && ./gradlew installDebug -PtapfarmApiBase=http://<LAN-IP>:8000
@@ -177,7 +194,7 @@ cd android && ./gradlew installDebug -PtapfarmApiBase=http://<LAN-IP>:8000
 `--host 0.0.0.0` matters: the phone reaches the backend over the LAN, not
 localhost.
 
-The on-chain tests (134 with a validator) need one running:
+The on-chain tests (138 with a validator) need one running:
 
 ```bash
 solana-test-validator --reset --quiet &

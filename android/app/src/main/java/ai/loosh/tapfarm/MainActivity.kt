@@ -146,7 +146,7 @@ private fun Header(state: UiState) {
         if (state.wallet != null) {
             Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    "%.4f SKR".format(state.uiBalance),
+                    "%.4f TAP".format(state.uiBalance),
                     fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold,
                     fontFamily = FontFamily.Monospace,
@@ -201,7 +201,7 @@ private fun CampaignsScreen(
             enabled = state.claimable && state.busy == null,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (state.claimable) "Claim %.4f SKR".format(state.uiBalance) else "Claim")
+            Text(if (state.claimable) "Claim %.4f TAP".format(state.uiBalance) else "Claim")
         }
 
         state.lastSignature?.let { signature ->
@@ -269,7 +269,7 @@ private fun CampaignRow(campaign: Campaign, onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
             )
             Text(
-                "%.4f SKR per task".format(campaign.rewardPerTask / 1_000_000.0),
+                "%.4f TAP per task".format(campaign.rewardPerTask / 1_000_000.0),
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace,
                 color = Accent,
