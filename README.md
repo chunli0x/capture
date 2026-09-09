@@ -6,10 +6,29 @@ phone and are paid to the wallet already built into it.
 Built for [CLOCK IN](https://docs.solanamobile.com/hackathon/) — Solana Mobile ×
 RadiantsDAO, September 8 – October 8 2026.
 
-> **Status: week 1 of 4.** The claim path and the SKR stake program are both
-> proven on-chain against a live validator, and the app compiles to an APK. The
-> labeling UI is not written yet. 118 tests pass. See
-> [docs/SPIKE.md](docs/SPIKE.md) for exactly what is verified and what is not.
+> **Status: week 2 of 4.** Task serving, the labeling UI, the contributor-signed
+> claim and the on-chain stake bond are all built; the claim path and the stake
+> program are proven against a live validator. 150 tests pass. The reward token
+> is being renamed (see **Tokens** below) and the on-device MWA handshake is
+> still unverified. See [docs/SPIKE.md](docs/SPIKE.md) for the full ledger of
+> what is proven and what is not.
+
+## Tokens
+
+Two tokens, doing different jobs.
+
+**TAP** is ours: the earnings token, and the **slashable** quality bond. Get
+gold-standard tasks wrong often enough and part of your TAP bond is burned into
+the campaign reward pool.
+
+**SKR** is Solana Mobile's, and we do not mint it. It is a **non-slashable**
+access stake — staking real SKR unlocks higher-rate campaigns and referral
+eligibility. Slashing it was never on the table: it is not our token to burn.
+
+> The tree currently still says `skr_mint` for the reward asset and the devnet
+> bootstrap mints a stand-in. That was a mistake — minting a token called SKR
+> for a demo is not something a judge should have to squint at — and the rename
+> to TAP is the next change. Tracked in [docs/PLATFORM.md](docs/PLATFORM.md).
 
 ## The idea
 
@@ -146,12 +165,19 @@ has to be denominated in something whose value tracks the network's success.
 ## Development
 
 ```bash
-cd backend && pip install -r requirements.txt && pytest -q   # 94, offline
+cd backend && pip install -r requirements.txt
+python -m tapfarm.generator.dataset --out data/tapgrid --count 10000
+pytest -q                                                    # 126, offline
 cargo test -p tapfarm-stake --lib                            # 16, program logic
+uvicorn tapfarm.main:app --host 0.0.0.0 --port 8000
+
 cd android && ./gradlew installDebug -PtapfarmApiBase=http://<LAN-IP>:8000
 ```
 
-The on-chain tests (102 with a validator) need one running:
+`--host 0.0.0.0` matters: the phone reaches the backend over the LAN, not
+localhost.
+
+The on-chain tests (134 with a validator) need one running:
 
 ```bash
 solana-test-validator --reset --quiet &

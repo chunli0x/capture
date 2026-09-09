@@ -30,6 +30,28 @@ does not fit in the same month as a mobile app.
 
 **iOS.** MWA is Android-native and Seeker is Android.
 
+## Decided, not yet built
+
+**Rename the reward asset to TAP.** The devnet bootstrap currently mints a
+stand-in called SKR. Minting a token named after someone else's is the wrong
+call even with a disclaimer, so the earnings token and the slashable bond become
+TAP — ours, and honestly ours.
+
+**SKR as a non-slashable access stake.** Real SKR, staked to unlock higher-rate
+campaigns and referral eligibility, in a second vault that `slash` cannot touch.
+Two vaults, two roles: TAP is collateral we may burn, SKR is commitment we may
+not.
+
+**Referral earnings.** A referrer earns a percentage of the platform's margin on
+contributors they bring in — **not** a cut skimmed off the referee, whose
+earnings are untouched. Depth one only, self-referral blocked, and referral
+eligibility requires both stakes. Paying it out of our own margin rather than
+the worker's is the difference between a growth incentive and a pyramid.
+
+**One real mainnet SKR stake in the demo.** Everything else runs on devnet with
+TAP; a single genuine mainnet SKR stake transaction shows the SKR integration is
+real rather than simulated.
+
 ## Next, roughly in order
 
 1. Per-contributor PDA reward vaults (Anchor)

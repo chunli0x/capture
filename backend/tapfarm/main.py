@@ -1,16 +1,19 @@
-"""Tap Farm API - spike scope.
+"""Tap Farm API.
 
-Endpoints exist to prove the claim path end to end from the phone. Task serving
-and gold-standard verification land in week 2; the campaign shape is already
-here because it drives the schema.
+Task serving and grading are in tapfarm.tasks; the claim transaction is in
+tapfarm.claim_tx. This module wires them to HTTP and enforces one rule that
+neither can enforce alone: a contributor cannot claim until their gold-standard
+accuracy says they should.
 """
 
 from __future__ import annotations
 
+import functools
 import json
 import pathlib
 
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from solana.rpc.async_api import AsyncClient
 from solana.rpc.commitment import Confirmed
@@ -23,11 +26,30 @@ from tapfarm.claim_tx import (
     treasury_sign,
 )
 from tapfarm.config import settings
+from tapfarm.tasks import TaskExhausted, TaskStore, UnknownTask
 
-app = FastAPI(title="Tap Farm", version="0.1.0-spike")
+app = FastAPI(title="Tap Farm", version="0.2.0")
 
-# In-memory contributor ledger for the spike. SQLite lands with task serving.
-_EARNED: dict[str, int] = {}
+
+@functools.lru_cache(maxsize=1)
+def task_store() -> TaskStore:
+    cfg = settings()
+    return TaskStore(
+        pathlib.Path(cfg.dataset_dir), reward_per_task=cfg.reward_per_task
+    )
+
+
+def _mount_images() -> None:
+    """Serve task images. Only the images directory - never truth.jsonl."""
+    images = pathlib.Path(settings().dataset_dir) / "images"
+    if images.is_dir():
+        app.mount("/images", StaticFiles(directory=images), name="images")
+
+
+try:
+    _mount_images()
+except Exception:  # noqa: BLE001 - a missing dataset must not stop the API booting
+    pass
 
 
 def _treasury() -> Keypair:
@@ -42,7 +64,7 @@ def _treasury() -> Keypair:
 def _mint() -> Pubkey:
     raw = settings().skr_mint
     if not raw:
-        raise HTTPException(503, "TAPFARM_SKR_MINT unset; run scripts/bootstrap_devnet.sh")
+        raise HTTPException(503, "reward mint unset; run scripts/bootstrap_devnet.sh")
     return Pubkey.from_string(raw)
 
 
@@ -82,15 +104,31 @@ CAMPAIGNS = [
 ]
 
 
-class GrantIn(BaseModel):
-    """Spike-only: credit a contributor without solving anything.
+class TaskOut(BaseModel):
+    task_id: str
+    campaign_id: str
+    prompt: str
+    grid: int
+    image_url: str
+    reward: int
 
-    Task submission replaces this in week 2. It exists so the claim path can be
-    exercised on the Seeker today.
-    """
 
+class SubmitIn(BaseModel):
     contributor: str
-    tasks: int = Field(default=1, ge=1, le=100)
+    task_id: str
+    cells: list[int] = Field(default_factory=list)
+
+
+class SubmitOut(BaseModel):
+    graded: bool
+    correct: bool | None
+    reward: int
+    balance: int
+    ui_balance: float
+    accuracy: float
+    gold_samples: int
+    claimable: bool
+    reason: str
 
 
 class ClaimPrepareIn(BaseModel):
@@ -109,11 +147,13 @@ class ClaimPrepareOut(BaseModel):
 @app.get("/health")
 def health() -> dict[str, object]:
     cfg = settings()
+    dataset = pathlib.Path(cfg.dataset_dir)
     return {
         "ok": True,
         "cluster": cfg.cluster,
         "mint_configured": bool(cfg.skr_mint),
         "treasury_present": pathlib.Path(cfg.treasury_keypair_path).exists(),
+        "dataset_present": (dataset / "manifest.jsonl").exists(),
     }
 
 
@@ -122,36 +162,82 @@ def campaigns() -> list[CampaignOut]:
     return CAMPAIGNS
 
 
+@app.get("/task/next", response_model=TaskOut)
+def next_task(contributor: str) -> TaskOut:
+    _parse_pubkey(contributor)
+    try:
+        # tier is 0 until the stake program is wired in; a staked contributor
+        # is verified less often because the bond covers the difference.
+        task = task_store().next_task(contributor, tier=0)
+    except TaskExhausted as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return TaskOut(**vars(task))
+
+
+@app.post("/task/submit", response_model=SubmitOut)
+def submit_task(body: SubmitIn) -> SubmitOut:
+    _parse_pubkey(body.contributor)
+    cfg = settings()
+    try:
+        result = task_store().submit(
+            body.contributor,
+            body.task_id,
+            body.cells,
+            min_accuracy=cfg.min_accuracy_to_claim,
+        )
+    except UnknownTask as exc:
+        raise HTTPException(409, f"task not outstanding for this contributor: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return SubmitOut(
+        graded=result.graded,
+        correct=result.correct,
+        reward=result.reward,
+        balance=result.balance,
+        ui_balance=result.balance / (10**cfg.skr_decimals),
+        accuracy=result.accuracy,
+        gold_samples=result.gold_samples,
+        claimable=result.claimable,
+        reason=result.reason,
+    )
+
+
 @app.get("/contributor/{contributor}")
 def contributor(contributor: str) -> dict[str, object]:
     _parse_pubkey(contributor)
     cfg = settings()
-    earned = _EARNED.get(contributor, 0)
+    state = task_store().state(contributor)
+    eligibility = state.record.eligibility(cfg.min_accuracy_to_claim)
     return {
         "contributor": contributor,
-        "earned": earned,
-        "ui_earned": earned / (10**cfg.skr_decimals),
-        "claimable": earned > 0,
+        "balance": state.balance,
+        "ui_balance": state.balance / (10**cfg.skr_decimals),
+        "solved": len(state.seen) - len(state.outstanding),
+        "accuracy": eligibility.accuracy,
+        "gold_samples": eligibility.samples,
+        "claimable": eligibility.allowed and state.balance > 0,
+        "reason": eligibility.reason,
     }
-
-
-@app.post("/spike/grant")
-def grant(body: GrantIn) -> dict[str, object]:
-    _parse_pubkey(body.contributor)
-    cfg = settings()
-    _EARNED[body.contributor] = (
-        _EARNED.get(body.contributor, 0) + body.tasks * cfg.reward_per_task
-    )
-    return {"contributor": body.contributor, "earned": _EARNED[body.contributor]}
 
 
 @app.post("/claim/prepare", response_model=ClaimPrepareOut)
 async def claim_prepare(body: ClaimPrepareIn) -> ClaimPrepareOut:
-    """Build and treasury-sign the claim tx. The wallet signs as fee payer."""
-    cfg = settings()
-    contributor = _parse_pubkey(body.contributor)
+    """Build and treasury-sign the claim tx. The wallet signs as fee payer.
 
-    amount = _EARNED.get(body.contributor, 0)
+    Eligibility is enforced here rather than only in the UI: the accuracy gate
+    is worthless if the endpoint behind it will pay anyone who asks.
+    """
+    cfg = settings()
+    contributor_key = _parse_pubkey(body.contributor)
+    store = task_store()
+    state = store.state(body.contributor)
+
+    eligibility = state.record.eligibility(cfg.min_accuracy_to_claim)
+    if not eligibility.allowed:
+        raise HTTPException(403, eligibility.reason)
+
+    amount = state.balance
     if amount <= 0:
         raise HTTPException(409, "nothing to claim")
 
@@ -166,7 +252,7 @@ async def claim_prepare(body: ClaimPrepareIn) -> ClaimPrepareOut:
         blockhash = (await rpc.get_latest_blockhash()).value.blockhash
 
     tx = build_claim_transaction(
-        contributor=contributor,
+        contributor=contributor_key,
         treasury=treasury.pubkey(),
         mint=mint,
         amount=amount,
@@ -175,10 +261,10 @@ async def claim_prepare(body: ClaimPrepareIn) -> ClaimPrepareOut:
     )
     treasury_sign(tx, treasury)
 
-    # Debit optimistically. The spike accepts that a wallet rejection loses the
-    # credit; week 2 moves this behind a claim record keyed on the signature so
-    # an unsubmitted claim can be reopened.
-    _EARNED[body.contributor] = 0
+    # Debit optimistically. A declined wallet approval loses the credit; week 2
+    # moves this behind a claim record keyed on the transaction signature so an
+    # unsubmitted claim can be reopened.
+    state.balance = 0
 
     return ClaimPrepareOut(
         transaction=serialize_for_wallet(tx),
