@@ -62,9 +62,9 @@ def _treasury() -> Keypair:
 
 
 def _mint() -> Pubkey:
-    raw = settings().skr_mint
+    raw = settings().tap_mint
     if not raw:
-        raise HTTPException(503, "reward mint unset; run scripts/bootstrap_devnet.sh")
+        raise HTTPException(503, "TAP mint unset; run scripts/bootstrap_devnet.sh")
     return Pubkey.from_string(raw)
 
 
@@ -151,7 +151,7 @@ def health() -> dict[str, object]:
     return {
         "ok": True,
         "cluster": cfg.cluster,
-        "mint_configured": bool(cfg.skr_mint),
+        "mint_configured": bool(cfg.tap_mint),
         "treasury_present": pathlib.Path(cfg.treasury_keypair_path).exists(),
         "dataset_present": (dataset / "manifest.jsonl").exists(),
     }
@@ -195,7 +195,7 @@ def submit_task(body: SubmitIn) -> SubmitOut:
         correct=result.correct,
         reward=result.reward,
         balance=result.balance,
-        ui_balance=result.balance / (10**cfg.skr_decimals),
+        ui_balance=result.balance / (10**cfg.tap_decimals),
         accuracy=result.accuracy,
         gold_samples=result.gold_samples,
         claimable=result.claimable,
@@ -212,7 +212,7 @@ def contributor(contributor: str) -> dict[str, object]:
     return {
         "contributor": contributor,
         "balance": state.balance,
-        "ui_balance": state.balance / (10**cfg.skr_decimals),
+        "ui_balance": state.balance / (10**cfg.tap_decimals),
         "solved": len(state.seen) - len(state.outstanding),
         "accuracy": eligibility.accuracy,
         "gold_samples": eligibility.samples,
@@ -256,7 +256,7 @@ async def claim_prepare(body: ClaimPrepareIn) -> ClaimPrepareOut:
         treasury=treasury.pubkey(),
         mint=mint,
         amount=amount,
-        decimals=cfg.skr_decimals,
+        decimals=cfg.tap_decimals,
         blockhash=blockhash,
     )
     treasury_sign(tx, treasury)
@@ -269,7 +269,7 @@ async def claim_prepare(body: ClaimPrepareIn) -> ClaimPrepareOut:
     return ClaimPrepareOut(
         transaction=serialize_for_wallet(tx),
         amount=amount,
-        ui_amount=amount / (10**cfg.skr_decimals),
+        ui_amount=amount / (10**cfg.tap_decimals),
         mint=str(mint),
         fee_payer=body.contributor,
         cluster=cfg.cluster,

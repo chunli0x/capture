@@ -8,7 +8,8 @@ here so the submission can be honest about the line between built and planned.
 - Android app, MWA wallet connect, campaign-driven task rendering
 - Tap-grid labeling campaign over a synthetic dataset
 - Contributor-signed SKR claim on devnet
-- On-chain SKR stake bond with cooldown and slashing (Anchor)
+- On-chain two-token stake program (Anchor): slashable TAP bond, non-slashable
+  SKR access stake, per-mint vaults, cooldown and slashing
 - Gold-standard accuracy gating, wired as the slashing oracle
 - Model accuracy curve trained on contributor labels
 
@@ -31,16 +32,6 @@ does not fit in the same month as a mobile app.
 **iOS.** MWA is Android-native and Seeker is Android.
 
 ## Decided, not yet built
-
-**Rename the reward asset to TAP.** The devnet bootstrap currently mints a
-stand-in called SKR. Minting a token named after someone else's is the wrong
-call even with a disclaimer, so the earnings token and the slashable bond become
-TAP — ours, and honestly ours.
-
-**SKR as a non-slashable access stake.** Real SKR, staked to unlock higher-rate
-campaigns and referral eligibility, in a second vault that `slash` cannot touch.
-Two vaults, two roles: TAP is collateral we may burn, SKR is commitment we may
-not.
 
 **Referral earnings.** A referrer earns a percentage of the platform's margin on
 contributors they bring in — **not** a cut skimmed off the referee, whose

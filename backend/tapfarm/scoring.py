@@ -12,8 +12,9 @@ possible subsets, so blind guessing is not a strategy.
 after one lucky gold task, which makes sybil attacks cheap. A contributor must
 answer at least MIN_GOLD_SAMPLES gold tasks before any claim is allowed.
 
-Once SKR staking lands, this module is also the slashing oracle: the same
-rolling accuracy that gates claiming decides whether a bond is burned.
+This module is also the slashing oracle for the TAP bond: the same rolling
+accuracy that gates claiming decides whether part of a bond is burned. Only TAP
+is slashable - a staked contributor's SKR is never touched.
 """
 
 from __future__ import annotations
