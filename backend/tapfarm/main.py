@@ -11,6 +11,7 @@ from __future__ import annotations
 import functools
 import json
 import pathlib
+from dataclasses import dataclass
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +27,14 @@ from tapfarm.claim_tx import (
     treasury_sign,
 )
 from tapfarm.config import settings
+from tapfarm.pose.dataset import PoseTaskRecord, load_objects, load_truth
+from tapfarm.pose.scoring import Pose, PoseThreshold
+from tapfarm.pose.serving import (
+    NotQualified,
+    PoseTaskExhausted,
+    PoseTaskStore,
+    UnknownPoseTask,
+)
 from tapfarm.referrals import ReferralError, ReferralLedger
 from tapfarm.stake_reader import StakeReader
 from tapfarm.tasks import TaskExhausted, TaskStore, UnknownTask
@@ -42,6 +51,34 @@ def task_store() -> TaskStore:
 
 
 @functools.lru_cache(maxsize=1)
+def pose_store() -> PoseTaskStore:
+    cfg = settings()
+    directory = pathlib.Path(cfg.pose_dataset_dir)
+    manifest = directory / "manifest.jsonl"
+    if not manifest.exists():
+        raise HTTPException(
+            503,
+            f"no pose dataset at {directory}; run python -m tapfarm.pose.dataset",
+        )
+    records = [
+        PoseTaskRecord(**json.loads(line))
+        for line in manifest.open()
+        if line.strip()
+    ]
+    return PoseTaskStore(
+        records,
+        load_truth(directory),
+        reward_per_task=cfg.reward_per_task,
+        qualify_items=cfg.pose_qualify_items,
+        threshold=PoseThreshold(
+            max_error_px=cfg.pose_max_error_px,
+            max_error_deg=cfg.pose_max_error_deg,
+            pass_fraction=cfg.pose_pass_fraction,
+        ),
+    )
+
+
+@functools.lru_cache(maxsize=1)
 def referrals() -> ReferralLedger:
     return ReferralLedger(settings=settings())
 
@@ -54,6 +91,61 @@ def stake_reader() -> StakeReader:
     )
     return StakeReader(
         cfg.rpc_url, program_id, ttl_seconds=cfg.stake_cache_ttl_seconds
+    )
+
+
+def _pose_balance(contributor: str) -> int:
+    """Pose earnings, or 0 when the campaign is not deployed here.
+
+    Swallowing the missing-dataset case keeps the contributor summary and the
+    claim path working on a deployment that only runs the tap-grid campaign.
+    """
+    try:
+        return pose_store().state(contributor).balance
+    except HTTPException:
+        return 0
+
+
+def _pose_qualified(contributor: str) -> bool:
+    try:
+        return pose_store().state(contributor).qualified
+    except HTTPException:
+        return False
+
+
+@dataclass(frozen=True)
+class ClaimGate:
+    """Whether a contributor may withdraw, and why.
+
+    One helper rather than two, because /contributor and /claim/prepare have to
+    agree: a summary that says "not claimable" while the endpoint behind it
+    pays out - or the reverse - is worse than either answer on its own.
+    """
+
+    allowed: bool
+    reason: str
+
+
+def _claim_gate(contributor: str) -> ClaimGate:
+    """Each campaign carries its own proof of quality.
+
+    Tap-grid uses rolling gold-standard accuracy; ghost-overlay uses the blind
+    qualification run. Clearing either makes a contributor verified - requiring
+    both would strand someone who only ever did pose work behind a gate for a
+    campaign they never touched.
+    """
+    cfg = settings()
+    eligibility = task_store().state(contributor).record.eligibility(
+        cfg.min_accuracy_to_claim
+    )
+    if eligibility.allowed:
+        return ClaimGate(True, eligibility.reason)
+    if _pose_qualified(contributor):
+        return ClaimGate(True, "qualified on the ghost-overlay blind set")
+    return ClaimGate(
+        False,
+        f"{eligibility.reason}, and the ghost-overlay qualification "
+        "has not been passed",
     )
 
 
@@ -78,10 +170,27 @@ async def _credit_referrer(referee: str, task_value: int) -> None:
 
 
 def _mount_images() -> None:
-    """Serve task images. Only the images directory - never truth.jsonl."""
+    """Serve task media only.
+
+    Each mount points at an images or sprites directory specifically, never at
+    a dataset root - truth.jsonl and live_truth.jsonl sit beside them and must
+    never be reachable over HTTP.
+    """
     images = pathlib.Path(settings().dataset_dir) / "images"
     if images.is_dir():
         app.mount("/images", StaticFiles(directory=images), name="images")
+
+    pose_dir = pathlib.Path(settings().pose_dataset_dir)
+    if (pose_dir / "images").is_dir():
+        app.mount(
+            "/pose/images", StaticFiles(directory=pose_dir / "images"), name="pose-images"
+        )
+    if (pose_dir / "sprites").is_dir():
+        app.mount(
+            "/pose/sprites",
+            StaticFiles(directory=pose_dir / "sprites"),
+            name="pose-sprites",
+        )
 
 
 try:
@@ -123,6 +232,17 @@ class CampaignOut(BaseModel):
 
 
 CAMPAIGNS = [
+    CampaignOut(
+        id="ghost-pose-v1",
+        title="Ghost overlay: image-plane pose",
+        task_type="ghost_pose",
+        reward_per_task=10_000,
+        status="live",
+        description=(
+            "Drag a translucent outline onto the object until it lines up. "
+            "Records image-plane pose: x, y and roll, plus an auxiliary scale."
+        ),
+    ),
     CampaignOut(
         id="img-grid-v1",
         title="Image grid labeling",
@@ -186,6 +306,64 @@ class ReferralOut(BaseModel):
     reason: str
 
 
+class PoseIn(BaseModel):
+    x: float
+    y: float
+    roll: float
+    scale: float = 1.0
+
+
+class PoseSubmitIn(BaseModel):
+    contributor: str
+    task_id: str
+    pose: PoseIn
+
+
+class PoseTaskOut(BaseModel):
+    task_id: str
+    object_id: str
+    image_url: str
+    canvas: int
+    mode: str
+    # Practice only. The snap glow is a proximity signal, so it must never be
+    # enabled during the blind qualification run.
+    allow_snap: bool
+    reward: int
+    truth: dict[str, float] | None = None
+    index: int | None = None
+    of: int | None = None
+
+
+class PoseFeedbackOut(BaseModel):
+    error_px: float
+    error_deg: float
+    within_tolerance: bool
+
+
+class QualificationOut(BaseModel):
+    attempted: int
+    required: int
+    passed_items: int
+    pass_rate: float
+    required_pass_rate: float
+    qualified: bool
+    mean_error_px: float
+    mean_error_deg: float
+    summary: str
+
+
+class PoseSubmitOut(BaseModel):
+    mode: str
+    reward: int
+    balance: int
+    ui_balance: float
+    qualified: bool
+    # None during qualification: the run stays silent until it is complete.
+    feedback: PoseFeedbackOut | None = None
+    label: dict | None = None
+    qualification: QualificationOut | None = None
+
+
 class ClaimPrepareIn(BaseModel):
     contributor: str
 
@@ -199,6 +377,7 @@ class ClaimPrepareOut(BaseModel):
     cluster: str
     task_amount: int
     referral_amount: int
+    pose_amount: int
 
 
 @app.get("/health")
@@ -322,18 +501,93 @@ async def _referral_out(contributor: str) -> ReferralOut:
     )
 
 
+@app.get("/pose/objects")
+def pose_objects() -> list[dict]:
+    """Object metadata and ghost sprites the client needs to render."""
+    return load_objects(pathlib.Path(settings().pose_dataset_dir))
+
+
+@app.get("/pose/task/next", response_model=PoseTaskOut)
+def pose_next_task(contributor: str, mode: str = "practice") -> PoseTaskOut:
+    _parse_pubkey(contributor)
+    try:
+        task = pose_store().next_task(contributor, mode)
+    except NotQualified as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except PoseTaskExhausted as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return PoseTaskOut(**vars(task))
+
+
+@app.post("/pose/submit", response_model=PoseSubmitOut)
+def pose_submit(body: PoseSubmitIn) -> PoseSubmitOut:
+    _parse_pubkey(body.contributor)
+    cfg = settings()
+    try:
+        result = pose_store().submit(
+            body.contributor,
+            body.task_id,
+            Pose(**body.pose.model_dump()),
+        )
+    except UnknownPoseTask as exc:
+        raise HTTPException(
+            409, f"task not outstanding for this contributor: {exc}"
+        ) from exc
+
+    return PoseSubmitOut(
+        mode=result.mode,
+        reward=result.reward,
+        balance=result.balance,
+        ui_balance=result.balance / (10**cfg.tap_decimals),
+        qualified=result.qualified,
+        feedback=(
+            PoseFeedbackOut(**vars(result.feedback)) if result.feedback else None
+        ),
+        label=result.label,
+        qualification=(
+            _qualification_out(result.qualification) if result.qualification else None
+        ),
+    )
+
+
+@app.get("/pose/qualification/{contributor}", response_model=QualificationOut)
+def pose_qualification(contributor: str) -> QualificationOut:
+    _parse_pubkey(contributor)
+    return _qualification_out(pose_store().qualification(contributor))
+
+
+def _qualification_out(result) -> QualificationOut:
+    return QualificationOut(
+        attempted=result.attempted,
+        required=result.required,
+        passed_items=result.passed_items,
+        pass_rate=result.pass_rate,
+        required_pass_rate=result.required_pass_rate,
+        qualified=result.qualified,
+        mean_error_px=round(result.mean_error_px, 1),
+        mean_error_deg=round(result.mean_error_deg, 1),
+        summary=result.summary,
+    )
+
+
 @app.get("/contributor/{contributor}")
 def contributor(contributor: str) -> dict[str, object]:
     _parse_pubkey(contributor)
     cfg = settings()
     state = task_store().state(contributor)
     eligibility = state.record.eligibility(cfg.min_accuracy_to_claim)
+    gate = _claim_gate(contributor)
     referral_unclaimed = referrals().unclaimed(contributor)
-    total = state.balance + referral_unclaimed
+    pose_balance = _pose_balance(contributor)
+    total = state.balance + referral_unclaimed + pose_balance
     return {
         "contributor": contributor,
         "balance": state.balance,
         "ui_balance": state.balance / (10**cfg.tap_decimals),
+        "pose_balance": pose_balance,
+        "ui_pose_balance": pose_balance / (10**cfg.tap_decimals),
         "referral_unclaimed": referral_unclaimed,
         "ui_referral_unclaimed": referral_unclaimed / (10**cfg.tap_decimals),
         "total_claimable": total,
@@ -341,8 +595,8 @@ def contributor(contributor: str) -> dict[str, object]:
         "solved": len(state.seen) - len(state.outstanding),
         "accuracy": eligibility.accuracy,
         "gold_samples": eligibility.samples,
-        "claimable": eligibility.allowed and total > 0,
-        "reason": eligibility.reason,
+        "claimable": gate.allowed and total > 0,
+        "reason": gate.reason,
     }
 
 
@@ -364,13 +618,19 @@ async def claim_prepare(body: ClaimPrepareIn) -> ClaimPrepareOut:
     store = task_store()
     state = store.state(body.contributor)
 
-    eligibility = state.record.eligibility(cfg.min_accuracy_to_claim)
-    if not eligibility.allowed:
-        raise HTTPException(403, eligibility.reason)
+    # Each campaign carries its own proof of quality: tap-grid uses rolling
+    # gold-standard accuracy, ghost-overlay uses the blind qualification run.
+    # Clearing either makes a contributor verified, so requiring both would
+    # strand someone who only ever did pose work behind a gate for a campaign
+    # they never touched.
+    gate = _claim_gate(body.contributor)
+    if not gate.allowed:
+        raise HTTPException(403, gate.reason)
 
     ledger = referrals()
     referral_amount = ledger.unclaimed(body.contributor)
-    amount = state.balance + referral_amount
+    pose_amount = _pose_balance(body.contributor)
+    amount = state.balance + referral_amount + pose_amount
     if amount <= 0:
         raise HTTPException(409, "nothing to claim")
 
@@ -399,6 +659,8 @@ async def claim_prepare(body: ClaimPrepareIn) -> ClaimPrepareOut:
     # claim can be reopened. Both balances are debited together so a partial
     # failure cannot leave the referral side double-claimable.
     state.balance = 0
+    if pose_amount:
+        pose_store().state(body.contributor).balance = 0
     ledger.claim(body.contributor)
 
     return ClaimPrepareOut(
@@ -408,6 +670,7 @@ async def claim_prepare(body: ClaimPrepareIn) -> ClaimPrepareOut:
         mint=str(mint),
         fee_payer=body.contributor,
         cluster=cfg.cluster,
-        task_amount=amount - referral_amount,
+        task_amount=amount - referral_amount - pose_amount,
         referral_amount=referral_amount,
+        pose_amount=pose_amount,
     )
