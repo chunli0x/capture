@@ -4,7 +4,7 @@
 transaction they are cryptographically required to sign, on real hardware,
 before any feature work depends on it.
 
-This is scheduled first because it is the only part of Tap Farm that cannot be
+This is scheduled first because it is the only part of Tap that cannot be
 worked around. If MWA does not behave on the Seeker, everything downstream
 changes — and the time to discover that is day 2, not day 28.
 
@@ -58,7 +58,7 @@ address at <https://faucet.solana.com> and re-run.
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-pytest -q                       # 16 tests, no network needed
+pytest -q                       # 165 passed, 12 skipped; no network needed
 uvicorn tapfarm.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -96,8 +96,10 @@ exercises stake, slash, cooldown and withdraw against the deployed program,
 including that only the slash authority can slash and that a slash during
 cooldown reduces the payout.
 
-Totals: **16** Rust logic tests (`cargo test -p tapfarm-stake --lib`), **94**
-Python tests offline, **102** with a validator and the program deployed. Prefer the local validator over
+Totals: **21** Rust logic tests (`cargo test -p tapfarm-stake --lib`), and
+**165 passed / 12 skipped** from a plain `pytest -q` — the skips being the
+on-chain tests, which run and pass (**177 passed**) once a validator is up and
+the program is deployed. Prefer the local validator over
 devnet: no faucet rate limit, and devnet airdrops fail routinely from shared or
 cloud IPs.
 

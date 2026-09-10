@@ -73,7 +73,7 @@ class TapFarmViewModel : ViewModel() {
         connectionIdentity = ConnectionIdentity(
             identityUri = Uri.parse("https://tapfarm.loosh.ai"),
             iconUri = Uri.parse("favicon.ico"),
-            identityName = "Tap Farm",
+            identityName = "Tap",
         )
     ).apply { blockchain = Solana.Devnet }
 
