@@ -63,6 +63,71 @@ data class Referral(
     val reason: String,
 )
 
+/** An object the ghost overlay can be drawn for. */
+data class PoseObject(
+    val objectId: String,
+    val label: String,
+    val rollFeature: String,
+    val spriteUrl: String,
+    /** Sprite edge length in image pixels at scale 1.0. */
+    val spritePxAtScale1: Float,
+    val canvas: Int,
+)
+
+/**
+ * A served pose task.
+ *
+ * [truth] is non-null in practice only, where the client needs it for the snap
+ * glow and the error delta. [allowSnap] is the server's word on whether any
+ * proximity-dependent UI may render at all - during qualification it is false
+ * and must stay false, or the blind gate is not blind.
+ */
+data class PoseTask(
+    val taskId: String,
+    val objectId: String,
+    val imageUrl: String,
+    val canvas: Int,
+    val mode: String,
+    val allowSnap: Boolean,
+    val reward: Int,
+    val truth: GhostPose?,
+    val index: Int?,
+    val of: Int?,
+)
+
+/** Image-plane pose: translation, in-plane rotation, and auxiliary scale. */
+data class GhostPose(
+    val x: Float,
+    val y: Float,
+    val roll: Float,
+    val scale: Float = 1f,
+)
+
+data class PoseFeedback(
+    val errorPx: Double,
+    val errorDeg: Double,
+    val withinTolerance: Boolean,
+)
+
+data class Qualification(
+    val attempted: Int,
+    val required: Int,
+    val passedItems: Int,
+    val qualified: Boolean,
+    val meanErrorPx: Double,
+    val meanErrorDeg: Double,
+    val summary: String,
+)
+
+data class PoseResult(
+    val mode: String,
+    val reward: Int,
+    val uiBalance: Double,
+    val qualified: Boolean,
+    val feedback: PoseFeedback?,
+    val qualification: Qualification?,
+)
+
 data class PreparedClaim(
     val transactionBase64: String,
     val uiAmount: Double,
@@ -163,6 +228,89 @@ class TapFarmApi(private val baseUrl: String = BuildConfig.API_BASE) {
             uiUnclaimed = o.getDouble("ui_unclaimed"),
             eligible = o.getBoolean("eligible"),
             reason = o.getString("reason"),
+        )
+    }
+
+    suspend fun poseObjects(): List<PoseObject> = withContext(Dispatchers.IO) {
+        val array = JSONArray(getRaw("/pose/objects"))
+        (0 until array.length()).map { i ->
+            val o = array.getJSONObject(i)
+            PoseObject(
+                objectId = o.getString("object_id"),
+                label = o.getString("label"),
+                rollFeature = o.getString("roll_feature"),
+                spriteUrl = absoluteUrl(o.getString("sprite")),
+                spritePxAtScale1 = o.getDouble("sprite_px_at_scale_1").toFloat(),
+                canvas = o.getInt("canvas"),
+            )
+        }
+    }
+
+    suspend fun nextPoseTask(contributor: String, mode: String): PoseTask =
+        withContext(Dispatchers.IO) {
+            val o = get("/pose/task/next?contributor=$contributor&mode=$mode")
+            PoseTask(
+                taskId = o.getString("task_id"),
+                objectId = o.getString("object_id"),
+                imageUrl = absoluteUrl(o.getString("image_url")),
+                canvas = o.getInt("canvas"),
+                mode = o.getString("mode"),
+                allowSnap = o.getBoolean("allow_snap"),
+                reward = o.getInt("reward"),
+                truth = if (o.isNull("truth")) null else o.getJSONObject("truth").let { t ->
+                    GhostPose(
+                        x = t.getDouble("x").toFloat(),
+                        y = t.getDouble("y").toFloat(),
+                        roll = t.getDouble("roll").toFloat(),
+                        scale = t.optDouble("scale", 1.0).toFloat(),
+                    )
+                },
+                index = if (o.isNull("index")) null else o.getInt("index"),
+                of = if (o.isNull("of")) null else o.getInt("of"),
+            )
+        }
+
+    suspend fun submitPose(
+        contributor: String,
+        taskId: String,
+        pose: GhostPose,
+    ): PoseResult = withContext(Dispatchers.IO) {
+        val payload = JSONObject()
+            .put("contributor", contributor)
+            .put("task_id", taskId)
+            .put(
+                "pose",
+                JSONObject()
+                    .put("x", pose.x.toDouble())
+                    .put("y", pose.y.toDouble())
+                    .put("roll", pose.roll.toDouble())
+                    .put("scale", pose.scale.toDouble()),
+            )
+        val o = post("/pose/submit", payload)
+        PoseResult(
+            mode = o.getString("mode"),
+            reward = o.getInt("reward"),
+            uiBalance = o.getDouble("ui_balance"),
+            qualified = o.getBoolean("qualified"),
+            feedback = if (o.isNull("feedback")) null else o.getJSONObject("feedback").let { f ->
+                PoseFeedback(
+                    errorPx = f.getDouble("error_px"),
+                    errorDeg = f.getDouble("error_deg"),
+                    withinTolerance = f.getBoolean("within_tolerance"),
+                )
+            },
+            qualification = if (o.isNull("qualification")) null else
+                o.getJSONObject("qualification").let { q ->
+                    Qualification(
+                        attempted = q.getInt("attempted"),
+                        required = q.getInt("required"),
+                        passedItems = q.getInt("passed_items"),
+                        qualified = q.getBoolean("qualified"),
+                        meanErrorPx = q.getDouble("mean_error_px"),
+                        meanErrorDeg = q.getDouble("mean_error_deg"),
+                        summary = q.getString("summary"),
+                    )
+                },
         )
     }
 

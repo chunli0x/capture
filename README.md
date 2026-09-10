@@ -9,8 +9,8 @@ RadiantsDAO, September 8 – October 8 2026.
 > **Status: week 2 of 4.** Task serving, the labeling UI, the contributor-signed
 > claim, the two-token stake program and referral accounting are built, and
 > everything on-chain is proven against a live validator. A plain `pytest -q`
-> reports **165 passed, 12 skipped** (the skips are on-chain tests behind
-> `TAPFARM_E2E=1`); with a validator that becomes **177 passed**, alongside
+> reports **247 passed, 12 skipped** (the skips are on-chain tests behind
+> `TAPFARM_E2E=1`); with a validator that becomes **259 passed**, alongside
 > **21** Rust logic tests. The
 > on-device MWA handshake is the open item. See [docs/SPIKE.md](docs/SPIKE.md)
 > for the full ledger of what is proven and what is not.
@@ -88,6 +88,97 @@ Seeker ships with a hardware-backed wallet in every unit.
 
 So: put the work on the phone, and pay to the wallet that is already there.
 
+## The ghost overlay
+
+The primary task. A labeler drags a translucent outline of a known object onto
+the object in a camera frame until it lines up; the app reads the transform off
+the ghost when they tap Done.
+
+**This is image-plane pose, not 6D pose.** It records four numbers - x, y, roll
+and an apparent scale - which is a 2D similarity transform. Pitch, yaw and
+physical depth are absent, and a flat sprite could not render them anyway: no
+foreshortening, no parallax. True 3D pose needs a mesh renderer plus camera
+intrinsics and is a v2 item. The distinction is not pedantry; a robotics buyer
+spots the overclaim immediately, and a test asserts the campaign copy never
+says "6D".
+
+| Gesture | Records |
+|---|---|
+| One-finger drag | translation `x`, `y` in image pixels |
+| Two-finger twist | in-plane rotation `roll`, degrees |
+| Pinch | apparent `scale`, unitless |
+
+**Scale is recorded and never scored.** A pinch value with no reference to
+focal length or physical object size maps to nothing physical, so gating on it
+would pass or fail people on noise. Either it earns a real definition
+(`z = f * physical_size / apparent_px`) or it stays out of the gate. It stays
+out - and a test submits a wildly wrong scale to prove a correct label still
+passes.
+
+### Four pools, deliberately separated
+
+| Pool | Truth released? | Purpose |
+|---|---|---|
+| `practice` | **yes** | Instant feedback and the snap glow need it |
+| `qualify` | never | The blind gate |
+| `golden` | never | Hidden known-answer items inside paid work, for drift |
+| `live` | no truth exists | Real work; labeled by agreement |
+
+Releasing practice truth is only safe because practice draws from its own pool
+and never overlaps the blind set - otherwise practice would be handing out the
+answers to qualification.
+
+**Qualification is blind, and blind means zero signal.** No truth, no snap
+glow, and no per-item feedback either: a running pass/fail would be a proximity
+hint by another route, so the run stays silent until it completes. The snap
+glow is gated server-side by `allow_snap`, which is only ever true in practice.
+
+### Ground truth
+
+The golden set is generated from **synthetic renders at known transforms**, not
+hand-annotated with the same overlay. Annotating with the overlay would make
+"error" mean agreement with one keyholder rather than correctness - and since
+accuracy is the entire moat, that would hollow it out. Scene and ghost come
+from one shape definition, so a perfect drag produces a perfect overlay.
+
+![Ghost overlay alignment](docs/img/pose_alignment_check.png)
+
+Left: ghost at the true pose. Middle: ~9px / 4 degrees off - the band the
+threshold actually discriminates in. Right: clearly wrong.
+
+Every object carries a visible roll feature - a mug handle, a wrench jaw, a
+bracket corner - because roll is meaningless on a rotationally symmetric object
+and two correct labels could otherwise disagree by any angle.
+
+### Quality signal
+
+Every label ships with a quality signal, and the two kinds are **not** the same
+quantity:
+
+```json
+{
+  "task_id": "pose_bracket_01_008", "object_id": "bracket_01",
+  "worker_id": "<wallet pubkey>",
+  "pose": { "x": 240.0, "y": 260.0, "roll": 15.0 }, "scale": 1.0,
+  "error_px": 108.5, "error_deg": 143.1,
+  "quality_signal": "golden_item",
+  "timestamp": "2026-09-10T02:25:59Z"
+}
+```
+
+On live work there is no ground truth, so the error fields are **absent** and
+the signal is `"agreement"`. Saying "accuracy on every label" would be false for
+the majority of real work; the accurate claim is *measured accuracy on golden
+items, agreement on live items*.
+
+### Thresholds
+
+15px translation and 10 degrees rotation on 90% of the blind set - **a starting
+point, not a constant.** Finger input on a phone is looser than that first
+guess, and these are expected to land nearer 25px / 15 degrees / 80-85% once
+fresh users have been measured. They are config values (`pose_max_error_px`,
+`pose_max_error_deg`, `pose_pass_fraction`) for exactly that reason.
+
 ## Campaigns
 
 Tap is organized around **campaigns** — a labeling brief, a task type, a
@@ -97,6 +188,7 @@ a new kind of labeling work is a campaign definition rather than a new app.
 
 | Campaign | Task type | Status |
 |---|---|---|
+| Ghost overlay: image-plane pose | `ghost_pose` | live |
 | Image grid labeling | `tap_grid` | live |
 | Robotics grasp annotation | `bounding_box` | queued |
 
@@ -154,6 +246,7 @@ Vault-backed.
 ```
 android/    Kotlin + Jetpack Compose app, MWA integration
 backend/
+  tapfarm/pose/          Ghost overlay: shapes, renderer, golden set, scoring
   tapfarm/generator/     Synthetic scene generation, dataset + YOLO labels
   tapfarm/scoring.py     Gold-standard grading, claim eligibility
   tapfarm/claim_tx.py    Two-signer claim transaction
@@ -171,6 +264,7 @@ Build the dataset:
 ```bash
 cd backend
 python -m tapfarm.generator.dataset --out data/tapgrid --count 10000
+python -m tapfarm.pose.dataset --out data/pose
 ```
 
 One generator serves both campaigns and the accuracy-curve model: tap-grid
@@ -218,7 +312,8 @@ never slashed.
 ```bash
 cd backend && pip install -r requirements.txt
 python -m tapfarm.generator.dataset --out data/tapgrid --count 10000
-pytest -q                                                    # 165, offline
+python -m tapfarm.pose.dataset --out data/pose
+pytest -q                                                    # 247, offline
 cargo test -p tapfarm-stake --lib                            # 21, program logic
 uvicorn tapfarm.main:app --host 0.0.0.0 --port 8000
 
@@ -228,7 +323,7 @@ cd android && ./gradlew installDebug -PtapfarmApiBase=http://<LAN-IP>:8000
 `--host 0.0.0.0` matters: the phone reaches the backend over the LAN, not
 localhost.
 
-The on-chain tests (177 with a validator) need one running:
+The on-chain tests (259 with a validator) need one running:
 
 ```bash
 solana-test-validator --reset --quiet &
