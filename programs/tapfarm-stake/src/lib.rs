@@ -1,4 +1,4 @@
-//! Tap Farm stake program - two stakes, two jobs.
+//! Tap stake program - two stakes, two jobs.
 //!
 //! **TAP** is our token and the slashable quality bond. Gold-standard tasks
 //! detect bad labeling, but detection with no cost is a treadmill: a scripter

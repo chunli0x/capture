@@ -1,4 +1,4 @@
-# Tap Farm
+# Tap
 
 A mobile-native data labeling network. Contributors label training data on their
 phone and are paid to the wallet already built into it.
@@ -8,7 +8,10 @@ RadiantsDAO, September 8 – October 8 2026.
 
 > **Status: week 2 of 4.** Task serving, the labeling UI, the contributor-signed
 > claim, the two-token stake program and referral accounting are built, and
-> everything on-chain is proven against a live validator. 198 tests pass. The
+> everything on-chain is proven against a live validator. A plain `pytest -q`
+> reports **165 passed, 12 skipped** (the skips are on-chain tests behind
+> `TAPFARM_E2E=1`); with a validator that becomes **177 passed**, alongside
+> **21** Rust logic tests. The
 > on-device MWA handshake is the open item. See [docs/SPIKE.md](docs/SPIKE.md)
 > for the full ledger of what is proven and what is not.
 
@@ -87,7 +90,7 @@ So: put the work on the phone, and pay to the wallet that is already there.
 
 ## Campaigns
 
-Tap Farm is organized around **campaigns** — a labeling brief, a task type, a
+Tap is organized around **campaigns** — a labeling brief, a task type, a
 dataset, and a reward rate. This is the core architectural decision, not a
 roadmap item: the app renders whatever task type a campaign declares, so adding
 a new kind of labeling work is a campaign definition rather than a new app.

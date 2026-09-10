@@ -1,6 +1,6 @@
 # Platform roadmap
 
-What Tap Farm becomes after CLOCK IN. Deliberately out of hackathon scope — kept
+What Tap becomes after CLOCK IN. Deliberately out of hackathon scope — kept
 here so the submission can be honest about the line between built and planned.
 
 ## Built for the hackathon

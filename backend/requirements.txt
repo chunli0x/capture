@@ -11,6 +11,8 @@ pillow==12.3.0
 numpy==2.4.6
 
 # Tests
-pytest==8.3.4
+# pytest-asyncio 1.4 requires pytest>=8.4,<10 - an 8.3.x pin here makes a clean
+# `pip install -r requirements.txt` fail with ResolutionImpossible.
+pytest==8.4.2
 pytest-asyncio==1.4.0
 httpx==0.28.1           # TestClient
