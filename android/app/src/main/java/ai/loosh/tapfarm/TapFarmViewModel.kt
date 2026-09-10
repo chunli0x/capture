@@ -15,7 +15,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-enum class Screen { CONNECT, CAMPAIGNS, SOLVING }
+enum class Screen { CONNECT, CAMPAIGNS, SOLVING, POSE_PRIMER, POSE_TASK }
+
+/** Ghost-overlay modes, matching the server's pools. */
+object PoseMode {
+    const val PRACTICE = "practice"
+    const val QUALIFY = "qualify"
+    const val EARN = "earn"
+}
 
 /**
  * Result of the last submission.
@@ -55,6 +62,16 @@ data class UiState(
     val referral: Referral? = null,
     val uiReferralUnclaimed: Double = 0.0,
     val uiTotalClaimable: Double = 0.0,
+    // --- ghost overlay ---
+    val poseObjects: Map<String, PoseObject> = emptyMap(),
+    val poseTask: PoseTask? = null,
+    val pose: GhostPose = GhostPose(0f, 0f, 0f, 1f),
+    val poseMode: String = PoseMode.PRACTICE,
+    val poseFeedback: PoseFeedback? = null,
+    val poseSubmitted: Boolean = false,
+    val qualification: Qualification? = null,
+    val poseQualified: Boolean = false,
+    val practiceDone: Int = 0,
     val busy: String? = null,
     val error: String? = null,
     val lastSignature: String? = null,
@@ -63,6 +80,12 @@ data class UiState(
         get() = wallet?.let { "${it.take(4)}…${it.takeLast(4)}" }
     val canSubmit: Boolean
         get() = task != null && feedback == null && busy == null
+
+    val poseObject: PoseObject?
+        get() = poseTask?.let { poseObjects[it.objectId] }
+
+    val canSubmitPose: Boolean
+        get() = poseTask != null && !poseSubmitted && busy == null
 }
 
 class TapFarmViewModel : ViewModel() {
@@ -98,6 +121,12 @@ class TapFarmViewModel : ViewModel() {
     fun openCampaign(campaign: Campaign) {
         if (!campaign.isLive) {
             fail("${campaign.title} is not open yet.")
+            return
+        }
+        // Task type, not campaign id: a second ghost-overlay campaign should
+        // route itself without another branch here.
+        if (campaign.taskType == "ghost_pose") {
+            openGhostCampaign()
             return
         }
         _state.update { it.copy(screen = Screen.SOLVING) }
@@ -174,6 +203,68 @@ class TapFarmViewModel : ViewModel() {
                 fail("Claim not signed: ${result.message}")
         }
     }
+
+    // ---- ghost overlay -----------------------------------------------------
+
+    fun openGhostCampaign() = launchGuarded("Loading campaign") {
+        val objects = api.poseObjects().associateBy { it.objectId }
+        _state.update { it.copy(poseObjects = objects, screen = Screen.POSE_PRIMER) }
+    }
+
+    fun startPose(mode: String) {
+        _state.update { it.copy(poseMode = mode, screen = Screen.POSE_TASK) }
+        nextPoseTask()
+    }
+
+    fun nextPoseTask() = launchGuarded("Loading task") {
+        val wallet = requireWallet() ?: return@launchGuarded
+        val mode = _state.value.poseMode
+        _state.update {
+            it.copy(poseTask = null, poseFeedback = null, poseSubmitted = false)
+        }
+        val task = api.nextPoseTask(wallet, mode)
+        _state.update { it.copy(poseTask = task, pose = startingPose(task)) }
+    }
+
+    fun updatePose(pose: GhostPose) {
+        if (_state.value.poseSubmitted) return
+        _state.update { it.copy(pose = pose) }
+    }
+
+    fun submitPose() = launchGuarded("Submitting") {
+        val wallet = requireWallet() ?: return@launchGuarded
+        val task = _state.value.poseTask ?: return@launchGuarded
+
+        val result = api.submitPose(wallet, task.taskId, _state.value.pose)
+        _state.update {
+            it.copy(
+                poseSubmitted = true,
+                poseFeedback = result.feedback,
+                qualification = result.qualification ?: it.qualification,
+                poseQualified = result.qualified,
+                practiceDone =
+                    if (task.mode == PoseMode.PRACTICE) it.practiceDone + 1 else it.practiceDone,
+                uiBalance = result.uiBalance,
+            )
+        }
+        if (result.qualification != null) refresh()
+    }
+
+    fun leavePose() {
+        _state.update {
+            it.copy(screen = Screen.CAMPAIGNS, poseTask = null, poseFeedback = null)
+        }
+    }
+
+    /**
+     * Where the ghost starts.
+     *
+     * Deliberately a fixed corner offset rather than anywhere near the answer.
+     * Seeding it close to the true pose would hand over part of the label - and
+     * during qualification the client does not know the answer anyway.
+     */
+    private fun startingPose(task: PoseTask): GhostPose =
+        GhostPose(x = task.canvas * 0.26f, y = task.canvas * 0.26f, roll = 0f, scale = 1f)
 
     fun dismissError() = _state.update { it.copy(error = null) }
 

@@ -58,7 +58,7 @@ address at <https://faucet.solana.com> and re-run.
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-pytest -q                       # 165 passed, 12 skipped; no network needed
+pytest -q                       # 247 passed, 12 skipped; no network needed
 uvicorn tapfarm.main:app --reload --host 0.0.0.0 --port 8000
 ```
 

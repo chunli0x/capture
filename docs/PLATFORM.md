@@ -5,6 +5,10 @@ here so the submission can be honest about the line between built and planned.
 
 ## Built for the hackathon
 
+- Ghost-overlay campaign (`ghost_pose`): image-plane pose labeling with a
+  synthetic golden set, a blind qualification gate, practice-only snap glow,
+  and hidden golden items for drift detection
+
 - Android app, MWA wallet connect, campaign-driven task rendering
 - Tap-grid labeling campaign over a synthetic dataset
 - Contributor-signed SKR claim on devnet
@@ -38,6 +42,29 @@ does not fit in the same month as a mobile app.
 **One real mainnet SKR stake in the demo.** Everything else runs on devnet with
 TAP; a single genuine mainnet SKR stake transaction shows the SKR integration is
 real rather than simulated.
+
+## Ghost overlay, v2
+
+**True 3D pose.** v1 records a 2D similarity transform - x, y, roll, apparent
+scale. Pitch, yaw and physical depth need a mesh renderer (SceneView or
+Filament) plus camera intrinsics, and a flat sprite cannot express them. Until
+that exists, calling it 6D would be an overclaim.
+
+**A physical scale.** Today scale is unitless and unscored. Given the object's
+physical width and the camera's focal length it becomes real depth
+(`z = f * physical_size / apparent_px`), at which point it can earn its own
+error metric and enter the gate.
+
+**Normalised error.** Pixels are resolution- and distance-dependent, so 15px
+means different things in different frames. Production wants error normalised
+by object size, plus a pixel-to-mm calibration path.
+
+**Symmetry-aware roll.** Every current object has a visible roll feature. A
+rotationally symmetric object needs a symmetry-aware metric or a roll-free task
+type.
+
+**Threshold validation.** 15px / 10 degrees / 90% is a guess. Run fresh users
+through the golden set and expect to land nearer 25px / 15 degrees / 80-85%.
 
 ## Next, roughly in order
 

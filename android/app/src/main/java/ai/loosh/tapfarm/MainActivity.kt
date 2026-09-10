@@ -107,6 +107,18 @@ fun TapFarmApp(sender: ActivityResultSender, vm: TapFarmViewModel = viewModel())
                     onOpen = vm::openCampaign,
                     onClaim = { vm.claim(sender) },
                 )
+                Screen.POSE_PRIMER -> PosePrimerScreen(
+                    state = state,
+                    onStart = vm::startPose,
+                    onBack = vm::leavePose,
+                )
+                Screen.POSE_TASK -> PoseTaskScreen(
+                    state = state,
+                    onPoseChange = vm::updatePose,
+                    onSubmit = vm::submitPose,
+                    onNext = vm::nextPoseTask,
+                    onBack = vm::leavePose,
+                )
                 Screen.SOLVING -> SolvingScreen(
                     state = state,
                     onToggle = vm::toggleCell,
@@ -236,6 +248,204 @@ private fun CampaignsScreen(
             items(state.campaigns) { campaign ->
                 CampaignRow(campaign) { onOpen(campaign) }
             }
+        }
+    }
+}
+
+/**
+ * The primer.
+ *
+ * Named "image-plane pose" here and everywhere else it is user-visible. A flat
+ * sprite records x, y, roll and an apparent scale - it cannot express pitch,
+ * yaw or depth, so calling it 6D would be an overclaim a robotics buyer spots
+ * immediately.
+ */
+@Composable
+private fun PosePrimerScreen(
+    state: UiState,
+    onStart: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        TextButton(onClick = onBack) { Text("← Campaigns") }
+
+        Text(
+            "Line up the ghost",
+            fontSize = 22.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        Text(
+            "Drag the translucent outline onto the object until it matches. "
+                + "One finger moves it, two fingers twist it, pinch resizes it.",
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+        )
+
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                PrimerRow("1", "Practice", "Instant feedback, and the ghost glows when you are on target.")
+                PrimerRow("2", "Qualify", "A blind test. No feedback, no glow, until it is over.")
+                PrimerRow("3", "Earn", "Paid labels, claimed to your wallet.")
+            }
+        }
+
+        state.qualification?.let { q ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp)) {
+                    Text(
+                        q.summary,
+                        fontSize = 13.sp,
+                        color = if (q.qualified) Accent else Warn,
+                    )
+                }
+            }
+        }
+
+        Button(
+            onClick = { onStart(PoseMode.PRACTICE) },
+            enabled = state.busy == null,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Practice") }
+
+        OutlinedButton(
+            onClick = { onStart(PoseMode.QUALIFY) },
+            enabled = state.busy == null,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Take the blind test") }
+
+        if (state.poseQualified) {
+            Button(
+                onClick = { onStart(PoseMode.EARN) },
+                enabled = state.busy == null,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Start earning") }
+        }
+    }
+}
+
+@Composable
+private fun PrimerRow(step: String, title: String, body: String) {
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(step, fontFamily = FontFamily.Monospace, fontSize = 13.sp, color = Accent)
+        Column {
+            Text(title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp,
+                 color = MaterialTheme.colorScheme.onSurface)
+            Text(body, fontSize = 12.sp,
+                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f))
+        }
+    }
+}
+
+@Composable
+private fun PoseTaskScreen(
+    state: UiState,
+    onPoseChange: (GhostPose) -> Unit,
+    onSubmit: () -> Unit,
+    onNext: () -> Unit,
+    onBack: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = onBack) { Text("← Back") }
+            Text(
+                when (state.poseMode) {
+                    PoseMode.QUALIFY -> state.poseTask?.let { t ->
+                        "Blind test ${t.index ?: 1} of ${t.of ?: 1}"
+                    } ?: "Blind test"
+                    PoseMode.EARN -> "Earning"
+                    else -> "Practice"
+                },
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                color = if (state.poseMode == PoseMode.QUALIFY) Warn else Accent,
+            )
+        }
+
+        val task = state.poseTask
+        val obj = state.poseObject
+        if (task == null || obj == null) {
+            Text("Loading task…", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            return@Column
+        }
+
+        Text(
+            "Match the ${obj.label.lowercase()}",
+            fontSize = 18.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        Text(
+            "Look for the ${obj.rollFeature} to get the rotation right.",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+        )
+
+        GhostOverlay(
+            imageUrl = task.imageUrl,
+            spriteUrl = obj.spriteUrl,
+            canvasPx = task.canvas,
+            spritePxAtScale1 = obj.spritePxAtScale1,
+            pose = state.pose,
+            // Both come from the server and are null/false outside practice,
+            // so a blind run cannot render a proximity hint.
+            allowSnap = task.allowSnap,
+            truth = task.truth,
+            enabled = !state.poseSubmitted,
+            onPoseChange = onPoseChange,
+        )
+
+        state.poseFeedback?.let { f ->
+            Card(Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        if (f.withinTolerance) "On target" else "Off target",
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (f.withinTolerance) Accent else Warn,
+                    )
+                    Text(
+                        "%.0f px · %.1f°".format(f.errorPx, f.errorDeg),
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+
+        state.qualification?.takeIf { state.poseSubmitted && it.attempted >= it.required }
+            ?.let { q ->
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            if (q.qualified) "Qualified" else "Not qualified",
+                            fontWeight = FontWeight.Bold,
+                            color = if (q.qualified) Accent else MaterialTheme.colorScheme.error,
+                        )
+                        Text(q.summary, fontSize = 12.sp,
+                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                    }
+                }
+            }
+
+        if (!state.poseSubmitted) {
+            Button(
+                onClick = onSubmit,
+                enabled = state.canSubmitPose,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Done") }
+        } else {
+            Button(
+                onClick = onNext,
+                enabled = state.busy == null,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Next") }
         }
     }
 }
