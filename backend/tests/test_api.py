@@ -116,7 +116,27 @@ def test_health_reports_configuration(client):
 def test_campaigns_expose_live_and_queued(client):
     c, _, _, _ = client
     statuses = {x["id"]: x["status"] for x in c.get("/campaigns").json()}
-    assert statuses == {"img-grid-v1": "live", "robotics-bbox-v1": "queued"}
+    assert statuses == {
+        "ghost-pose-v1": "live",
+        "img-grid-v1": "live",
+        "robotics-bbox-v1": "queued",
+    }
+
+
+def test_ghost_pose_campaign_is_named_image_plane_not_6d(client):
+    """Hard rule: never market this as 6D pose.
+
+    A flat sprite captures x, y, roll and an apparent scale - a 2D similarity
+    transform. Pitch, yaw and physical depth are absent, and a robotics buyer
+    spots the overclaim immediately.
+    """
+    c, _, _, _ = client
+    campaign = next(
+        x for x in c.get("/campaigns").json() if x["id"] == "ghost-pose-v1"
+    )
+    blob = (campaign["title"] + " " + campaign["description"]).lower()
+    assert "image-plane" in blob
+    assert "6d" not in blob
 
 
 def test_served_task_does_not_leak_the_answer(client):
