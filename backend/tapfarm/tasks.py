@@ -18,8 +18,11 @@ So two rules follow, and both matter:
   We are not entitled to grade work we are pretending not to know the answer
   to, and quality is enforced by gold sampling plus the bond instead.
 
-Gold rate falls once a contributor has a bond at stake: the bond is doing the
-work that verification sampling would otherwise have to pay for.
+Gold rate is *designed* to fall once a contributor has a bond at stake, on the
+reasoning that the bond does the work verification sampling would otherwise pay
+for. **That path is not live:** every caller passes tier 0, so the staked rate
+below is currently unreachable. Reading the real tier from the stake program is
+listed in PLATFORM.md as decided and not yet built.
 """
 
 from __future__ import annotations
@@ -33,7 +36,12 @@ from tapfarm.scoring import ContributorRecord, grade_submission
 
 # Fraction of served tasks that are graded, by tier. Unstaked contributors are
 # verified heavily because nothing else is protecting the data; a staked
-# contributor is verified less because the bond covers the difference.
+# contributor would be verified less because the bond covers the difference.
+#
+# Only tier 0 is reachable today - `next_task` is always called with tier=0, so
+# the 5% entry is aspirational rather than in use. It is kept because the shape
+# of the mechanism is settled and only the lookup of a contributor's real tier
+# is missing; see PLATFORM.md.
 GOLD_RATE_BY_TIER: dict[int, float] = {0: 0.20, 1: 0.05}
 
 

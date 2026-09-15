@@ -117,6 +117,8 @@ fun TapFarmApp(sender: ActivityResultSender, vm: TapFarmViewModel = viewModel())
                     onPoseChange = vm::updatePose,
                     onSubmit = vm::submitPose,
                     onNext = vm::nextPoseTask,
+                    onRecentre = vm::recentreGhost,
+                    onFlag = vm::flagTask,
                     onBack = vm::leavePose,
                 )
                 Screen.SOLVING -> SolvingScreen(
@@ -343,6 +345,8 @@ private fun PoseTaskScreen(
     onPoseChange: (GhostPose) -> Unit,
     onSubmit: () -> Unit,
     onNext: () -> Unit,
+    onRecentre: () -> Unit,
+    onFlag: (String) -> Unit,
     onBack: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -440,6 +444,38 @@ private fun PoseTaskScreen(
                 enabled = state.canSubmitPose,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Done") }
+
+            // Escape hatches. The ghost is clamped to the frame, but a user who
+            // has pushed it into a corner still wants a way back; and forcing a
+            // guess on an unclear or empty frame produces a confident wrong
+            // label, which is worse for the dataset than no label.
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = onRecentre,
+                    enabled = state.busy == null,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Recentre", fontSize = 13.sp) }
+
+                // The blind set is a fixed number of items, so skipping is
+                // refused there - otherwise a labeler could reroll until the
+                // set was easy and the gate would measure persistence.
+                if (state.poseMode != PoseMode.QUALIFY) {
+                    OutlinedButton(
+                        onClick = { onFlag("unclear") },
+                        enabled = state.busy == null,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Unclear", fontSize = 13.sp) }
+
+                    OutlinedButton(
+                        onClick = { onFlag("no_object") },
+                        enabled = state.busy == null,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("No object", fontSize = 13.sp) }
+                }
+            }
         } else {
             Button(
                 onClick = onNext,

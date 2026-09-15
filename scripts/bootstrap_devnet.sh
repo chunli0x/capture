@@ -22,6 +22,9 @@ set -euo pipefail
 BACKEND_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../backend" && pwd)"
 TREASURY="$BACKEND_DIR/treasury.json"
 CLI_CONFIG="$BACKEND_DIR/.solana-cli.yml"
+# Records what was created, so a re-run reuses the mints instead of minting a
+# fresh pair every time and silently orphaning the previous ones.
+STATE_FILE="$BACKEND_DIR/.bootstrap-state.json"
 DECIMALS=6
 TAP_SUPPLY=1000000
 ACCESS_SUPPLY=1000
@@ -56,7 +59,28 @@ if (( $(echo "$BALANCE < 2" | bc -l) )); then
   }
 fi
 
-# $1 = human label, $2 = supply
+# Reads a previously recorded mint, but only if it still exists on this
+# cluster - switching between localhost and devnet must not hand back an
+# address that resolves to nothing.
+recorded_mint() {
+  local key="$1" mint
+  [[ -f "$STATE_FILE" ]] || return 1
+  mint="$(python3 -c "
+import json, sys
+try:
+    state = json.load(open('$STATE_FILE'))
+except Exception:
+    sys.exit(1)
+if state.get('cluster') != '$CLUSTER':
+    sys.exit(1)
+print(state.get('$key', ''))
+" 2>/dev/null)" || return 1
+  [[ -n "$mint" ]] || return 1
+  solana -C "$CLI_CONFIG" account "$mint" >/dev/null 2>&1 || return 1
+  echo "$mint"
+}
+
+# $1 = supply
 create_mint() {
   local supply="$1" mint
   mint="$(spl-token -C "$CLI_CONFIG" create-token \
@@ -69,11 +93,29 @@ create_mint() {
   echo "$mint"
 }
 
-echo "creating TAP mint..."
-TAP_MINT="$(create_mint "$TAP_SUPPLY")"
+if TAP_MINT="$(recorded_mint tap_mint)"; then
+  echo "reusing TAP mint $TAP_MINT"
+else
+  echo "creating TAP mint..."
+  TAP_MINT="$(create_mint "$TAP_SUPPLY")"
+fi
 
-echo "creating local access-stake mint (test fixture, not SKR)..."
-ACCESS_MINT="$(create_mint "$ACCESS_SUPPLY")"
+if ACCESS_MINT="$(recorded_mint access_mint)"; then
+  echo "reusing access-stake mint $ACCESS_MINT"
+else
+  echo "creating local access-stake mint (test fixture, not SKR)..."
+  ACCESS_MINT="$(create_mint "$ACCESS_SUPPLY")"
+fi
+
+python3 - "$STATE_FILE" "$CLUSTER" "$TAP_MINT" "$ACCESS_MINT" "$TREASURY_PUBKEY" <<'PYEOF'
+import json, sys
+path, cluster, tap, access, treasury = sys.argv[1:6]
+json.dump(
+    {"cluster": cluster, "tap_mint": tap, "access_mint": access, "treasury": treasury},
+    open(path, "w"),
+    indent=2,
+)
+PYEOF
 
 cat <<EOF
 

@@ -39,9 +39,69 @@ does not fit in the same month as a mobile app.
 
 ## Decided, not yet built
 
+Most of these came out of a seven-role code review. None blocks the demo; all of
+them would have to exist before the system held anything of value. They are
+listed rather than quietly implied to work, because the gap between
+"implemented" and "wired up" is exactly where a reader would otherwise be
+misled.
+
 **One real mainnet SKR stake in the demo.** Everything else runs on devnet with
 TAP; a single genuine mainnet SKR stake transaction shows the SKR integration is
 real rather than simulated.
+
+**Caller authentication.** Every endpoint takes a contributor pubkey as a plain
+string and trusts it. Anyone can name someone else's wallet: drain a victim's
+balance into a claim transaction only that victim can actually submit (griefing
+rather than theft, but still destructive), or front-run a referral registration.
+The fix is a signed nonce or challenge per request, proving the caller holds the
+key they are claiming to be. Nothing here should hold real value until it
+exists.
+
+**`initialize()` access control.** The stake program's initializer has no admin
+constraint, so on a fresh deployment whoever calls it first becomes the slash
+authority and sets both mints. Either bake the admin pubkey into the program or
+bundle initialization into the deploy transaction.
+
+**The slashing loop.** `slash` is implemented, tested on-chain, and reachable
+only by the configured authority - and **no running code calls it**. Rolling
+gold-standard accuracy is computed on every submission but never triggers a
+burn, and there is no instruction to pay `slashed_pool` back out to honest
+contributors. Two pieces are missing: a backend trigger, and a
+rewards-distribution instruction. Until both land, slashed TAP would simply sit
+in the vault.
+
+**Tier wiring.** `GOLD_RATE_BY_TIER` says a bonded contributor is verified at 5%
+instead of 20%, and the stake program can report the tier - but `next_task` is
+always called with tier 0, so the reduced rate never fires. The fix mirrors what
+referral eligibility already does: read the position through `stake_reader`.
+
+**Config updates and authority rotation.** `Config` is write-once. There is no
+instruction to rotate the slash authority or change `min_tap_stake`,
+`min_skr_stake` or the cooldown, so a compromised authority key cannot be
+replaced without redeploying to a new program id.
+
+**Persistence.** Task balances, accuracy history, qualification state and the
+referral graph are all in memory. A restart wipes them - which also resets the
+anti-sybil record, making probation re-runnable at will. SQLite behind the
+existing interfaces is the next step; the interfaces were written to survive it.
+
+**Concurrency beyond the claim path.** The claim read-and-debit is now atomic
+under a per-contributor lock, but the task and referral stores are otherwise
+unguarded and several routes run in the threadpool. Concurrent submissions can
+still lose an update. The same per-contributor lock should extend to them.
+
+**A flag path for a real blind set.** Flagging is refused during qualification,
+because the blind set is fixed-size and skipping would let someone reroll until
+it was easy. That is safe only because the golden set is synthetic and always
+contains its object. A blind set drawn from real buyer imagery would need a flag
+that pulls a replacement from a reserve pool.
+
+**Release signing and cleartext.** The release build is debug-signed and the
+manifest allows cleartext traffic for the local dev backend. Both are fine for a
+devnet demo and both must change before any public build.
+
+**Backend hosting.** There is no Dockerfile or deployment target. The demo runs
+the API locally over the LAN; anything judges install would need a real host.
 
 ## Ghost overlay, v2
 

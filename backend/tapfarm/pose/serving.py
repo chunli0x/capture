@@ -57,6 +57,10 @@ class NotQualified(Exception):
     """Paid work requires passing the blind gate first."""
 
 
+class CannotFlag(Exception):
+    """Flagging is not permitted for this task."""
+
+
 @dataclass(frozen=True)
 class ServedPoseTask:
     """What the client receives.
@@ -84,6 +88,18 @@ class PoseFeedback:
     within_tolerance: bool
 
 
+#: Why a labeler could not produce a pose. The safety valve from spec section 9.
+FLAG_REASONS = ("unclear", "no_object")
+
+
+@dataclass(frozen=True)
+class FlaggedTask:
+    task_id: str
+    contributor: str
+    reason: str
+    mode: str
+
+
 @dataclass(frozen=True)
 class PoseSubmission:
     accepted: bool
@@ -99,6 +115,7 @@ class PoseSubmission:
 @dataclass
 class _ContributorPose:
     seen: set[str] = field(default_factory=set)
+    flagged: list[FlaggedTask] = field(default_factory=list)
     outstanding: dict[str, tuple[PoseTaskRecord, str]] = field(default_factory=dict)
     practice_done: int = 0
     qualify_grades: list[PoseGrade] = field(default_factory=list)
@@ -217,7 +234,13 @@ class PoseTaskStore:
             )
 
         if mode == QUALIFY:
-            assert grade is not None  # qualify items always have truth
+            if grade is None:
+                # Not an assert: assertions are stripped under -O, and a blind
+                # item with no truth would then be silently scored as a pass.
+                raise RuntimeError(
+                    f"qualification task {task_id} has no ground truth; "
+                    "the blind set is unusable"
+                )
             state.qualify_grades.append(grade)
             result = qualification_result(
                 state.qualify_grades,
@@ -298,6 +321,45 @@ class PoseTaskStore:
             label["quality_signal"] = "agreement"
         label["timestamp"] = timestamp.isoformat().replace("+00:00", "Z")
         return label
+
+    def flag(self, contributor: str, task_id: str, reason: str) -> FlaggedTask:
+        """Discard a task the labeler cannot honestly answer.
+
+        Two cases from the spec: the object is not visible at all, or its pose
+        is genuinely ambiguous. Forcing a guess in either case pollutes the
+        dataset with a confident wrong answer, which is worse than no answer.
+        Flagged tasks are recorded so they can be routed to an expert later.
+
+        **Not allowed during qualification.** The blind set is a fixed number of
+        items, so letting someone skip the hard ones would let them reroll until
+        the set is easy and the gate would measure persistence rather than
+        skill. The golden set is synthetic and always contains its object, so
+        there is no honest reason to flag one. A blind set drawn from real buyer
+        imagery would need a flag path that pulls a replacement from a reserve
+        pool - noted in PLATFORM.md rather than pretended here.
+        """
+        if reason not in FLAG_REASONS:
+            raise ValueError(f"unknown flag reason: {reason}")
+
+        state = self.state(contributor)
+        served = state.outstanding.get(task_id)
+        if served is None:
+            raise UnknownPoseTask(task_id)
+        _record, mode = served
+        if mode == QUALIFY:
+            raise CannotFlag(
+                "the blind set cannot be skipped - answer as best you can"
+            )
+
+        state.outstanding.pop(task_id)
+        flagged = FlaggedTask(
+            task_id=task_id, contributor=contributor, reason=reason, mode=mode
+        )
+        state.flagged.append(flagged)
+        return flagged
+
+    def flagged(self, contributor: str) -> list[FlaggedTask]:
+        return list(self.state(contributor).flagged)
 
     def qualification(self, contributor: str) -> QualificationResult:
         state = self.state(contributor)

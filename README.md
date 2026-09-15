@@ -20,9 +20,11 @@ RadiantsDAO, September 8 – October 8 2026.
 Two tokens, two jobs. The split is not cosmetic — it decides what we are allowed
 to destroy.
 
-**TAP** is ours: what contributors earn, and the **slashable** quality bond. Get
-gold-standard tasks wrong often enough and part of your TAP bond is burned into
-the campaign reward pool.
+**TAP** is ours: what contributors earn, and the **slashable** quality bond.
+`slash` is implemented on the stake program and tested on-chain, but **nothing
+in the backend calls it yet** — a bond cannot currently be burned by bad work,
+because no running code path triggers it. Wiring that up is listed in
+[PLATFORM.md](docs/PLATFORM.md) under work that is decided and not yet built.
 
 **SKR** is Solana Mobile's. We never mint it and we never burn it. It is a
 **non-slashable** access stake: locking real SKR signals platform commitment and
@@ -183,8 +185,15 @@ fresh users have been measured. They are config values (`pose_max_error_px`,
 
 Tap is organized around **campaigns** — a labeling brief, a task type, a
 dataset, and a reward rate. This is the core architectural decision, not a
-roadmap item: the app renders whatever task type a campaign declares, so adding
-a new kind of labeling work is a campaign definition rather than a new app.
+roadmap item: the campaign concept is established, and the client dispatches on
+the task type a campaign declares rather than on a campaign id.
+
+It is only half-extracted, though. `tap_grid` and `ghost_pose` currently run as
+two largely independent stacks — separate stores, scoring, and endpoints, joined
+at the claim path by a single shared gate — and the client branches on a known
+task-type string. Adding a third type today means another parallel stack, not
+just a campaign definition. Unifying them behind one interface is future work,
+not something the code already does.
 
 | Campaign | Task type | Status |
 |---|---|---|
@@ -301,11 +310,16 @@ Three rules do the work, each specified by a test in
   coasting on history.
 
 **The TAP bond.** Detection alone is a treadmill — a scripter whose accuracy
-collapses just funds a new wallet. Staking TAP puts something at risk: the
-rolling accuracy above is the slashing oracle, and falling below threshold burns
-part of the bond into the campaign reward pool, so honest labelers are paid out
-of dishonest ones. See **Tokens** above for why the bond is TAP and why SKR is
-never slashed.
+collapses just funds a new wallet, so the design puts a bond at risk and makes
+rolling accuracy the signal that would burn it.
+
+Stated precisely, because the distinction matters: the bond, the cooldown and
+`slash` itself are built and tested against a live validator, and the accuracy
+that would drive them is computed on every submission. **The two are not
+connected.** No backend path calls `slash`, and there is no instruction to pay a
+slashed pool back out, so "honest labelers are paid out of dishonest ones"
+describes the design rather than something that runs today. Both gaps are in
+[PLATFORM.md](docs/PLATFORM.md).
 
 ## Development
 

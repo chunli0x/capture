@@ -164,6 +164,15 @@ class ReferralLedger:
         """Zero and return the unclaimed referral balance."""
         return self._unclaimed.pop(referrer, 0)
 
+    def credit_back(self, referrer: str, amount: int) -> None:
+        """Undo a claim that could not be completed.
+
+        Lifetime `earned` is untouched because it never went down - only the
+        unclaimed balance is being restored.
+        """
+        if amount > 0:
+            self._unclaimed[referrer] = self._unclaimed.get(referrer, 0) + amount
+
     def stats(self, referrer: str) -> ReferralStats:
         return ReferralStats(
             referees=len(self._referees_of.get(referrer, ())),
