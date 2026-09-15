@@ -228,7 +228,31 @@ class TapFarmViewModel : ViewModel() {
 
     fun updatePose(pose: GhostPose) {
         if (_state.value.poseSubmitted) return
-        _state.update { it.copy(pose = pose) }
+        val canvas = _state.value.poseTask?.canvas ?: return
+        // Clamped on the way in, so the ghost can never be dragged somewhere
+        // the labeler cannot reach it again.
+        _state.update { it.copy(pose = clampToCanvas(pose, canvas)) }
+    }
+
+    /** Bring the ghost back to its starting position. */
+    fun recentreGhost() {
+        val task = _state.value.poseTask ?: return
+        if (_state.value.poseSubmitted) return
+        _state.update { it.copy(pose = startingPose(task)) }
+    }
+
+    /**
+     * Discard a task the labeler cannot honestly answer.
+     *
+     * A forced guess on an unclear or empty frame is a confident wrong label,
+     * which is worse for the dataset than no label. The server refuses this
+     * during the blind run, and surfaces why.
+     */
+    fun flagTask(reason: String) = launchGuarded("Skipping") {
+        val wallet = requireWallet() ?: return@launchGuarded
+        val task = _state.value.poseTask ?: return@launchGuarded
+        api.flagPoseTask(wallet, task.taskId, reason)
+        nextPoseTask()
     }
 
     fun submitPose() = launchGuarded("Submitting") {

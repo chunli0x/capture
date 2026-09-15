@@ -253,3 +253,89 @@ def test_pose_truth_is_never_served(client, path):
     """
     c, _ = client
     assert c.get(path).status_code == 404
+
+
+def test_flag_endpoint_skips_a_practice_task(client):
+    c, _ = client
+    who = _who()
+    task = c.get("/pose/task/next", params={"contributor": who, "mode": "practice"}).json()
+    body = c.post("/pose/flag", json={
+        "contributor": who, "task_id": task["task_id"], "reason": "no_object",
+    })
+    assert body.status_code == 200
+    assert body.json()["reason"] == "no_object"
+
+
+def test_flag_endpoint_refuses_the_blind_set(client):
+    c, _ = client
+    who = _who()
+    task = c.get("/pose/task/next", params={"contributor": who, "mode": "qualify"}).json()
+    response = c.post("/pose/flag", json={
+        "contributor": who, "task_id": task["task_id"], "reason": "unclear",
+    })
+    assert response.status_code == 409
+    assert "cannot be skipped" in response.json()["detail"]
+
+
+def test_flag_endpoint_rejects_an_unknown_reason(client):
+    c, _ = client
+    who = _who()
+    task = c.get("/pose/task/next", params={"contributor": who, "mode": "practice"}).json()
+    response = c.post("/pose/flag", json={
+        "contributor": who, "task_id": task["task_id"], "reason": "nah",
+    })
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "raw_pose",
+    [
+        '{"x": NaN, "y": 1, "roll": 0, "scale": 1.0}',
+        '{"x": 1, "y": Infinity, "roll": 0, "scale": 1.0}',
+        '{"x": 1, "y": 1, "roll": -Infinity, "scale": 1.0}',
+        '{"x": 1, "y": 1, "roll": 0, "scale": NaN}',
+        '{"x": 1e9, "y": 1, "roll": 0, "scale": 1.0}',
+        '{"x": 1, "y": 1, "roll": 0, "scale": 0.0}',
+        '{"x": 1, "y": 1, "roll": 0, "scale": -1.0}',
+    ],
+    ids=["nan-x", "inf-y", "-inf-roll", "nan-scale", "huge-x", "zero-scale", "neg-scale"],
+)
+def test_nonfinite_or_out_of_range_poses_are_rejected(client, raw_pose):
+    """NaN is the dangerous one: it compares false against every threshold.
+
+    Left unchecked it does not raise - it silently scores as "outside
+    tolerance" while looking like an ordinary answer, so a malformed client
+    would quietly fail qualification with no explanation.
+
+    Sent as a raw body rather than through `json=`, because httpx refuses to
+    serialise NaN at all - so this is what a hand-rolled client can actually put
+    on the wire.
+
+    These used to return 500. Python's JSON parser accepts NaN on the way in,
+    pydantic rejects it and echoes the offending value into the error detail,
+    and the encoder then refuses to serialise that detail - turning a clean 422
+    into a server crash. A validation handler now scrubs non-finite values out
+    of the error body.
+    """
+    c, _ = client
+    who = _who()
+    task = c.get("/pose/task/next", params={"contributor": who, "mode": "practice"}).json()
+    body = (
+        '{"contributor": "%s", "task_id": "%s", "pose": %s}'
+        % (who, task["task_id"], raw_pose)
+    )
+    response = c.post(
+        "/pose/submit", content=body, headers={"Content-Type": "application/json"}
+    )
+    assert response.status_code == 422, response.text
+
+
+def test_a_valid_pose_at_the_bounds_is_accepted(client):
+    c, _ = client
+    who = _who()
+    task = c.get("/pose/task/next", params={"contributor": who, "mode": "practice"}).json()
+    response = c.post("/pose/submit", json={
+        "contributor": who, "task_id": task["task_id"],
+        "pose": {"x": 0.0, "y": 0.0, "roll": -180.0, "scale": 0.5},
+    })
+    assert response.status_code == 200

@@ -415,3 +415,78 @@ def test_referral_chain_pays_only_the_direct_referrer(client):
 
     assert c.get(f"/referral/{bob}").json()["unclaimed"] > 0
     assert c.get(f"/referral/{alice}").json()["unclaimed"] == 0
+
+
+# -- claim atomicity ------------------------------------------------------------
+
+def test_a_reward_arriving_during_the_claim_is_not_wiped(client, monkeypatch):
+    """Regression: read-then-await-then-zero lost concurrent credits.
+
+    The handler used to read the balance, await a blockhash, and only then zero
+    it - so anything credited during that await was destroyed. The blockhash is
+    now fetched first and the read-and-zero is one synchronous step, so a reward
+    landing mid-request is either fully included or left untouched, never lost.
+    """
+    c, _, _, _ = client
+    _force_gold(True)
+    who = str(Keypair().pubkey())
+    _solve_correctly(c, who, MIN_GOLD_SAMPLES)
+    before = c.get(f"/contributor/{who}").json()["balance"]
+
+    late_reward = 5_000
+
+    class _RacingRpc:
+        async def get_latest_blockhash(self):
+            # Stands in for a submit landing while the claim is in flight.
+            main_mod.task_store().state(who).balance += late_reward
+
+            class _Resp:
+                class value:
+                    blockhash = STUB_BLOCKHASH
+
+            return _Resp()
+
+    @asynccontextmanager
+    async def _racing(_url, **_kwargs):
+        yield _RacingRpc()
+
+    monkeypatch.setattr("tapfarm.main.AsyncClient", lambda url, **kw: _racing(url, **kw))
+
+    claimed = c.post("/claim/prepare", json={"contributor": who}).json()["amount"]
+    remaining = c.get(f"/contributor/{who}").json()["balance"]
+
+    # Whatever was not claimed must still be on the books.
+    assert claimed + remaining == before + late_reward
+    assert remaining >= 0
+
+
+def test_a_second_claim_finds_nothing_left(client):
+    """Two claims must not both be signed for the full amount."""
+    c, _, _, _ = client
+    _force_gold(True)
+    who = str(Keypair().pubkey())
+    _solve_correctly(c, who, MIN_GOLD_SAMPLES)
+
+    first = c.post("/claim/prepare", json={"contributor": who})
+    second = c.post("/claim/prepare", json={"contributor": who})
+    assert first.status_code == 200
+    assert second.status_code == 409
+
+
+def test_a_failed_claim_hands_the_money_back(client, monkeypatch):
+    """Balances are zeroed before the transaction exists, so a failure must
+    restore them rather than silently burn the contributor's earnings."""
+    c, _, _, _ = client
+    _force_gold(True)
+    who = str(Keypair().pubkey())
+    _solve_correctly(c, who, MIN_GOLD_SAMPLES)
+    before = c.get(f"/contributor/{who}").json()["total_claimable"]
+
+    def _boom(**_kwargs):
+        raise RuntimeError("transaction construction failed")
+
+    monkeypatch.setattr("tapfarm.main.build_claim_transaction", _boom)
+    with pytest.raises(RuntimeError):
+        c.post("/claim/prepare", json={"contributor": who})
+
+    assert c.get(f"/contributor/{who}").json()["total_claimable"] == before

@@ -22,6 +22,7 @@ from tapfarm.pose.dataset import (
 )
 from tapfarm.pose.scoring import Pose, PoseThreshold
 from tapfarm.pose.serving import (
+    CannotFlag,
     NotQualified,
     PoseTaskExhausted,
     PoseTaskStore,
@@ -297,3 +298,59 @@ def test_a_looser_threshold_qualifies_a_shakier_run(dataset):
             Pose(truth_pose["x"] + 20, truth_pose["y"], truth_pose["roll"] + 12),
         )
     assert result.qualified
+
+
+# -- the safety valve ----------------------------------------------------------
+
+def test_flagging_discards_a_practice_task(store):
+    task = store.next_task(ALICE, PRACTICE)
+    flagged = store.flag(ALICE, task.task_id, "no_object")
+    assert flagged.reason == "no_object" and flagged.mode == PRACTICE
+    assert store.flagged(ALICE)[0].task_id == task.task_id
+
+
+def test_a_flagged_task_cannot_then_be_submitted(store):
+    task = store.next_task(ALICE, PRACTICE)
+    store.flag(ALICE, task.task_id, "unclear")
+    with pytest.raises(UnknownPoseTask):
+        store.submit(ALICE, task.task_id, Pose(1, 2, 3))
+
+
+def test_flagging_pays_nothing(store):
+    """A skip must not be a way to earn without labeling."""
+    _qualify(store, ALICE, correct=QUALIFY_ITEMS)
+    before = store.state(ALICE).balance
+    task = store.next_task(ALICE, "earn")
+    store.flag(ALICE, task.task_id, "unclear")
+    assert store.state(ALICE).balance == before
+
+
+def test_the_blind_set_cannot_be_skipped(store):
+    """Otherwise a labeler rerolls until the set is easy.
+
+    The gate would then measure persistence rather than skill, and the
+    qualification number would stop meaning anything.
+    """
+    task = store.next_task(ALICE, QUALIFY)
+    with pytest.raises(CannotFlag):
+        store.flag(ALICE, task.task_id, "unclear")
+
+
+def test_a_refused_flag_leaves_the_task_answerable(store):
+    """Refusing the skip must not also strand the item."""
+    task = store.next_task(ALICE, QUALIFY)
+    with pytest.raises(CannotFlag):
+        store.flag(ALICE, task.task_id, "unclear")
+    result = store.submit(ALICE, task.task_id, _exact(store, task.task_id))
+    assert result.accepted
+
+
+def test_unknown_flag_reasons_are_rejected(store):
+    task = store.next_task(ALICE, PRACTICE)
+    with pytest.raises(ValueError, match="unknown flag reason"):
+        store.flag(ALICE, task.task_id, "boring")
+
+
+def test_flagging_an_unserved_task_is_rejected(store):
+    with pytest.raises(UnknownPoseTask):
+        store.flag(ALICE, "pose_mug_01_001", "unclear")

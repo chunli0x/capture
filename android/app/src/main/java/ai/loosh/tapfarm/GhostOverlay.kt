@@ -51,6 +51,19 @@ fun rollDeltaDeg(a: Float, b: Float): Float {
     return if (delta > 180f) 360f - delta else delta
 }
 
+/**
+ * Keeps the ghost reachable.
+ *
+ * Without this a drag can carry the outline entirely outside the frame, where
+ * there is nothing left to grab and the task becomes unrecoverable. Clamping to
+ * the canvas bounds means the ghost always has part of itself on screen, and
+ * still allows the object to sit right against an edge.
+ */
+fun clampToCanvas(pose: GhostPose, canvasPx: Int): GhostPose = pose.copy(
+    x = pose.x.coerceIn(0f, canvasPx.toFloat()),
+    y = pose.y.coerceIn(0f, canvasPx.toFloat()),
+)
+
 /** Whether the ghost is within snapping distance of the true pose. */
 fun isSnapped(pose: GhostPose, truth: GhostPose): Boolean =
     hypot(pose.x - truth.x, pose.y - truth.y) <= SNAP_PX &&
@@ -159,7 +172,10 @@ fun GhostOverlay(
             if (glow > 0f) {
                 SnapGlow(
                     centre = Offset(pose.x * perImagePx, pose.y * perImagePx),
-                    radiusPx = spriteDisplayPx * pose.scale * 0.55f,
+                    // Sized from the true scale, not the user's pinch, so the
+                    // ring is a fixed target rather than something that grows
+                    // as they zoom.
+                    radiusPx = spriteDisplayPx * (truth?.scale ?: 1f) * 0.55f,
                     strength = glow,
                 )
             }

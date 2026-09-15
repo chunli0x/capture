@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import functools
 import json
+import math
 import pathlib
+import threading
 from dataclasses import dataclass
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from solana.rpc.async_api import AsyncClient
 from solana.rpc.commitment import Confirmed
 from solders.keypair import Keypair
@@ -30,6 +34,8 @@ from tapfarm.config import settings
 from tapfarm.pose.dataset import PoseTaskRecord, load_objects, load_truth
 from tapfarm.pose.scoring import Pose, PoseThreshold
 from tapfarm.pose.serving import (
+    FLAG_REASONS,
+    CannotFlag,
     NotQualified,
     PoseTaskExhausted,
     PoseTaskStore,
@@ -113,6 +119,76 @@ def _pose_qualified(contributor: str) -> bool:
         return False
 
 
+# One lock per contributor, guarding the read-and-zero of their balances.
+# A threading lock rather than an asyncio one because the routes that credit
+# those balances are plain `def` and therefore run in the threadpool - an
+# asyncio lock would not exclude them.
+_claim_locks: dict[str, threading.Lock] = {}
+_claim_locks_guard = threading.Lock()
+
+
+def _claim_lock(contributor: str) -> threading.Lock:
+    with _claim_locks_guard:
+        return _claim_locks.setdefault(contributor, threading.Lock())
+
+
+@dataclass(frozen=True)
+class ClaimSnapshot:
+    """Balances captured at the instant they were zeroed."""
+
+    task: int
+    referral: int
+    pose: int
+
+    @property
+    def total(self) -> int:
+        return self.task + self.referral + self.pose
+
+
+def _snapshot_and_debit(contributor: str) -> ClaimSnapshot:
+    """Read every balance and zero it in one indivisible step.
+
+    This must stay synchronous. Reading the totals, awaiting a blockhash, and
+    only then zeroing leaves a window in which a concurrent submit has its fresh
+    reward wiped, or a second claim reads the same balance and both
+    transactions get signed for the full amount.
+    """
+    with _claim_lock(contributor):
+        gate = _claim_gate(contributor)
+        if not gate.allowed:
+            raise HTTPException(403, gate.reason)
+
+        task_state = task_store().state(contributor)
+        snapshot = ClaimSnapshot(
+            task=task_state.balance,
+            referral=referrals().unclaimed(contributor),
+            pose=_pose_balance(contributor),
+        )
+        if snapshot.total <= 0:
+            raise HTTPException(409, "nothing to claim")
+
+        task_state.balance = 0
+        if snapshot.pose:
+            pose_store().state(contributor).balance = 0
+        if snapshot.referral:
+            referrals().claim(contributor)
+        return snapshot
+
+
+def _restore(contributor: str, snapshot: ClaimSnapshot) -> None:
+    """Give the money back when the claim could not be built.
+
+    Added back rather than assigned, so a reward that arrived between the debit
+    and the failure is not clobbered.
+    """
+    with _claim_lock(contributor):
+        task_store().state(contributor).balance += snapshot.task
+        if snapshot.pose:
+            pose_store().state(contributor).balance += snapshot.pose
+        if snapshot.referral:
+            referrals().credit_back(contributor, snapshot.referral)
+
+
 @dataclass(frozen=True)
 class ClaimGate:
     """Whether a contributor may withdraw, and why.
@@ -169,6 +245,34 @@ async def _credit_referrer(referee: str, task_value: int) -> None:
     ledger.credit_for_task(referee, task_value, is_eligible=lambda _who: eligible)
 
 
+def _json_safe(value: object) -> object:
+    """Replace values that cannot survive JSON encoding.
+
+    Only non-finite floats qualify: everything else pydantic puts in an error
+    is already encodable.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return repr(value)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Return a 422 that can actually be encoded.
+
+    pydantic echoes the offending input back inside the error detail. When that
+    input is NaN or Infinity - which Python's JSON parser accepts on the way in
+    but the encoder refuses on the way out - the error response is itself
+    invalid JSON, and a clean 422 becomes a 500. A client sending a malformed
+    pose then sees a server crash instead of being told which field is wrong.
+    """
+    return JSONResponse(status_code=422, content={"detail": _json_safe(exc.errors())})
+
+
 def _mount_images() -> None:
     """Serve task media only.
 
@@ -199,13 +303,23 @@ except Exception:  # noqa: BLE001 - a missing dataset must not stop the API boot
     pass
 
 
-def _treasury() -> Keypair:
-    path = pathlib.Path(settings().treasury_keypair_path)
+@functools.lru_cache(maxsize=4)
+def _load_treasury(path_str: str) -> Keypair:
+    """Parse the treasury keypair once.
+
+    Cached on the path so tests that point at a different file still get their
+    own key, rather than being served whichever one was loaded first.
+    """
+    path = pathlib.Path(path_str)
     if not path.exists():
         raise HTTPException(
             503, f"treasury keypair missing at {path}; run scripts/bootstrap_devnet.sh"
         )
     return Keypair.from_bytes(bytes(json.loads(path.read_text())))
+
+
+def _treasury() -> Keypair:
+    return _load_treasury(settings().treasury_keypair_path)
 
 
 def _mint() -> Pubkey:
@@ -307,10 +421,25 @@ class ReferralOut(BaseModel):
 
 
 class PoseIn(BaseModel):
-    x: float
-    y: float
-    roll: float
-    scale: float = 1.0
+    """A submitted pose.
+
+    Bounds are explicit because pydantic v2 accepts NaN and Infinity into a
+    plain `float`. Either would sail through scoring: NaN compares false against
+    every threshold, so it fails silently rather than being rejected, and an
+    infinite coordinate makes the error metric meaningless. `allow_inf_nan`
+    turns both into a 422 at the edge instead.
+
+    The coordinate range is generous rather than tight to the canvas - a ghost
+    clamped to the frame cannot leave it, and a hard canvas bound here would
+    couple the wire format to one image size.
+    """
+
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    x: float = Field(ge=-10_000, le=10_000)
+    y: float = Field(ge=-10_000, le=10_000)
+    roll: float = Field(ge=-3_600, le=3_600)
+    scale: float = Field(default=1.0, gt=0.0, le=100.0)
 
 
 class PoseSubmitIn(BaseModel):
@@ -350,6 +479,18 @@ class QualificationOut(BaseModel):
     mean_error_px: float
     mean_error_deg: float
     summary: str
+
+
+class PoseFlagIn(BaseModel):
+    contributor: str
+    task_id: str
+    reason: str
+
+
+class PoseFlagOut(BaseModel):
+    task_id: str
+    reason: str
+    mode: str
 
 
 class PoseSubmitOut(BaseModel):
@@ -402,8 +543,10 @@ def campaigns() -> list[CampaignOut]:
 def next_task(contributor: str) -> TaskOut:
     _parse_pubkey(contributor)
     try:
-        # tier is 0 until the stake program is wired in; a staked contributor
-        # is verified less often because the bond covers the difference.
+        # Hardcoded, and that is the whole of the tiering story today: the
+        # stake program can report a contributor's tier, but nothing reads it
+        # here, so the reduced verification rate for bonded contributors never
+        # fires. Wiring this to stake_reader is in PLATFORM.md.
         task = task_store().next_task(contributor, tier=0)
     except TaskExhausted as exc:
         raise HTTPException(409, str(exc)) from exc
@@ -552,6 +695,29 @@ def pose_submit(body: PoseSubmitIn) -> PoseSubmitOut:
     )
 
 
+@app.post("/pose/flag", response_model=PoseFlagOut)
+def pose_flag(body: PoseFlagIn) -> PoseFlagOut:
+    """Discard a task the labeler cannot honestly answer.
+
+    A forced guess on an unclear or empty frame is a confident wrong label,
+    which is worse for the dataset than no label at all.
+    """
+    _parse_pubkey(body.contributor)
+    try:
+        flagged = pose_store().flag(body.contributor, body.task_id, body.reason)
+    except UnknownPoseTask as exc:
+        raise HTTPException(
+            409, f"task not outstanding for this contributor: {exc}"
+        ) from exc
+    except CannotFlag as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            400, f"{exc}; expected one of {', '.join(FLAG_REASONS)}"
+        ) from exc
+    return PoseFlagOut(task_id=flagged.task_id, reason=flagged.reason, mode=flagged.mode)
+
+
 @app.get("/pose/qualification/{contributor}", response_model=QualificationOut)
 def pose_qualification(contributor: str) -> QualificationOut:
     _parse_pubkey(contributor)
@@ -615,53 +781,42 @@ async def claim_prepare(body: ClaimPrepareIn) -> ClaimPrepareOut:
     """
     cfg = settings()
     contributor_key = _parse_pubkey(body.contributor)
-    store = task_store()
-    state = store.state(body.contributor)
-
-    # Each campaign carries its own proof of quality: tap-grid uses rolling
-    # gold-standard accuracy, ghost-overlay uses the blind qualification run.
-    # Clearing either makes a contributor verified, so requiring both would
-    # strand someone who only ever did pose work behind a gate for a campaign
-    # they never touched.
-    gate = _claim_gate(body.contributor)
-    if not gate.allowed:
-        raise HTTPException(403, gate.reason)
-
-    ledger = referrals()
-    referral_amount = ledger.unclaimed(body.contributor)
-    pose_amount = _pose_balance(body.contributor)
-    amount = state.balance + referral_amount + pose_amount
-    if amount <= 0:
-        raise HTTPException(409, "nothing to claim")
-
     treasury = _treasury()
     mint = _mint()
 
-    # Fetch the blockhash last: it expires in ~60s, so anything slow should
-    # happen before this, not after. Confirmed rather than the default
-    # finalized, so the hash is as fresh as possible and the wallet has the
-    # full validity window to get a signature back.
+    # The blockhash is fetched *before* the balances are read, which is the only
+    # await in this handler. Doing it the other way round - read, await, zero -
+    # opens a window where a concurrent submit loses its reward, or a second
+    # claim reads the same balance and both transactions are signed for the full
+    # amount. Confirmed rather than the default finalized, so the hash is as
+    # fresh as it can be; the remaining work below is pure CPU and costs
+    # microseconds of its ~60s validity.
     async with AsyncClient(cfg.rpc_url, commitment=Confirmed) as rpc:
         blockhash = (await rpc.get_latest_blockhash()).value.blockhash
 
-    tx = build_claim_transaction(
-        contributor=contributor_key,
-        treasury=treasury.pubkey(),
-        mint=mint,
-        amount=amount,
-        decimals=cfg.tap_decimals,
-        blockhash=blockhash,
-    )
-    treasury_sign(tx, treasury)
+    snapshot = _snapshot_and_debit(body.contributor)
 
-    # Debit optimistically. A declined wallet approval loses the credit; the fix
-    # is a claim record keyed on the transaction signature so an unsubmitted
-    # claim can be reopened. Both balances are debited together so a partial
-    # failure cannot leave the referral side double-claimable.
-    state.balance = 0
-    if pose_amount:
-        pose_store().state(body.contributor).balance = 0
-    ledger.claim(body.contributor)
+    # Debited before the transaction exists, so anything that fails from here
+    # has to hand the money back. A declined wallet approval still loses the
+    # credit - the fix for that is a claim record keyed on the signature, which
+    # is listed in PLATFORM.md as not yet built.
+    try:
+        tx = build_claim_transaction(
+            contributor=contributor_key,
+            treasury=treasury.pubkey(),
+            mint=mint,
+            amount=snapshot.total,
+            decimals=cfg.tap_decimals,
+            blockhash=blockhash,
+        )
+        treasury_sign(tx, treasury)
+    except Exception:
+        _restore(body.contributor, snapshot)
+        raise
+
+    amount = snapshot.total
+    referral_amount = snapshot.referral
+    pose_amount = snapshot.pose
 
     return ClaimPrepareOut(
         transaction=serialize_for_wallet(tx),

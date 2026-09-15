@@ -314,6 +314,20 @@ class TapFarmApi(private val baseUrl: String = BuildConfig.API_BASE) {
         )
     }
 
+    suspend fun flagPoseTask(
+        contributor: String,
+        taskId: String,
+        reason: String,
+    ): Unit = withContext(Dispatchers.IO) {
+        post(
+            "/pose/flag",
+            JSONObject()
+                .put("contributor", contributor)
+                .put("task_id", taskId)
+                .put("reason", reason),
+        )
+    }
+
     suspend fun prepareClaim(contributor: String): PreparedClaim = withContext(Dispatchers.IO) {
         val o = post("/claim/prepare", JSONObject().put("contributor", contributor))
         PreparedClaim(

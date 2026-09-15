@@ -43,8 +43,16 @@ echo "verified sbpf v$VERSION"
 # Orphaned buffers from a failed deploy hold real SOL; reclaim before retrying.
 solana -C "$CLI_CONFIG" program close --buffers --bypass-warning >/dev/null 2>&1 || true
 
-solana -C "$CLI_CONFIG" program deploy --program-id "$KEYPAIR" "$SO"
 PROGRAM_ID="$(solana-keygen pubkey "$KEYPAIR")"
+
+# Re-running is an upgrade in place, not a no-op: the program id is fixed by the
+# keypair, so existing config and stake PDAs survive. Worth saying out loud,
+# because "deploy" reads like it might create a second copy.
+if solana -C "$CLI_CONFIG" program show "$PROGRAM_ID" >/dev/null 2>&1; then
+  echo "program $PROGRAM_ID already deployed - upgrading in place"
+fi
+
+solana -C "$CLI_CONFIG" program deploy --program-id "$KEYPAIR" "$SO"
 
 cat <<EOF
 
