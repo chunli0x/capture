@@ -109,4 +109,19 @@ class GhostOverlayTest {
         val edge = GhostPose(0f, canvas.toFloat(), 0f, 1f)
         assertEquals(edge, clampToCanvas(edge, canvas))
     }
+
+    // -- glow sizing -----------------------------------------------------------
+
+    @Test
+    fun `glow ring sits near the object edge, not across the frame`() {
+        // The sprite canvas is padded so rotation never clips it. Sizing the
+        // ring off the raw sprite made it wash over most of the image; the
+        // factor divides that padding back out.
+        val spriteCanvasPx = 450f          // wrench sprite, scale 1.0
+        val objectExtentPx = spriteCanvasPx / SPRITE_CANVAS_RATIO
+        val radius = spriteCanvasPx * GLOW_RADIUS_FACTOR
+
+        assertTrue("ring collapsed onto the centre", radius > objectExtentPx * 0.4f)
+        assertTrue("ring larger than the object itself", radius < objectExtentPx * 0.75f)
+    }
 }

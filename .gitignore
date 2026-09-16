@@ -35,3 +35,5 @@ target/
 
 # Bootstrap state (records created mints so a re-run reuses them)
 backend/.bootstrap-state.json
+
+backend/.venv/

@@ -37,6 +37,18 @@ import kotlin.math.hypot
 const val SNAP_PX = 15f
 const val SNAP_DEG = 10f
 
+/**
+ * Ghost sprite canvas edge, as a multiple of the object's own extent.
+ *
+ * Must match `render_sprite` in the backend - the sprite is padded so rotation
+ * never clips it, and anything sizing UI from the sprite has to divide that
+ * padding back out.
+ */
+const val SPRITE_CANVAS_RATIO = 1.8f
+
+/** Glow ring radius as a fraction of the sprite canvas: hugs the object. */
+const val GLOW_RADIUS_FACTOR = 0.55f / SPRITE_CANVAS_RATIO
+
 private val GhostGreen = Color(0xFF4ADE80)
 
 /**
@@ -175,7 +187,13 @@ fun GhostOverlay(
                     // Sized from the true scale, not the user's pinch, so the
                     // ring is a fixed target rather than something that grows
                     // as they zoom.
-                    radiusPx = spriteDisplayPx * (truth?.scale ?: 1f) * 0.55f,
+                    //
+                    // The sprite canvas is SPRITE_CANVAS_RATIO times the
+                    // object's own extent, so the factor divides that back out;
+                    // using the raw sprite size put the ring most of the way
+                    // across the frame and read as a full-screen wash rather
+                    // than a confirmation on the object.
+                    radiusPx = spriteDisplayPx * (truth?.scale ?: 1f) * GLOW_RADIUS_FACTOR,
                     strength = glow,
                 )
             }
