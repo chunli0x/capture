@@ -321,6 +321,23 @@ slashed pool back out, so "honest labelers are paid out of dishonest ones"
 describes the design rather than something that runs today. Both gaps are in
 [PLATFORM.md](docs/PLATFORM.md).
 
+## Seeing it run
+
+```bash
+./scripts/run_demo.sh
+```
+
+Creates the venv, installs pinned dependencies, generates both datasets if they
+are missing, and serves on `0.0.0.0` so a phone on the same network can reach
+it. It prints the one `installDebug` command to put the APK on a device, with
+your LAN address already filled in. Re-running skips whatever already exists.
+
+![Ghost overlay flow](docs/img/ghost_flow.png)
+
+The task canvas at each step, composited from the real dataset and the real
+sprite. Panels 3 and 4 are the same pose: the snap glow fires in practice and is
+absent during the blind run.
+
 ## Development
 
 ```bash
