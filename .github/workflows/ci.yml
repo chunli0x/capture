@@ -67,7 +67,17 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # The action's default package list asks for `tools`, a package retired
+      # from the SDK repository; sdkmanager exits 1 on it and takes the whole
+      # job with it before Gradle ever starts.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      # The runner image does not carry API 37, and an auto-download mid-build
+      # fails later and less legibly than an explicit install here.
+      - name: Install the SDK packages the build compiles against
+        run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
 
       - uses: gradle/actions/setup-gradle@v4
 
