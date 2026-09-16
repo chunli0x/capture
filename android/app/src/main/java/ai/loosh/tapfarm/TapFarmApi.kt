@@ -144,7 +144,10 @@ class ApiException(val status: Int, message: String) : IOException(message)
  * Retrofit + a serialization plugin - the API is small and this keeps the build
  * simple.
  */
-class TapFarmApi(private val baseUrl: String = BuildConfig.API_BASE) {
+class TapFarmApi(private val baseUrlProvider: () -> String = { BuildConfig.API_BASE }) {
+
+    /** Read per request, so editing the address does not need a restart. */
+    private val baseUrl: String get() = baseUrlProvider()
 
     private val http = OkHttpClient.Builder()
         .callTimeout(20, TimeUnit.SECONDS)

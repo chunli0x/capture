@@ -27,7 +27,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -36,6 +38,9 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -101,7 +106,12 @@ fun TapFarmApp(sender: ActivityResultSender, vm: TapFarmViewModel = viewModel())
             Header(state)
 
             when (state.screen) {
-                Screen.CONNECT -> ConnectScreen(state) { vm.connect(sender) }
+                Screen.CONNECT -> ConnectScreen(
+                    state = state,
+                    onServerUrlChange = vm::setServerUrl,
+                    onTestServer = vm::testServer,
+                    onConnect = { vm.connect(sender) },
+                )
                 Screen.CAMPAIGNS -> CampaignsScreen(
                     state = state,
                     onOpen = vm::openCampaign,
@@ -177,12 +187,19 @@ private fun Header(state: UiState) {
 }
 
 @Composable
-private fun ConnectScreen(state: UiState, onConnect: () -> Unit) {
+private fun ConnectScreen(
+    state: UiState,
+    onServerUrlChange: (String) -> Unit,
+    onTestServer: () -> Unit,
+    onConnect: () -> Unit,
+) {
+    var draft by remember(state.serverUrl) { mutableStateOf(state.serverUrl) }
+
     Column(
         Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(16.dp))
         Text(
             "Label training data. Get paid to the wallet already in your phone.",
             fontSize = 20.sp,
@@ -193,6 +210,53 @@ private fun ConnectScreen(state: UiState, onConnect: () -> Unit) {
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
         )
+
+        // The backend usually runs on a laptop on the same wifi, so the address
+        // has to be editable here - otherwise trying the app would mean
+        // rebuilding it.
+        Card(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text("Server", fontSize = 12.sp, color = Accent)
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    singleLine = true,
+                    placeholder = { Text("192.168.1.20:8000", fontSize = 13.sp) },
+                    textStyle = LocalTextStyle.current.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            onServerUrlChange(draft)
+                            onTestServer()
+                        },
+                        enabled = state.busy == null && draft.isNotBlank(),
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Save and test", fontSize = 13.sp) }
+                }
+                if (state.serverReachable) {
+                    Text(
+                        "Reachable - ${state.campaigns.count { it.isLive }} campaigns live",
+                        fontSize = 12.sp,
+                        color = Accent,
+                    )
+                } else {
+                    Text(
+                        "Run ./scripts/run_demo.sh on your computer; it prints this address.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                    )
+                }
+            }
+        }
+
         Button(
             onClick = onConnect,
             enabled = state.busy == null,
