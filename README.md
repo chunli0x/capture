@@ -323,14 +323,32 @@ describes the design rather than something that runs today. Both gaps are in
 
 ## Seeing it run
 
+You need **Python 3.11+** on a computer, and an Android phone on the same wifi
+with an MWA-compatible wallet installed (Phantom or Solflare, set to devnet).
+No Android toolchain is required to try it - the server address is editable in
+the app, so a prebuilt APK works on any network.
+
 ```bash
+git clone https://github.com/chunli0x/captcha.git
+cd captcha
 ./scripts/run_demo.sh
 ```
 
 Creates the venv, installs pinned dependencies, generates both datasets if they
 are missing, and serves on `0.0.0.0` so a phone on the same network can reach
-it. It prints the one `installDebug` command to put the APK on a device, with
-your LAN address already filled in. Re-running skips whatever already exists.
+it. It prints the address to type into the app. Re-running skips whatever
+already exists.
+
+Then on the phone: install the APK (from a CI run's artifacts, or build it
+yourself), open **Tap**, put that address into the **Server** field, tap **Save
+and test** - it should report the live campaigns - then **Connect wallet** and
+choose **Ghost overlay**.
+
+Building it yourself instead needs JDK 17 and the Android SDK:
+
+```bash
+cd android && ./gradlew installDebug
+```
 
 ![Ghost overlay flow](docs/img/ghost_flow.png)
 

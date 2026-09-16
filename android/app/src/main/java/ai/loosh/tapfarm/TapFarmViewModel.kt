@@ -1,8 +1,9 @@
 package ai.loosh.tapfarm
 
+import android.app.Application
 import android.net.Uri
 import android.util.Base64
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 import com.solana.mobilewalletadapter.clientlib.ConnectionIdentity
@@ -75,6 +76,8 @@ data class UiState(
     val busy: String? = null,
     val error: String? = null,
     val lastSignature: String? = null,
+    val serverUrl: String = "",
+    val serverReachable: Boolean = false,
 ) {
     val walletShort: String?
         get() = wallet?.let { "${it.take(4)}…${it.takeLast(4)}" }
@@ -88,9 +91,10 @@ data class UiState(
         get() = poseTask != null && !poseSubmitted && busy == null
 }
 
-class TapFarmViewModel : ViewModel() {
+class TapFarmViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val api = TapFarmApi()
+    private val config = ApiConfig(application)
+    private val api = TapFarmApi { config.baseUrl }
 
     private val adapter = MobileWalletAdapter(
         connectionIdentity = ConnectionIdentity(
@@ -100,8 +104,27 @@ class TapFarmViewModel : ViewModel() {
         )
     ).apply { blockchain = Solana.Devnet }
 
-    private val _state = MutableStateFlow(UiState())
+    private val _state = MutableStateFlow(UiState(serverUrl = config.baseUrl))
     val state: StateFlow<UiState> = _state.asStateFlow()
+
+    /** Point the app at a different backend. Takes effect on the next request. */
+    fun setServerUrl(url: String) {
+        config.baseUrl = url
+        _state.update { it.copy(serverUrl = config.baseUrl, error = null) }
+    }
+
+    /** Check the address before asking someone to trust it with a wallet. */
+    fun testServer() = launchGuarded("Checking server") {
+        val campaigns = api.campaigns()
+        _state.update {
+            it.copy(
+                campaigns = campaigns,
+                error = null,
+                busy = null,
+            )
+        }
+        _state.update { it.copy(serverReachable = true) }
+    }
 
     fun connect(sender: ActivityResultSender) = launchGuarded("Connecting wallet") {
         when (val result = adapter.connect(sender)) {
