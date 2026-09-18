@@ -45,6 +45,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BPS = 10_000
 
+# The canonical SKR mint, for when the access gate points at the real token
+# rather than the devnet fixture. Verified against mainnet-beta: an SPL mint
+# owned by the Token program with 6 decimals, which is why `skr_decimals`
+# defaults to 6. Not the default for `skr_mint`, because devnet has no SKR and
+# silently defaulting to a mainnet address would make a misconfigured devnet
+# backend look configured.
+SKR_MAINNET_MINT = "SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="TAPFARM_", env_file=".env")
@@ -81,8 +89,8 @@ class Settings(BaseSettings):
     verifier_keypair_path: str = "verifier.json"
 
     # --- SKR: non-slashable access stake ------------------------------------
-    # Empty on devnet, where SKR does not exist. Set to the canonical mainnet
-    # mint for the real staking demo; decimals must match that mint.
+    # Empty on devnet, where SKR does not exist. Set to SKR_MAINNET_MINT for the
+    # real staking demo; decimals must match that mint.
     skr_mint: str = ""
     skr_decimals: int = 6
 
@@ -119,6 +127,21 @@ class Settings(BaseSettings):
     pose_pass_fraction: float = Field(default=0.90, gt=0.0, le=1.0)
     pose_qualify_items: int = Field(default=6, ge=1)
 
+    # --- clip-judgment campaign ---------------------------------------------
+    # Built by `python -m tapfarm.clip.dataset` from clips supplied to it.
+    clip_dataset_dir: str = "data/clip"
+
+    # Sized against the binomial tail, not by taste. A two-choice question has
+    # a chance floor the ghost overlay does not: at the pose campaign's own
+    # gate (6 items, 0.90) a coin-flipper passes 1.6% of the time, and at 0.80
+    # it passes 10.9%. 12 items at 0.85 requires 11 correct, which luck reaches
+    # 0.32% of the time while still forgiving one human misclick. Raising
+    # qualify_items to 14 buys a second allowed mistake at 0.65%.
+    clip_qualify_items: int = Field(default=12, ge=1)
+    clip_pass_fraction: float = Field(default=0.85, gt=0.0, le=1.0)
+    # Choices per question, used only to check the gate against chance.
+    clip_choices: int = Field(default=2, ge=2)
+
     # Deployed tapfarm-stake program. Empty means staking is not wired up, in
     # which case nobody is referral-eligible and referrals accrue nothing.
     stake_program_id: str = ""
@@ -151,6 +174,35 @@ class Settings(BaseSettings):
                     f"{seen[mint]} and {role} must be different mints (both {mint})"
                 )
             seen[mint] = role
+        return self
+
+    @model_validator(mode="after")
+    def _check_clip_gate_beats_chance(self) -> "Settings":
+        """Refuse a blind gate a guesser clears too often.
+
+        The claim on the demo's central screen is that the task is hard for a
+        bot. With a small number of choices that is a property of the *gate's
+        size*, not of the task, and it is quietly lost by lowering
+        clip_pass_fraction. Checking it here means the configuration cannot
+        contradict the pitch without failing to boot.
+        """
+        from tapfarm.clip.scoring import (
+            MAX_CHANCE_PASS,
+            chance_pass_probability,
+            required_correct,
+        )
+
+        required = required_correct(self.clip_qualify_items, self.clip_pass_fraction)
+        chance = chance_pass_probability(
+            self.clip_qualify_items, required, self.clip_choices
+        )
+        if chance >= MAX_CHANCE_PASS:
+            raise ValueError(
+                f"clip gate is {self.clip_qualify_items} items needing {required} "
+                f"correct, which a guesser passes {chance:.2%} of the time - over "
+                f"the {MAX_CHANCE_PASS:.0%} budget. Raise clip_qualify_items or "
+                "clip_pass_fraction."
+            )
         return self
 
     def platform_fee(self, task_value: int) -> int:
