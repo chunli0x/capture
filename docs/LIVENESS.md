@@ -65,24 +65,12 @@ The honest framing, carried over from this repo's existing discipline:
 
 ## Related finding: Solana Attestation Service
 
-Not in the brief, and worth a decision before submission rather than during
-Q&A. **SAS** (`attest.solana.com`) is Solana's own credential primitive —
-schemas, credentials, attestations, an issuer/holder/verifier model, Rust and
-TypeScript SDKs, `deriveAttestationPda`, with Civic and SumSub among its
-partners. A Solana hackathon judge may well ask "why not SAS?".
+Not in the brief, and it turned out to matter: **SAS is real, deployed on
+devnet and mainnet, and already implements the verifier-signed trust model**
+locked decision #5 describes. It replaces part of the planned attestation
+program and sharpens the pitch.
 
-The defensible answer, and the reason the custom program in this build is still
-right: SAS issues credentials, but it does not hold a **bond** or have a path to
-**slash** one, and the bond is the entire moat here — the claim is not "someone
-attested this" but "someone attested this with money at risk". A bond, a
-`status` that can move to `Challenged`, and a slash instruction have to live in
-a program we own.
-
-The cheap hedge, if there is time after the definition of done is met: also
-emit an SAS attestation alongside ours, so the credential is portable in the
-ecosystem's standard shape and the answer becomes "both" rather than "instead".
-That is a stretch goal, listed here so it is a decision rather than an
-oversight.
+See `docs/ATTESTATION.md` for the verification and the build split.
 
 ---
 
