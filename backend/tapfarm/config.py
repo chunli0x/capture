@@ -142,6 +142,13 @@ class Settings(BaseSettings):
     # Choices per question, used only to check the gate against chance.
     clip_choices: int = Field(default=2, ge=2)
 
+    # A failed blind run is resettable this many times, after this cooldown.
+    # One retry forgives a fluke; the cap is what keeps the gate from being
+    # brute-forced, since 0.32% per attempt becomes about one in three over a
+    # hundred attempts. The cooldown is what makes those attempts expensive.
+    clip_max_retries: int = Field(default=1, ge=0)
+    clip_retry_cooldown_seconds: float = Field(default=3600.0, ge=0.0)
+
     # Deployed tapfarm-stake program. Empty means staking is not wired up, in
     # which case nobody is referral-eligible and referrals accrue nothing.
     stake_program_id: str = ""

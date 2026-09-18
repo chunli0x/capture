@@ -248,6 +248,16 @@ def create_attestation_ix(
 
 
 # --- the Union schema -----------------------------------------------------
+#
+# RESERVED, NOT YET EMITTED. These describe the credential Union will issue for
+# a completed clip-judgment task, and the encoder below is verified against the
+# deployed program - but nothing calls it yet. No attestation is minted at the
+# end of the clip loop, because the bond PDA that supplies the attestation's
+# `nonce` does not exist until the bond program does.
+#
+# Said explicitly so a reviewer reading `sas.py` alongside a working
+# /clip/submit does not conclude that completing a task produces an on-chain
+# credential today. It does not.
 
 CREDENTIAL_NAME = "union"
 CLIP_JUDGMENT_SCHEMA_NAME = "clip-judgment"

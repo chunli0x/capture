@@ -19,6 +19,25 @@ otherwise be a free pass out of any item a bot could not answer.
 Live items carry `quality_signal: "agreement"` and no correctness, because
 there is no ground truth to be correct against.
 
+## Failing the gate, and the one retry
+
+A blind gate with no second chance punishes the fluke run: twelve items at 11
+correct means a single misread clip plus one misclick ends it. So a failed run
+is resettable exactly once, after a cooldown.
+
+Both halves matter. The cap is what stops the gate being brute-forced - with
+unlimited retries a coin-flipper reaches 0.32% per attempt but ~1 in 3 over a
+hundred attempts, and the gate would mean nothing. The cooldown is what stops
+those attempts being cheap.
+
+The retry prefers clips the contributor has not seen. When the qualify pool is
+too small for that - twelve items and a twelve-item pool, which is what the
+brief's dataset split gives - it re-serves seen clips rather than refusing the
+retry outright. That is acceptable *because the first run was blind*: they know
+which clips they saw, but never learned which ones they got wrong, so there is
+nothing to target. It is still second-best, and a larger qualify pool is worth
+having for exactly this reason.
+
 ## Flagging
 
 "Flag as unclear" is a real answer in practice and earn: a clip that genuinely
@@ -30,6 +49,7 @@ it cannot become the cheapest path through paid work.
 from __future__ import annotations
 
 import random
+import time
 from dataclasses import dataclass, field
 
 from tapfarm.clip.dataset import GOLDEN, LIVE, PRACTICE, QUALIFY, ClipTaskRecord
@@ -58,6 +78,14 @@ class NotQualified(Exception):
 
 class CannotFlag(Exception):
     """Flagging is not available during qualification."""
+
+
+class QualificationFailed(Exception):
+    """The blind gate was failed and no retry is available yet."""
+
+
+class RetryUnavailable(Exception):
+    """Asked to retry when there is nothing to retry, or no retry is left."""
 
 
 class InvalidChoice(Exception):
@@ -98,6 +126,8 @@ class _Contributor:
     balance: int = 0
     drift_grades: list[ClipGrade] = field(default_factory=list)
     flagged: list[str] = field(default_factory=list)
+    failed_at: float | None = None
+    retries_used: int = 0
 
 
 class ClipTaskStore:
@@ -109,11 +139,15 @@ class ClipTaskStore:
         reward_per_task: int,
         qualify_items: int,
         pass_fraction: float,
+        max_retries: int = 1,
+        retry_cooldown_seconds: float = 3600.0,
         rng: random.Random | None = None,
     ) -> None:
         self.reward_per_task = reward_per_task
         self.qualify_items = qualify_items
         self.pass_fraction = pass_fraction
+        self.max_retries = max_retries
+        self.retry_cooldown_seconds = retry_cooldown_seconds
         self._rng = rng or random.Random()
         self._truth = truth
         self._by_pool: dict[str, list[ClipTaskRecord]] = {}
@@ -139,15 +173,86 @@ class ClipTaskStore:
             raise ClipTaskExhausted(f"no unseen {pool} clip remains")
         return self._rng.choice(candidates)
 
+    def _pick_qualify(self, state: _Contributor) -> ClipTaskRecord:
+        """Prefer an unseen blind item; fall back to a seen one on a retry.
+
+        See the module docstring: falling back is safe only because the first
+        run returned no per-item correctness, so a repeated clip carries no
+        information about whether it was answered right.
+        """
+        try:
+            return self._pick(QUALIFY, state)
+        except ClipTaskExhausted:
+            pool = self._by_pool.get(QUALIFY, ())
+            served_this_run = {
+                task_id for task_id, (_, mode) in state.outstanding.items()
+                if mode == QUALIFY
+            }
+            graded_this_run = len(state.qualify_grades)
+            if state.retries_used == 0 or not pool:
+                raise
+            candidates = [r for r in pool if r.task_id not in served_this_run]
+            if not candidates or graded_this_run >= len(pool):
+                raise
+            return self._rng.choice(candidates)
+
+    def retry_available(self, contributor: str) -> bool:
+        state = self.state(contributor)
+        return state.failed_at is not None and state.retries_used < self.max_retries
+
+    def retry_ready_at(self, contributor: str) -> float | None:
+        """When a retry becomes available, or None if there is nothing to retry."""
+        state = self.state(contributor)
+        if state.failed_at is None:
+            return None
+        return state.failed_at + self.retry_cooldown_seconds
+
+    def retry_qualification(self, contributor: str, now: float | None = None) -> None:
+        """Reset a failed blind run, once, after the cooldown.
+
+        Raising rather than silently no-opping: a caller that thinks it reset
+        the gate and did not would show the contributor a run that can never
+        complete.
+        """
+        state = self.state(contributor)
+        now = time.time() if now is None else now
+
+        if state.failed_at is None:
+            raise RetryUnavailable("no failed qualification to retry")
+        if state.retries_used >= self.max_retries:
+            raise RetryUnavailable(
+                f"the blind set may be retried {self.max_retries} time(s), and "
+                "that has been used"
+            )
+        ready_at = state.failed_at + self.retry_cooldown_seconds
+        if now < ready_at:
+            raise RetryUnavailable(
+                f"retry available in {ready_at - now:.0f}s"
+            )
+
+        state.retries_used += 1
+        state.failed_at = None
+        state.qualify_grades = []
+        # Any blind item still outstanding belongs to the abandoned run.
+        for task_id, (_, task_mode) in list(state.outstanding.items()):
+            if task_mode == QUALIFY:
+                del state.outstanding[task_id]
+
     def next_task(self, contributor: str, mode: str) -> ServedClipTask:
         state = self.state(contributor)
 
         if mode == PRACTICE:
             record = self._pick(PRACTICE, state)
         elif mode == QUALIFY:
+            if state.failed_at is not None:
+                raise QualificationFailed(
+                    "the blind set was failed; request a retry"
+                    if self.retry_available(contributor)
+                    else "the blind set was failed and no retry is available"
+                )
             if len(state.qualify_grades) >= self.qualify_items:
                 raise ClipTaskExhausted("blind set already complete")
-            record = self._pick(QUALIFY, state)
+            record = self._pick_qualify(state)
         elif mode == "earn":
             if not state.qualified:
                 raise NotQualified("pass the blind set before paid work")
@@ -236,6 +341,7 @@ class ClipTaskStore:
             complete = len(state.qualify_grades) >= self.qualify_items
             if complete:
                 state.qualified = result.passed
+                state.failed_at = None if result.passed else time.time()
             return ClipSubmission(
                 accepted=True,
                 mode=mode,
