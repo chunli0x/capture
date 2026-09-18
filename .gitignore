@@ -6,9 +6,12 @@ venv/
 .pytest_cache/
 *.db
 
-# Secrets — the treasury keypair is a real signing key. Never commit it.
+# Secrets — real signing keys. Never commit them.
+# The verifier key authorizes every attestation: anyone holding it can mint
+# attestations the chain will accept as ours.
 backend/.env
 backend/treasury.json
+backend/verifier.json
 *.json.key
 
 # Android / Gradle

@@ -1,8 +1,24 @@
 #!/usr/bin/env bash
-# Bootstrap: treasury keypair, the TAP mint, and a local access-stake mint.
+# Bootstrap: treasury keypair and the mints - TAP, HUMAN, a USDC stand-in, and
+# a local access-stake mint.
 #
 #   ./scripts/bootstrap_devnet.sh                     # devnet
 #   CLUSTER=localhost ./scripts/bootstrap_devnet.sh   # solana-test-validator
+#
+# HUMAN is the attestation bond: the asset a slash may ever target. It is a
+# separate mint from the access gate for the same reason the stake program
+# takes two mints - so that "SKR is never slashed" is a fact about the system
+# rather than a promise about our future conduct.
+#
+# USDC on devnet is a stand-in we mint, because payroll is a stablecoin and
+# devnet has no USDC we control. On mainnet this slot holds the canonical USDC
+# mint and the treasury holds a balance rather than mint authority. It is never
+# shown to anyone as if it were real USDC.
+#
+# This script does NOT create the verifier keypair. That key authorizes every
+# attestation; it is generated once, out of band, and installed on the backend
+# host at backend/verifier.json with 0600. A bootstrap script that minted a
+# fresh authority on every run would be the wrong shape entirely.
 #
 # TAP is ours on every cluster - it is what contributors earn and the bond they
 # post - so minting it here is the real thing, not a stand-in.
@@ -28,6 +44,8 @@ STATE_FILE="$BACKEND_DIR/.bootstrap-state.json"
 DECIMALS=6
 TAP_SUPPLY=1000000
 ACCESS_SUPPLY=1000
+HUMAN_SUPPLY=1000000
+USDC_SUPPLY=1000000
 CLUSTER="${CLUSTER:-devnet}"
 
 command -v solana >/dev/null    || { echo "solana CLI not found" >&2; exit 1; }
@@ -107,11 +125,33 @@ else
   ACCESS_MINT="$(create_mint "$ACCESS_SUPPLY")"
 fi
 
-python3 - "$STATE_FILE" "$CLUSTER" "$TAP_MINT" "$ACCESS_MINT" "$TREASURY_PUBKEY" <<'PYEOF'
+if HUMAN_MINT="$(recorded_mint human_mint)"; then
+  echo "reusing HUMAN bond mint $HUMAN_MINT"
+else
+  echo "creating HUMAN mint (the slashable attestation bond)..."
+  HUMAN_MINT="$(create_mint "$HUMAN_SUPPLY")"
+fi
+
+if USDC_MINT="$(recorded_mint usdc_mint)"; then
+  echo "reusing USDC stand-in mint $USDC_MINT"
+else
+  echo "creating USDC stand-in mint (payroll fixture, not real USDC)..."
+  USDC_MINT="$(create_mint "$USDC_SUPPLY")"
+fi
+
+python3 - "$STATE_FILE" "$CLUSTER" "$TAP_MINT" "$ACCESS_MINT" "$HUMAN_MINT" \
+         "$USDC_MINT" "$TREASURY_PUBKEY" <<'PYEOF'
 import json, sys
-path, cluster, tap, access, treasury = sys.argv[1:6]
+path, cluster, tap, access, human, usdc, treasury = sys.argv[1:8]
 json.dump(
-    {"cluster": cluster, "tap_mint": tap, "access_mint": access, "treasury": treasury},
+    {
+        "cluster": cluster,
+        "tap_mint": tap,
+        "access_mint": access,
+        "human_mint": human,
+        "usdc_mint": usdc,
+        "treasury": treasury,
+    },
     open(path, "w"),
     indent=2,
 )
@@ -121,6 +161,8 @@ cat <<EOF
 
 ==============================================================
   TAP mint      : $TAP_MINT
+  HUMAN mint    : $HUMAN_MINT   (attestation bond)
+  USDC mint     : $USDC_MINT   (payroll stand-in)
   access mint   : $ACCESS_MINT   (local test fixture)
   treasury      : $TREASURY_PUBKEY
   cluster       : $CLUSTER
@@ -130,10 +172,19 @@ Write backend/.env:
 
   TAPFARM_TAP_MINT=$TAP_MINT
   TAPFARM_TAP_DECIMALS=$DECIMALS
+  TAPFARM_HUMAN_MINT=$HUMAN_MINT
+  TAPFARM_USDC_MINT=$USDC_MINT
   TAPFARM_SKR_MINT=$ACCESS_MINT
   TAPFARM_TREASURY_KEYPAIR_PATH=$TREASURY
 
-On mainnet, TAPFARM_SKR_MINT is the canonical SKR mint and this fixture is
-not created at all.
+On mainnet, TAPFARM_SKR_MINT is the canonical SKR mint, TAPFARM_USDC_MINT is
+the canonical USDC mint, and neither fixture is created at all.
+
+Still needed before attestations can be minted, and not created here:
+
+  backend/verifier.json   - the verifier signing key, installed out of band,
+                            chmod 600. Its pubkey must equal
+                            TAPFARM_VERIFIER_PUBKEY and the pubkey recorded
+                            on-chain at initialize.
 
 EOF

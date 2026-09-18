@@ -1,10 +1,17 @@
 """Configuration and economic constants.
 
-## Two tokens
+## The tokens
 
-**TAP** is ours: what contributors earn, and the slashable quality bond.
-**SKR** is Solana Mobile's: a non-slashable access stake that unlocks referral
-earnings. We never mint SKR and never burn it.
+**USDC** is payroll. Contributors are paid a stablecoin, never the token, so
+the token is not what anyone is working for.
+**HUMAN** is the attestation bond: the slashable stake behind an attestation.
+Slashing is not wired in v1 - the bond is staked and shown, enforcement is v2 -
+but HUMAN is the asset the slash path will ever be able to touch.
+**SKR** is Solana Mobile's: a non-slashable access gate. We never mint SKR and
+never burn it.
+**TAP** is ours, and predates the Clock In pivot: the earn-side token and the
+labeling quality bond. It stays wired because the labeling campaigns still use
+it; new attestation work bonds HUMAN and pays USDC.
 
 ## Where the numbers come from
 
@@ -49,6 +56,29 @@ class Settings(BaseSettings):
     # Created by scripts/bootstrap_devnet.sh. Ours on every cluster.
     tap_mint: str = ""
     tap_decimals: int = 6
+
+    # --- HUMAN: the slashable attestation bond ------------------------------
+    # Created by scripts/bootstrap_devnet.sh. The only asset an attestation
+    # slash may ever target; making that structural is the point of a separate
+    # mint, exactly as SKR's unslashability is structural in the program.
+    human_mint: str = ""
+    human_decimals: int = 6
+
+    # --- USDC: payroll ------------------------------------------------------
+    # Devnet has no canonical USDC we control, so bootstrap mints a stand-in
+    # and records it here. On mainnet this is the real USDC mint and the
+    # treasury holds a balance rather than mint authority.
+    usdc_mint: str = ""
+    usdc_decimals: int = 6
+
+    # --- the verifier -------------------------------------------------------
+    # The attestation is verifier-signed: the backend runs liveness and grades
+    # the task, then signs mint_attestation. This pubkey is set on-chain at
+    # initialize, so a third party can check "authorized by our verifier"
+    # without trusting us about anything else. The private key never leaves
+    # the backend host.
+    verifier_pubkey: str = "DNBwRqu7rEWTaod4r6daUGfFqXPqxpYHgaSRKhXp5SPP"
+    verifier_keypair_path: str = "verifier.json"
 
     # --- SKR: non-slashable access stake ------------------------------------
     # Empty on devnet, where SKR does not exist. Set to the canonical mainnet
@@ -99,8 +129,28 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_mints_differ(self) -> "Settings":
-        if self.tap_mint and self.skr_mint and self.tap_mint == self.skr_mint:
-            raise ValueError("tap_mint and skr_mint must be different mints")
+        """No two roles may share a mint.
+
+        The separation is the safety property, not a tidiness preference: if
+        HUMAN and SKR were the same mint, slashing the bond would slash the
+        access gate, and the invariant the stake program tests on purpose
+        would be defeated by configuration rather than by code.
+        """
+        named = {
+            "tap_mint": self.tap_mint,
+            "skr_mint": self.skr_mint,
+            "human_mint": self.human_mint,
+            "usdc_mint": self.usdc_mint,
+        }
+        seen: dict[str, str] = {}
+        for role, mint in named.items():
+            if not mint:
+                continue
+            if mint in seen:
+                raise ValueError(
+                    f"{seen[mint]} and {role} must be different mints (both {mint})"
+                )
+            seen[mint] = role
         return self
 
     def platform_fee(self, task_value: int) -> int:
