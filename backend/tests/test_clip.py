@@ -9,6 +9,7 @@ that live work is never counted as correct.
 from __future__ import annotations
 
 import random
+import time
 
 import pytest
 
@@ -34,9 +35,12 @@ from tapfarm.clip.scoring import (
 )
 from tapfarm.clip.serving import (
     CannotFlag,
+    ClipTaskExhausted,
     ClipTaskStore,
     InvalidChoice,
     NotQualified,
+    QualificationFailed,
+    RetryUnavailable,
     UnknownClipTask,
 )
 from tapfarm.config import Settings
@@ -333,3 +337,242 @@ def test_a_dataset_too_small_for_the_gate_is_refused(tmp_path):
             qualify_items=12,
             pass_fraction=0.85,
         )
+
+
+class TestExactChanceFloorPins:
+    """The three numbers quoted in the docs and the commit message.
+
+    Pinned exactly, because they are the evidence for "hard for a bot" and a
+    drifting constant would quietly turn a documented claim into a wrong one.
+    """
+
+    def test_pose_gate_on_a_binary_task(self):
+        assert chance_pass_probability(6, required_correct(6, 0.90)) == pytest.approx(
+            0.015625, abs=1e-9
+        )
+
+    def test_a_lenient_six_item_gate(self):
+        assert chance_pass_probability(6, required_correct(6, 0.80)) == pytest.approx(
+            0.109375, abs=1e-9
+        )
+
+    def test_the_shipped_gate(self):
+        assert chance_pass_probability(12, required_correct(12, 0.85)) == pytest.approx(
+            0.0031738281, abs=1e-9
+        )
+
+
+class TestQualificationRetry:
+    def _fail_the_gate(self, store, dataset, who="alice"):
+        _, truth, _ = dataset
+        for i in range(12):
+            task = store.next_task(who, QUALIFY)
+            answer = truth[task.task_id]
+            if i < 3:
+                answer = next(c for c in CHOICES if c != answer)
+            result = store.submit(who, task.task_id, answer)
+        return result
+
+    def test_failing_locks_the_gate_rather_than_letting_it_run_on(self, dataset):
+        store = _store(dataset)
+        assert self._fail_the_gate(store, dataset).qualified is False
+        with pytest.raises(QualificationFailed):
+            store.next_task("alice", QUALIFY)
+
+    def test_the_cooldown_must_elapse(self, dataset):
+        store = _store(dataset, retry_cooldown_seconds=3600)
+        self._fail_the_gate(store, dataset)
+        assert store.retry_available("alice") is True
+        with pytest.raises(RetryUnavailable, match="retry available in"):
+            store.retry_qualification("alice", now=time.time())
+
+    def test_after_the_cooldown_the_run_resets(self, dataset):
+        store = _store(dataset, retry_cooldown_seconds=60)
+        self._fail_the_gate(store, dataset)
+        store.retry_qualification("alice", now=time.time() + 61)
+        state = store.state("alice")
+        assert state.qualify_grades == []
+        assert state.failed_at is None
+        assert store.next_task("alice", QUALIFY).mode == QUALIFY
+
+    def test_the_retry_can_be_passed(self, dataset):
+        """A fluke run must be recoverable, or the gate punishes humans."""
+        store = _store(dataset, retry_cooldown_seconds=0)
+        self._fail_the_gate(store, dataset)
+        store.retry_qualification("alice", now=time.time())
+        _, truth, _ = dataset
+        for _ in range(12):
+            task = store.next_task("alice", QUALIFY)
+            result = store.submit("alice", task.task_id, truth[task.task_id])
+        assert result.qualification.passed is True
+        assert store.state("alice").qualified is True
+
+    def test_only_one_retry_is_allowed(self, dataset):
+        """The cap is what stops the gate being brute-forced."""
+        store = _store(dataset, retry_cooldown_seconds=0)
+        self._fail_the_gate(store, dataset)
+        store.retry_qualification("alice", now=time.time())
+        self._fail_the_gate(store, dataset)
+        assert store.retry_available("alice") is False
+        with pytest.raises(RetryUnavailable, match="has been used"):
+            store.retry_qualification("alice", now=time.time())
+
+    def test_retrying_without_a_failed_run_is_refused(self, dataset):
+        store = _store(dataset)
+        with pytest.raises(RetryUnavailable, match="no failed qualification"):
+            store.retry_qualification("alice")
+
+    def test_a_retry_after_passing_is_refused(self, dataset):
+        store = _store(dataset)
+        _, truth, _ = dataset
+        for _ in range(12):
+            task = store.next_task("alice", QUALIFY)
+            store.submit("alice", task.task_id, truth[task.task_id])
+        with pytest.raises(RetryUnavailable, match="no failed qualification"):
+            store.retry_qualification("alice")
+
+    def test_retry_ready_at_is_none_until_a_run_fails(self, dataset):
+        store = _store(dataset, retry_cooldown_seconds=120)
+        assert store.retry_ready_at("alice") is None
+        self._fail_the_gate(store, dataset)
+        ready = store.retry_ready_at("alice")
+        assert ready is not None and ready > time.time()
+
+    def test_an_abandoned_outstanding_item_does_not_survive_the_retry(self, dataset):
+        """Or the reset run would start with a stale item still open."""
+        store = _store(dataset, retry_cooldown_seconds=0)
+        self._fail_the_gate(store, dataset)
+        store.retry_qualification("alice", now=time.time())
+        task = store.next_task("alice", QUALIFY)
+        assert list(store.state("alice").outstanding) == [task.task_id]
+
+
+class TestPoolFallbackAndExhaustion:
+    def _qualify(self, store, dataset, who="alice"):
+        _, truth, _ = dataset
+        for _ in range(12):
+            task = store.next_task(who, QUALIFY)
+            store.submit(who, task.task_id, truth[task.task_id])
+
+    def test_earning_falls_back_when_one_pool_is_empty(self, tmp_path):
+        """Running out of golden items must not stop paid work.
+
+        Nor may it reveal which pool ran dry, since that tells the labeler
+        which remaining items are graded.
+        """
+        records = build_clip_dataset(
+            tmp_path, _clips(40), practice=4, qualify=12, golden=1, seed=5
+        )
+        truth = load_truth(tmp_path)
+        store = ClipTaskStore(
+            records,
+            truth,
+            reward_per_task=10,
+            qualify_items=12,
+            pass_fraction=0.85,
+            rng=random.Random(1),
+        )
+        for _ in range(12):
+            task = store.next_task("alice", QUALIFY)
+            store.submit("alice", task.task_id, truth[task.task_id])
+        for _ in range(15):
+            task = store.next_task("alice", "earn")
+            assert store.submit("alice", task.task_id, "phone").accepted
+
+    def test_both_paid_pools_exhausted_raises_rather_than_looping(self, tmp_path):
+        records = build_clip_dataset(
+            tmp_path, _clips(15), practice=1, qualify=12, golden=1, seed=5
+        )
+        truth = load_truth(tmp_path)
+        store = ClipTaskStore(
+            records,
+            truth,
+            reward_per_task=10,
+            qualify_items=12,
+            pass_fraction=0.85,
+            rng=random.Random(1),
+        )
+        for _ in range(12):
+            task = store.next_task("alice", QUALIFY)
+            store.submit("alice", task.task_id, truth[task.task_id])
+        # Two paid clips exist: one golden, one live.
+        for _ in range(2):
+            task = store.next_task("alice", "earn")
+            store.submit("alice", task.task_id, "phone")
+        with pytest.raises(ClipTaskExhausted):
+            store.next_task("alice", "earn")
+
+    def test_practice_exhaustion_is_reported(self, dataset):
+        store = _store(dataset)
+        for _ in range(8):
+            store.next_task("alice", PRACTICE)
+        with pytest.raises(ClipTaskExhausted, match="practice"):
+            store.next_task("alice", PRACTICE)
+
+    def test_completing_the_blind_set_refuses_further_items(self, dataset):
+        store = _store(dataset)
+        _, truth, _ = dataset
+        for _ in range(12):
+            task = store.next_task("alice", QUALIFY)
+            store.submit("alice", task.task_id, truth[task.task_id])
+        with pytest.raises(ClipTaskExhausted, match="already complete"):
+            store.next_task("alice", QUALIFY)
+
+
+class TestSubmissionGuards:
+    def _qualify(self, store, dataset, who="alice"):
+        _, truth, _ = dataset
+        for _ in range(12):
+            task = store.next_task(who, QUALIFY)
+            store.submit(who, task.task_id, truth[task.task_id])
+
+    @pytest.mark.parametrize("mode", [PRACTICE, QUALIFY, "earn"])
+    def test_invalid_choice_is_refused_in_every_mode(self, dataset, mode):
+        store = _store(dataset)
+        if mode == "earn":
+            self._qualify(store, dataset)
+        task = store.next_task("alice", mode)
+        with pytest.raises(InvalidChoice):
+            store.submit("alice", task.task_id, "banana")
+
+    @pytest.mark.parametrize("mode", [PRACTICE, QUALIFY, "earn"])
+    def test_a_refused_choice_does_not_consume_the_item(self, dataset, mode):
+        store = _store(dataset)
+        if mode == "earn":
+            self._qualify(store, dataset)
+        task = store.next_task("alice", mode)
+        with pytest.raises(InvalidChoice):
+            store.submit("alice", task.task_id, "banana")
+        assert store.submit("alice", task.task_id, task.choices[0]).accepted
+
+    def test_double_submit_is_refused(self, dataset):
+        """Or a paid task could be submitted repeatedly for repeated reward."""
+        store = _store(dataset)
+        self._qualify(store, dataset)
+        task = store.next_task("alice", "earn")
+        first = store.submit("alice", task.task_id, "phone")
+        assert first.reward == 1000
+        with pytest.raises(UnknownClipTask):
+            store.submit("alice", task.task_id, "phone")
+        assert store.state("alice").balance == 1000
+
+    def test_an_unknown_mode_is_rejected(self, dataset):
+        store = _store(dataset)
+        with pytest.raises(ValueError, match="unknown mode"):
+            store.next_task("alice", "freestyle")
+
+    def test_another_contributors_task_cannot_be_submitted(self, dataset):
+        store = _store(dataset)
+        task = store.next_task("alice", PRACTICE)
+        with pytest.raises(UnknownClipTask):
+            store.submit("bob", task.task_id, "phone")
+
+    def test_drift_accuracy_is_none_when_everything_was_flagged(self, dataset):
+        """Flags are not grades; a wall of flags must not read as 0% accuracy."""
+        store = _store(dataset)
+        self._qualify(store, dataset)
+        for _ in range(10):
+            task = store.next_task("alice", "earn")
+            store.submit("alice", task.task_id, FLAG_UNCLEAR)
+        assert store.drift_accuracy("alice") is None
+        assert store.state("alice").balance == 0

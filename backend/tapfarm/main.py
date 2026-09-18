@@ -31,6 +31,25 @@ from tapfarm.claim_tx import (
     treasury_sign,
 )
 from tapfarm.config import settings
+from tapfarm.clip.dataset import ClipTaskRecord
+from tapfarm.clip.dataset import load_records as load_clip_records
+from tapfarm.clip.dataset import load_truth as load_clip_truth
+from tapfarm.clip.scoring import FLAG_UNCLEAR
+from tapfarm.clip.scoring import qualification_result as clip_qualification_result
+from tapfarm.clip.serving import (
+    CannotFlag as ClipCannotFlag,
+)
+from tapfarm.clip.serving import (
+    ClipTaskExhausted,
+    ClipTaskStore,
+    InvalidChoice,
+    QualificationFailed,
+    RetryUnavailable,
+    UnknownClipTask,
+)
+from tapfarm.clip.serving import (
+    NotQualified as ClipNotQualified,
+)
 from tapfarm.pose.dataset import PoseTaskRecord, load_objects, load_truth
 from tapfarm.pose.scoring import Pose, PoseThreshold
 from tapfarm.pose.serving import (
@@ -82,6 +101,47 @@ def pose_store() -> PoseTaskStore:
             pass_fraction=cfg.pose_pass_fraction,
         ),
     )
+
+
+@functools.lru_cache(maxsize=1)
+def clip_store() -> ClipTaskStore:
+    cfg = settings()
+    directory = pathlib.Path(cfg.clip_dataset_dir)
+    records = load_clip_records(directory)
+    if not records:
+        raise HTTPException(
+            503,
+            f"no clip dataset at {directory}; build one with "
+            "tapfarm.clip.dataset.build_clip_dataset",
+        )
+    return ClipTaskStore(
+        records,
+        load_clip_truth(directory),
+        reward_per_task=cfg.reward_per_task,
+        qualify_items=cfg.clip_qualify_items,
+        pass_fraction=cfg.clip_pass_fraction,
+        max_retries=cfg.clip_max_retries,
+        retry_cooldown_seconds=cfg.clip_retry_cooldown_seconds,
+    )
+
+
+def _clip_balance(contributor: str) -> int:
+    """Clip earnings, or 0 where the campaign is not deployed.
+
+    Same reasoning as `_pose_balance`: a deployment running only some
+    campaigns must still be able to answer /contributor and pay a claim.
+    """
+    try:
+        return clip_store().state(contributor).balance
+    except HTTPException:
+        return 0
+
+
+def _clip_qualified(contributor: str) -> bool:
+    try:
+        return clip_store().state(contributor).qualified
+    except HTTPException:
+        return False
 
 
 @functools.lru_cache(maxsize=1)
@@ -139,10 +199,11 @@ class ClaimSnapshot:
     task: int
     referral: int
     pose: int
+    clip: int
 
     @property
     def total(self) -> int:
-        return self.task + self.referral + self.pose
+        return self.task + self.referral + self.pose + self.clip
 
 
 def _snapshot_and_debit(contributor: str) -> ClaimSnapshot:
@@ -163,6 +224,7 @@ def _snapshot_and_debit(contributor: str) -> ClaimSnapshot:
             task=task_state.balance,
             referral=referrals().unclaimed(contributor),
             pose=_pose_balance(contributor),
+            clip=_clip_balance(contributor),
         )
         if snapshot.total <= 0:
             raise HTTPException(409, "nothing to claim")
@@ -170,6 +232,8 @@ def _snapshot_and_debit(contributor: str) -> ClaimSnapshot:
         task_state.balance = 0
         if snapshot.pose:
             pose_store().state(contributor).balance = 0
+        if snapshot.clip:
+            clip_store().state(contributor).balance = 0
         if snapshot.referral:
             referrals().claim(contributor)
         return snapshot
@@ -185,6 +249,8 @@ def _restore(contributor: str, snapshot: ClaimSnapshot) -> None:
         task_store().state(contributor).balance += snapshot.task
         if snapshot.pose:
             pose_store().state(contributor).balance += snapshot.pose
+        if snapshot.clip:
+            clip_store().state(contributor).balance += snapshot.clip
         if snapshot.referral:
             referrals().credit_back(contributor, snapshot.referral)
 
@@ -205,10 +271,14 @@ class ClaimGate:
 def _claim_gate(contributor: str) -> ClaimGate:
     """Each campaign carries its own proof of quality.
 
-    Tap-grid uses rolling gold-standard accuracy; ghost-overlay uses the blind
-    qualification run. Clearing either makes a contributor verified - requiring
-    both would strand someone who only ever did pose work behind a gate for a
-    campaign they never touched.
+    Tap-grid uses rolling gold-standard accuracy; ghost-overlay and
+    clip-judgment each use their own blind qualification run. Clearing any one
+    makes a contributor verified - requiring all three would strand someone
+    behind a gate for a campaign they never touched.
+
+    Every campaign that can pay has to appear here. A campaign that credits a
+    balance but is missing from this gate would either be unspendable or, worse,
+    let /contributor and /claim/prepare disagree about whether it is.
     """
     cfg = settings()
     eligibility = task_store().state(contributor).record.eligibility(
@@ -218,10 +288,12 @@ def _claim_gate(contributor: str) -> ClaimGate:
         return ClaimGate(True, eligibility.reason)
     if _pose_qualified(contributor):
         return ClaimGate(True, "qualified on the ghost-overlay blind set")
+    if _clip_qualified(contributor):
+        return ClaimGate(True, "qualified on the clip-judgment blind set")
     return ClaimGate(
         False,
-        f"{eligibility.reason}, and the ghost-overlay qualification "
-        "has not been passed",
+        f"{eligibility.reason}, and neither the ghost-overlay nor the "
+        "clip-judgment qualification has been passed",
     )
 
 
@@ -295,6 +367,13 @@ def _mount_images() -> None:
             StaticFiles(directory=pose_dir / "sprites"),
             name="pose-sprites",
         )
+
+    # `media` specifically, not the clip dataset root: truth.jsonl and
+    # live_truth.jsonl live in that root, and serving it would hand the blind
+    # set's answers to anyone who guessed the filename.
+    clip_media = pathlib.Path(settings().clip_dataset_dir) / "media"
+    if clip_media.is_dir():
+        app.mount("/clips", StaticFiles(directory=clip_media), name="clips")
 
 
 try:
@@ -503,6 +582,59 @@ class PoseSubmitOut(BaseModel):
     feedback: PoseFeedbackOut | None = None
     label: dict | None = None
     qualification: QualificationOut | None = None
+
+
+class ClipTaskOut(BaseModel):
+    task_id: str
+    mode: str
+    clip_url: str
+    question: str
+    choices: list[str]
+    # False during qualification: an escape hatch there is a way past any item.
+    can_flag: bool
+    reward: int
+    # True for stand-in clips. Surfaced so a demo can refuse to show one rather
+    # than present a placeholder as if it were real footage.
+    placeholder: bool
+
+
+class ClipSubmitIn(BaseModel):
+    contributor: str
+    task_id: str
+    choice: str
+
+
+class ClipQualificationOut(BaseModel):
+    graded: int
+    correct: int
+    required: int
+    accuracy: float
+    passed: bool
+    # What a uniform guesser would have scored on this gate. Carried so any
+    # surface reporting a pass can also report what the pass was worth.
+    chance_pass: float
+    retry_available: bool
+    retry_ready_at: float | None = None
+
+
+class ClipSubmitOut(BaseModel):
+    mode: str
+    reward: int
+    balance: int
+    ui_balance: float
+    qualified: bool
+    flagged: bool
+    # Practice only. Blind runs and paid work both return None: during
+    # qualification it would be the answer, and in paid work it would reveal
+    # which items are the hidden golden ones.
+    correct: bool | None = None
+    expected: str | None = None
+    quality_signal: str | None = None
+    qualification: ClipQualificationOut | None = None
+
+
+class ClipRetryIn(BaseModel):
+    contributor: str
 
 
 class ClaimPrepareIn(BaseModel):
@@ -738,6 +870,142 @@ def _qualification_out(result) -> QualificationOut:
     )
 
 
+@app.get("/clip/task/next", response_model=ClipTaskOut)
+def clip_next_task(contributor: str, mode: str = "practice") -> ClipTaskOut:
+    _parse_pubkey(contributor)
+    try:
+        task = clip_store().next_task(contributor, mode)
+    except ClipNotQualified as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except QualificationFailed as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ClipTaskExhausted as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return ClipTaskOut(
+        task_id=task.task_id,
+        mode=task.mode,
+        clip_url=f"/clips/{task.clip}",
+        question=task.question,
+        choices=task.choices,
+        can_flag=task.can_flag,
+        reward=clip_store().reward_per_task if task.mode == "earn" else 0,
+        placeholder=task.placeholder,
+    )
+
+
+@app.post("/clip/submit", response_model=ClipSubmitOut)
+def clip_submit(body: ClipSubmitIn) -> ClipSubmitOut:
+    _parse_pubkey(body.contributor)
+    try:
+        result = clip_store().submit(body.contributor, body.task_id, body.choice)
+    except UnknownClipTask as exc:
+        raise HTTPException(
+            409, f"task not outstanding for this contributor: {exc}"
+        ) from exc
+    except ClipCannotFlag as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except InvalidChoice as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return _clip_submit_out(body.contributor, result)
+
+
+@app.post("/clip/flag", response_model=ClipSubmitOut)
+def clip_flag(body: ClipSubmitIn) -> ClipSubmitOut:
+    """Report a clip that does not show the answer.
+
+    A forced guess on an unclear clip is a confident wrong label, which is
+    worse for the dataset than no label. Flagging pays nothing, so it cannot
+    become the cheapest route through paid work, and it is refused outright
+    during qualification.
+
+    A separate route from /clip/submit so a client never has to smuggle the
+    sentinel through the choice field, and so the refusal during qualification
+    is a property of the endpoint rather than of a magic string.
+    """
+    _parse_pubkey(body.contributor)
+    try:
+        result = clip_store().submit(body.contributor, body.task_id, FLAG_UNCLEAR)
+    except UnknownClipTask as exc:
+        raise HTTPException(
+            409, f"task not outstanding for this contributor: {exc}"
+        ) from exc
+    except ClipCannotFlag as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return _clip_submit_out(body.contributor, result)
+
+
+@app.get("/clip/qualification/{contributor}", response_model=ClipQualificationOut)
+def clip_qualification(contributor: str) -> ClipQualificationOut:
+    _parse_pubkey(contributor)
+    store = clip_store()
+    state = store.state(contributor)
+    result = clip_qualification_result(
+        state.qualify_grades,
+        items=store.qualify_items,
+        pass_fraction=store.pass_fraction,
+        choices=settings().clip_choices,
+    )
+    return _clip_qualification_out(contributor, result)
+
+
+@app.post("/clip/qualification/retry", response_model=ClipQualificationOut)
+def clip_qualification_retry(body: ClipRetryIn) -> ClipQualificationOut:
+    """Reset a failed blind run, once, after the cooldown."""
+    _parse_pubkey(body.contributor)
+    store = clip_store()
+    try:
+        store.retry_qualification(body.contributor)
+    except RetryUnavailable as exc:
+        raise HTTPException(409, str(exc)) from exc
+    state = store.state(body.contributor)
+    return _clip_qualification_out(
+        body.contributor,
+        clip_qualification_result(
+            state.qualify_grades,
+            items=store.qualify_items,
+            pass_fraction=store.pass_fraction,
+            choices=settings().clip_choices,
+        ),
+    )
+
+
+def _clip_submit_out(contributor: str, result) -> ClipSubmitOut:
+    cfg = settings()
+    return ClipSubmitOut(
+        mode=result.mode,
+        reward=result.reward,
+        balance=result.balance,
+        ui_balance=result.balance / (10**cfg.tap_decimals),
+        qualified=result.qualified,
+        flagged=result.flagged,
+        correct=result.correct,
+        expected=result.expected,
+        quality_signal=result.quality_signal,
+        qualification=(
+            _clip_qualification_out(contributor, result.qualification)
+            if result.qualification
+            else None
+        ),
+    )
+
+
+def _clip_qualification_out(contributor: str, result) -> ClipQualificationOut:
+    store = clip_store()
+    return ClipQualificationOut(
+        graded=result.graded,
+        correct=result.correct,
+        required=result.required,
+        accuracy=round(result.accuracy, 4),
+        passed=result.passed,
+        chance_pass=result.chance_pass,
+        retry_available=store.retry_available(contributor),
+        retry_ready_at=store.retry_ready_at(contributor),
+    )
+
+
 @app.get("/contributor/{contributor}")
 def contributor(contributor: str) -> dict[str, object]:
     _parse_pubkey(contributor)
@@ -747,13 +1015,17 @@ def contributor(contributor: str) -> dict[str, object]:
     gate = _claim_gate(contributor)
     referral_unclaimed = referrals().unclaimed(contributor)
     pose_balance = _pose_balance(contributor)
-    total = state.balance + referral_unclaimed + pose_balance
+    clip_balance = _clip_balance(contributor)
+    total = state.balance + referral_unclaimed + pose_balance + clip_balance
     return {
         "contributor": contributor,
         "balance": state.balance,
         "ui_balance": state.balance / (10**cfg.tap_decimals),
         "pose_balance": pose_balance,
         "ui_pose_balance": pose_balance / (10**cfg.tap_decimals),
+        "clip_balance": clip_balance,
+        "ui_clip_balance": clip_balance / (10**cfg.tap_decimals),
+        "clip_qualified": _clip_qualified(contributor),
         "referral_unclaimed": referral_unclaimed,
         "ui_referral_unclaimed": referral_unclaimed / (10**cfg.tap_decimals),
         "total_claimable": total,
