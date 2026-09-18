@@ -9,7 +9,7 @@ Slashing is not wired in v1 - the bond is staked and shown, enforcement is v2 -
 but HUMAN is the asset the slash path will ever be able to touch.
 **SKR** is Solana Mobile's: a non-slashable access gate. We never mint SKR and
 never burn it.
-**TAP** is ours, and predates the Clock In pivot: the earn-side token and the
+**TAP** is ours, and predates the Union pivot: the earn-side token and the
 labeling quality bond. It stays wired because the labeling campaigns still use
 it; new attestation work bonds HUMAN and pays USDC.
 

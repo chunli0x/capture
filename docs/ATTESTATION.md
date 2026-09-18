@@ -82,7 +82,7 @@ HUMAN escrow, `status`, evidence-hash commitment, the slash instruction
 (implemented and tested, not backend-wired, per the brief), and enforcement
 that the human signed over the liveness-proof hash.
 
-**SAS** — the credential layer: one Credential for Clock In whose authorized
+**SAS** — the credential layer: one Credential for Union whose authorized
 signer is our verifier, one Schema for `clip_judgment`, and a tokenized
 attestation per completed task.
 
@@ -95,13 +95,29 @@ the bond account, and the bond account names the credential.
 
 ## Costs and risks, stated plainly
 
-- **Integration work is real but small.** Clients ship for Rust and TypeScript
-  only; our backend is Python. The instruction encoding is a `u8` tag plus
-  length-prefixed fields, which is the same hand-encoding we already do for SPL
-  instructions — not a blocker, but it is new code with its own tests.
-- **The deployed program may not equal this repo's `main`.** Verify against
-  devnet by round-tripping a real `create_credential` before building on the
-  struct layouts read here.
+- **Integration work is real but small — and now done.** Clients ship for Rust
+  and TypeScript only; our backend is Python, so `backend/tapfarm/sas.py`
+  hand-builds the instructions the same way `claim_tx.py` hand-builds SPL
+  transfers. Covered: `create_credential`, `create_schema`,
+  `create_attestation`, and the three PDA derivations. Not covered yet: the
+  tokenized variant (needs Token-2022 mint and ATA accounts) and
+  `close_attestation`, which is revocation and should not be a one-liner.
+- **The deployed program may not equal the source `sas.py` was built from,
+  and this has not yet been checked.** `backend/tapfarm/sas.py` is verified
+  against a reader written from the SAS repository source
+  (`tests/test_sas.py`, 21 tests, including the program's own `validate_data`
+  walk). It has *not* been executed against the deployed bytecode: devnet
+  airdrops fail from this environment and there is no local validator here, so
+  `tests/test_e2e_sas.py` ships written and unrun. It submits a real
+  `create_credential` and re-reads the account; run it once against a validator
+  carrying the cloned program before trusting the encoder:
+
+  ```
+  solana-test-validator --reset --quiet \
+    --clone 22zoJMtdu4tQc2PzL74ZUT7FrwgB1Udec8DdW4yw4BdG --url devnet &
+  cd backend && TAPFARM_E2E=1 TAPFARM_RPC_URL=http://localhost:8899 \
+    pytest tests/test_e2e_sas.py -v
+  ```
 - **It is a live dependency on an upgradeable program** we do not control. That
   is a reasonable trade for a Foundation standard, and worth saying out loud
   rather than discovering in Q&A.
@@ -111,7 +127,7 @@ the bond account, and the bond account names the credential.
 ## What this does to the pitch
 
 It turns the weakest Q&A answer into one of the strongest. "Why didn't you use
-SAS?" becomes: *we did — Clock In issues a standard SAS credential, and adds
+SAS?" becomes: *we did — Union issues a standard SAS credential, and adds
 the thing SAS deliberately leaves out, which is a bond behind the claim.*
 Slide 8's SKR argument gets sharper too: the stake is the part of this system
 that no existing attestation primitive provides.

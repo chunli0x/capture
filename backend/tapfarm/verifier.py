@@ -3,7 +3,7 @@
 An attestation is not a bare client claim. The backend runs the liveness check
 and grades the task, and then *signs* `mint_attestation` with this key. The
 on-chain record carries the verifier pubkey, fixed at `initialize`, so anyone
-reading the chain can check "this was authorized by Clock In's verifier"
+reading the chain can check "this was authorized by Union's verifier"
 without having to trust the client that submitted it.
 
 What that does and does not buy, stated plainly because the pitch will be
