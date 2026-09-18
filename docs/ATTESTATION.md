@@ -102,15 +102,15 @@ the bond account, and the bond account names the credential.
   `create_attestation`, and the three PDA derivations. Not covered yet: the
   tokenized variant (needs Token-2022 mint and ATA accounts) and
   `close_attestation`, which is revocation and should not be a one-liner.
-- **The deployed program may not equal the source `sas.py` was built from,
-  and this has not yet been checked.** `backend/tapfarm/sas.py` is verified
-  against a reader written from the SAS repository source
-  (`tests/test_sas.py`, 21 tests, including the program's own `validate_data`
-  walk). It has *not* been executed against the deployed bytecode: devnet
-  airdrops fail from this environment and there is no local validator here, so
-  `tests/test_e2e_sas.py` ships written and unrun. It submits a real
-  `create_credential` and re-reads the account; run it once against a validator
-  carrying the cloned program before trusting the encoder:
+- **Checked against the deployed bytecode, and passing.**
+  `backend/tapfarm/sas.py` is verified twice over: against a reader written
+  from the SAS repository source (`tests/test_sas.py`, 21 tests, including the
+  program's own `validate_data` walk), and against the real deployed program by
+  `tests/test_e2e_sas.py`, which submits a `create_credential` and re-reads the
+  account. That second run was performed by the PM, not from this environment -
+  devnet airdrops fail here and there is no local validator - so the encoder is
+  confirmed to match what is actually running, not merely what is published.
+  Re-run it after any SAS upgrade:
 
   ```
   solana-test-validator --reset --quiet \
