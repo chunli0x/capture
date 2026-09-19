@@ -5,11 +5,17 @@ Android/Seeker, and to fall back to an on-device check if it does not — and to
 settle that on day one rather than day twenty. This is the answer and the
 evidence behind it.
 
-## Decision: on-device fallback
+## Decision: on-device, with a motion challenge
 
-**We build the on-device check.** No integration path to an "OpenPass" liveness
-SDK was found, and the reasons matter more than the conclusion, because the
-pitch currently rests on OpenPass being a real, named thing.
+**Ratified in the build spec (locked decision #1).** The liveness check runs
+entirely on the device: Google ML Kit Face Detection plus a motion challenge
+(blink, or turn the head), or an open-source on-device anti-spoofing model.
+Paid SDKs (iProov, FaceTec, Banuba) are out - cost and integration weight for
+no demo benefit. OpenPass is not blocked on; it has no public liveness SDK.
+
+**The honest bar, stated in the spec and worth repeating wherever it is
+claimed: "a live person performed a motion challenge". Not bank-grade
+anti-spoofing.**
 
 ## What was searched, and what came back
 
@@ -36,6 +42,7 @@ Solana-native liveness pass" path is not merely undocumented, it was retired.
 
 ## Consequences for the pitch, not just the build
 
+Independently confirmed by the PM: nothing public on the Solana Mobile org.
 Two things follow, and both are the PM's call, not a build decision:
 
 1. **The deck's central comparison is against a product we cannot point at.**
