@@ -149,6 +149,11 @@ class Settings(BaseSettings):
     clip_max_retries: int = Field(default=1, ge=0)
     clip_retry_cooldown_seconds: float = Field(default=3600.0, ge=0.0)
 
+    # How long a liveness challenge stays answerable. Long enough to read the
+    # prompt and blink; short enough that a captured session is not a durable
+    # asset.
+    liveness_ttl_seconds: float = Field(default=120.0, gt=0.0)
+
     # Deployed tapfarm-stake program. Empty means staking is not wired up, in
     # which case nobody is referral-eligible and referrals accrue nothing.
     stake_program_id: str = ""

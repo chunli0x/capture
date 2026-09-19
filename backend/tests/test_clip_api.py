@@ -66,6 +66,7 @@ def env(monkeypatch, tmp_path):
         main_mod.task_store,
         main_mod.pose_store,
         main_mod.clip_store,
+        main_mod.liveness_sessions,
         main_mod.referrals,
     ):
         factory.cache_clear()
@@ -341,3 +342,92 @@ class TestEarningAndClaim:
         after = client.get(f"/contributor/{who}").json()
         assert after["claimable"] is True
         assert after["reason"] == "qualified on the clip-judgment blind set"
+
+
+class TestLivenessOverHttp:
+    def test_a_session_is_issued_with_a_server_chosen_challenge(self, client):
+        who = _who()
+        body = client.post(
+            "/liveness/session", json={"contributor": who, "task_id": "t-1"}
+        ).json()
+        assert body["challenge"] in {"blink", "turn_left", "turn_right", "smile"}
+        assert len(bytes.fromhex(body["nonce"])) == 32
+        assert body["ttl_seconds"] > 0
+
+    def test_completing_returns_a_proof_hash_and_says_what_it_attests(self, client):
+        who = _who()
+        session = client.post(
+            "/liveness/session", json={"contributor": who, "task_id": "t-1"}
+        ).json()
+        body = client.post(
+            "/liveness/complete",
+            json={
+                "contributor": who,
+                "session_id": session["session_id"],
+                "result_digest": "ab" * 16,
+            },
+        ).json()
+        assert len(bytes.fromhex(body["liveness_proof_hash"])) == 32
+        assert body["task_id"] == "t-1"
+        assert "not bank-grade" in body["attests"]
+
+    def test_a_session_cannot_be_spent_twice(self, client):
+        who = _who()
+        session = client.post(
+            "/liveness/session", json={"contributor": who, "task_id": "t-1"}
+        ).json()
+        payload = {
+            "contributor": who,
+            "session_id": session["session_id"],
+            "result_digest": "ab" * 16,
+        }
+        assert client.post("/liveness/complete", json=payload).status_code == 200
+        assert client.post("/liveness/complete", json=payload).status_code == 409
+
+    def test_another_contributors_session_is_a_404(self, client):
+        session = client.post(
+            "/liveness/session", json={"contributor": _who(), "task_id": "t-1"}
+        ).json()
+        response = client.post(
+            "/liveness/complete",
+            json={
+                "contributor": _who(),
+                "session_id": session["session_id"],
+                "result_digest": "ab" * 16,
+            },
+        )
+        assert response.status_code == 404
+
+    def test_a_non_hex_result_digest_is_a_400(self, client):
+        who = _who()
+        session = client.post(
+            "/liveness/session", json={"contributor": who, "task_id": "t-1"}
+        ).json()
+        response = client.post(
+            "/liveness/complete",
+            json={
+                "contributor": who,
+                "session_id": session["session_id"],
+                "result_digest": "not-hex",
+            },
+        )
+        assert response.status_code == 400
+
+    def test_two_tasks_produce_two_different_proofs(self, client):
+        """One liveness run must not cover every task the contributor does."""
+        who = _who()
+        hashes = set()
+        for task in ("t-1", "t-2"):
+            session = client.post(
+                "/liveness/session", json={"contributor": who, "task_id": task}
+            ).json()
+            body = client.post(
+                "/liveness/complete",
+                json={
+                    "contributor": who,
+                    "session_id": session["session_id"],
+                    "result_digest": "ab" * 16,
+                },
+            ).json()
+            hashes.add(body["liveness_proof_hash"])
+        assert len(hashes) == 2

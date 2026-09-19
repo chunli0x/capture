@@ -35,6 +35,14 @@ from tapfarm.clip.dataset import ClipTaskRecord
 from tapfarm.clip.dataset import load_records as load_clip_records
 from tapfarm.clip.dataset import load_truth as load_clip_truth
 from tapfarm.clip.scoring import FLAG_UNCLEAR
+from tapfarm.liveness import (
+    Challenge,
+    LivenessError,
+    LivenessSessionStore,
+    SessionAlreadyUsed,
+    SessionExpired,
+    UnknownSession,
+)
 from tapfarm.clip.scoring import qualification_result as clip_qualification_result
 from tapfarm.clip.serving import (
     CannotFlag as ClipCannotFlag,
@@ -142,6 +150,11 @@ def _clip_qualified(contributor: str) -> bool:
         return clip_store().state(contributor).qualified
     except HTTPException:
         return False
+
+
+@functools.lru_cache(maxsize=1)
+def liveness_sessions() -> LivenessSessionStore:
+    return LivenessSessionStore(ttl_seconds=settings().liveness_ttl_seconds)
 
 
 @functools.lru_cache(maxsize=1)
@@ -633,6 +646,43 @@ class ClipSubmitOut(BaseModel):
     qualification: ClipQualificationOut | None = None
 
 
+class LivenessSessionIn(BaseModel):
+    contributor: str
+    task_id: str
+
+
+class LivenessSessionOut(BaseModel):
+    session_id: str
+    # The motion to perform. Server-chosen: if the device picked, one recorded
+    # run would satisfy every future session.
+    challenge: str
+    # Hex, because this is the anti-replay value the device must commit to and
+    # JSON has no bytes.
+    nonce: str
+    expires_at: float
+    ttl_seconds: float
+
+
+class LivenessCompleteIn(BaseModel):
+    contributor: str
+    session_id: str
+    # Whatever the on-device check summarises itself as, hex-encoded. Opaque
+    # to the server on purpose: no biometric material should ever arrive here.
+    result_digest: str
+
+
+class LivenessCompleteOut(BaseModel):
+    liveness_proof_hash: str
+    task_id: str
+    challenge: str
+    # Said in the payload, not only in the docs, so a client rendering this
+    # cannot accidentally present it as more than it is.
+    attests: str = (
+        "a live person performed a motion challenge on-device; "
+        "not bank-grade anti-spoofing"
+    )
+
+
 class ClipRetryIn(BaseModel):
     contributor: str
 
@@ -1003,6 +1053,57 @@ def _clip_qualification_out(contributor: str, result) -> ClipQualificationOut:
         chance_pass=result.chance_pass,
         retry_available=store.retry_available(contributor),
         retry_ready_at=store.retry_ready_at(contributor),
+    )
+
+
+@app.post("/liveness/session", response_model=LivenessSessionOut)
+def liveness_session(body: LivenessSessionIn) -> LivenessSessionOut:
+    """Issue a fresh, single-use motion challenge for one task."""
+    _parse_pubkey(body.contributor)
+    store = liveness_sessions()
+    session = store.issue(body.contributor, body.task_id)
+    return LivenessSessionOut(
+        session_id=session.session_id,
+        challenge=session.challenge.value,
+        nonce=session.nonce.hex(),
+        expires_at=session.expires_at,
+        ttl_seconds=store.ttl_seconds,
+    )
+
+
+@app.post("/liveness/complete", response_model=LivenessCompleteOut)
+def liveness_complete(body: LivenessCompleteIn) -> LivenessCompleteOut:
+    """Accept one result and return the hash the human signs over.
+
+    The hash is returned rather than stored against the task because the
+    binding that matters is the signature: it is committed into the
+    MWA-signed payload that mints the attestation, which is what makes the
+    human a party to the claim rather than its subject.
+    """
+    _parse_pubkey(body.contributor)
+    try:
+        result_digest = bytes.fromhex(body.result_digest)
+    except ValueError as exc:
+        raise HTTPException(400, f"result_digest must be hex: {exc}") from exc
+
+    store = liveness_sessions()
+    session = None
+    try:
+        session = store.get(body.contributor, body.session_id)
+        digest = store.complete(body.contributor, body.session_id, result_digest)
+    except UnknownSession as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except SessionExpired as exc:
+        raise HTTPException(410, str(exc)) from exc
+    except SessionAlreadyUsed as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except LivenessError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return LivenessCompleteOut(
+        liveness_proof_hash=digest.hex(),
+        task_id=session.task_id,
+        challenge=session.challenge.value,
     )
 
 
