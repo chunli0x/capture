@@ -8,11 +8,11 @@ plugins {
 }
 
 android {
-    namespace = "ai.loosh.tapfarm"
+    namespace = "ai.loosh.union"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "ai.loosh.tapfarm"
+        applicationId = "ai.loosh.union"
         minSdk = 26
         targetSdk = 37
         versionCode = 1
@@ -20,8 +20,8 @@ android {
 
         // Point this at your machine's LAN IP when running the backend locally;
         // the Seeker cannot reach your laptop's localhost. Override without
-        // editing the file: -PtapfarmApiBase=http://192.168.1.20:8000
-        val apiBase = (project.findProperty("tapfarmApiBase") as String?)
+        // editing the file: -PunionApiBase=http://192.168.1.20:8000
+        val apiBase = (project.findProperty("unionApiBase") as String?)
             ?: "http://10.0.2.2:8000"
         buildConfigField("String", "API_BASE", "\"$apiBase\"")
     }

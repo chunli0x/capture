@@ -12,5 +12,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "TapFarm"
+rootProject.name = "Union"
 include(":app")

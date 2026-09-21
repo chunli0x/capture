@@ -1,4 +1,4 @@
-package ai.loosh.tapfarm
+package ai.loosh.union
 
 import android.Manifest
 import android.content.pm.PackageManager

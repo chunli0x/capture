@@ -1,4 +1,4 @@
-package ai.loosh.tapfarm
+package ai.loosh.union
 
 /**
  * Minimal Base58 encoder for displaying transaction signatures.

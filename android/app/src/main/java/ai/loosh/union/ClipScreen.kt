@@ -1,4 +1,4 @@
-package ai.loosh.tapfarm
+package ai.loosh.union
 
 import android.net.Uri
 import android.widget.MediaController
@@ -200,6 +200,8 @@ fun ClipPrimerScreen(
     onStart: (String) -> Unit,
     onProveHuman: () -> Unit,
     onRetry: () -> Unit,
+    onVerify: (String) -> Unit,
+    onNetwork: () -> Unit,
     onBack: () -> Unit,
 ) {
     Column(
@@ -276,6 +278,22 @@ fun ClipPrimerScreen(
                 style = MaterialTheme.typography.bodySmall,
             )
         }
+
+        // The credential is the product, so it gets a route from the screen
+        // people actually stand on rather than being reachable only in theory.
+        state.lastPaidClipTaskId?.let { taskId ->
+            OutlinedButton(
+                onClick = { onVerify(taskId) },
+                enabled = state.busy == null,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("View my attestation") }
+        }
+        OutlinedButton(
+            onClick = onNetwork,
+            enabled = state.busy == null,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Network") }
+
         TextButton(onClick = onBack) { Text("Back") }
     }
 }

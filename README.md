@@ -1,7 +1,15 @@
-# Tap
+# Union
 
-A mobile-native data labeling network. Contributors label training data on their
-phone and are paid to the wallet already built into it.
+A staked proof-of-human-work network, built on a mobile labeling engine.
+Contributors prove they are human on their phone, do a task a bot finds hard,
+and an attestation is minted with a HUMAN bond behind it. The credential is
+the product; the labeling engine underneath it is what produces the work.
+
+What that attestation is, stated the same way everywhere in this repo: a
+verifier-vouched, bond-secured record that a human completed a task. On-chain
+you get identity, bond, timestamp and a verifier signature. The liveness check
+and the grading happen off-chain, inside the verifier. It is not cryptographic
+proof of humanness, and slashing is implemented but not yet enforced.
 
 Built for [CLOCK IN](https://docs.solanamobile.com/hackathon/) — Solana Mobile ×
 RadiantsDAO, September 8 – October 8 2026.
@@ -183,7 +191,7 @@ fresh users have been measured. They are config values (`pose_max_error_px`,
 
 ## Campaigns
 
-Tap is organized around **campaigns** — a labeling brief, a task type, a
+Union is organized around **campaigns** — a labeling brief, a task type, a
 dataset, and a reward rate. This is the core architectural decision, not a
 roadmap item: the campaign concept is established, and the client dispatches on
 the task type a campaign declares rather than on a campaign id.
@@ -340,7 +348,7 @@ it. It prints the address to type into the app. Re-running skips whatever
 already exists.
 
 Then on the phone: install the APK (from a CI run's artifacts, or build it
-yourself), open **Tap**, put that address into the **Server** field, tap **Save
+yourself), open **Union**, put that address into the **Server** field, tap **Save
 and test** - it should report the live campaigns - then **Connect wallet** and
 choose **Ghost overlay**.
 

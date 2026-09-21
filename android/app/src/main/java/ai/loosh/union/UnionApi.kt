@@ -1,4 +1,4 @@
-package ai.loosh.tapfarm
+package ai.loosh.union
 
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -193,6 +193,42 @@ data class LivenessProof(
     val attests: String,
 )
 
+/** The portable credential, as a buyer checks it. */
+data class Attestation(
+    val found: Boolean,
+    val human: String?,
+    val taskId: String?,
+    val status: String?,
+    val uiBondAmount: Double,
+    val attestedAt: Long,
+    val verifier: String?,
+    val bondAccount: String?,
+    val attestationAccount: String?,
+    val cluster: String,
+    val verifiedHuman: Boolean,
+    val taskComplete: Boolean,
+    val staked: Boolean,
+    /** The server's own sentence. Rendered, never paraphrased. */
+    val summary: String,
+)
+
+data class NetworkStats(
+    /** A heartbeat, not a verified population. Named so it cannot be mistaken. */
+    val onlineNowEstimate: Int,
+    val actedToday: Int,
+    val workProven: Int,
+    val source: String,
+)
+
+data class LeaderRow(
+    val rank: Int,
+    val humanShort: String,
+    val qualityScore: Double,
+    val accuracy: Double,
+    val workCount: Int,
+    val uiBond: Double,
+)
+
 /**
  * Backend client.
  *
@@ -200,7 +236,7 @@ data class LivenessProof(
  * Retrofit + a serialization plugin - the API is small and this keeps the build
  * simple.
  */
-class TapFarmApi(private val baseUrlProvider: () -> String = { BuildConfig.API_BASE }) {
+class UnionApi(private val baseUrlProvider: () -> String = { BuildConfig.API_BASE }) {
 
     /** Read per request, so editing the address does not need a restart. */
     private val baseUrl: String get() = baseUrlProvider()
@@ -481,6 +517,52 @@ class TapFarmApi(private val baseUrlProvider: () -> String = { BuildConfig.API_B
             challenge = o.getString("challenge"),
             attests = o.getString("attests"),
         )
+    }
+
+    suspend fun verify(human: String, taskId: String): Attestation =
+        withContext(Dispatchers.IO) {
+            val o = get("/verify/$human/$taskId")
+            Attestation(
+                found = o.getBoolean("found"),
+                human = o.optString("human").ifBlank { null },
+                taskId = o.optString("task_id").ifBlank { null },
+                status = o.optString("status").ifBlank { null },
+                uiBondAmount = o.optDouble("ui_bond_amount", 0.0),
+                attestedAt = o.optLong("attested_at", 0L),
+                verifier = o.optString("verifier").ifBlank { null },
+                bondAccount = o.optString("bond_account").ifBlank { null },
+                attestationAccount = o.optString("attestation_account").ifBlank { null },
+                cluster = o.getString("cluster"),
+                verifiedHuman = o.optBoolean("verified_human", false),
+                taskComplete = o.optBoolean("task_complete", false),
+                staked = o.optBoolean("staked", false),
+                summary = o.getString("summary"),
+            )
+        }
+
+    suspend fun networkStats(): NetworkStats = withContext(Dispatchers.IO) {
+        val o = get("/network/stats")
+        NetworkStats(
+            onlineNowEstimate = o.getInt("online_now_estimate"),
+            actedToday = o.getInt("acted_today"),
+            workProven = o.getInt("work_proven"),
+            source = o.getString("source"),
+        )
+    }
+
+    suspend fun leaderboard(): List<LeaderRow> = withContext(Dispatchers.IO) {
+        val rows = get("/network/leaderboard").getJSONArray("rows")
+        (0 until rows.length()).map { i ->
+            val o = rows.getJSONObject(i)
+            LeaderRow(
+                rank = o.getInt("rank"),
+                humanShort = o.getString("human_short"),
+                qualityScore = o.getDouble("quality_score"),
+                accuracy = o.getDouble("accuracy"),
+                workCount = o.getInt("work_count"),
+                uiBond = o.getDouble("ui_bond"),
+            )
+        }
     }
 
     private fun clipResult(o: JSONObject) = ClipResult(

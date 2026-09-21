@@ -1,4 +1,4 @@
-package ai.loosh.tapfarm
+package ai.loosh.union
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -65,12 +65,12 @@ class MainActivity : ComponentActivity() {
         sender = ActivityResultSender(this)
 
         setContent {
-            MaterialTheme(colorScheme = TapFarmColors) {
+            MaterialTheme(colorScheme = UnionColors) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    TapFarmApp(sender)
+                    UnionApp(sender)
                 }
             }
         }
@@ -80,7 +80,7 @@ class MainActivity : ComponentActivity() {
 private val Accent = Color(0xFF4ADE80)
 private val Warn = Color(0xFFFBBF24)
 
-private val TapFarmColors = darkColorScheme(
+private val UnionColors = darkColorScheme(
     primary = Accent,
     onPrimary = Color(0xFF04120A),
     background = Color(0xFF0B0F14),
@@ -92,7 +92,7 @@ private val TapFarmColors = darkColorScheme(
 )
 
 @Composable
-fun TapFarmApp(sender: ActivityResultSender, vm: TapFarmViewModel = viewModel()) {
+fun UnionApp(sender: ActivityResultSender, vm: UnionViewModel = viewModel()) {
     val state by vm.state.collectAsState()
 
     Scaffold { padding ->
@@ -136,6 +136,8 @@ fun TapFarmApp(sender: ActivityResultSender, vm: TapFarmViewModel = viewModel())
                     onStart = vm::startClip,
                     onProveHuman = { vm.startLiveness("clip-session") },
                     onRetry = vm::retryClipQualification,
+                    onVerify = vm::openVerify,
+                    onNetwork = vm::openNetwork,
                     onBack = vm::leaveClip,
                 )
                 Screen.CLIP_TASK -> ClipScreen(
@@ -152,6 +154,17 @@ fun TapFarmApp(sender: ActivityResultSender, vm: TapFarmViewModel = viewModel())
                     busy = state.busy,
                     onPassed = vm::completeLiveness,
                     onCancel = vm::cancelLiveness,
+                )
+                Screen.VERIFY -> VerifyScreen(
+                    attestation = state.attestation,
+                    busy = state.busy,
+                    onBack = vm::leaveDetail,
+                )
+                Screen.NETWORK -> NetworkScreen(
+                    stats = state.networkStats,
+                    rows = state.leaderboard,
+                    busy = state.busy,
+                    onBack = vm::leaveDetail,
                 )
                 Screen.SOLVING -> SolvingScreen(
                     state = state,
