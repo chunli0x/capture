@@ -77,10 +77,25 @@ This is the part that matters, because it is why the custom program survives:
 
 ## The split
 
-**Our program (`programs/attestation/`)** — the bond layer:
-HUMAN escrow, `status`, evidence-hash commitment, the slash instruction
-(implemented and tested, not backend-wired, per the brief), and enforcement
-that the human signed over the liveness-proof hash.
+**Our program (`programs/union-bond/`, built)** — the bond layer: HUMAN
+escrow, `status` (`Attested → Challenged → Slashed`, plus `Released`), an
+evidence-hash commitment, `slash`, and enforcement that the human signed over
+the liveness-proof hash. `initialize` is gated to a hardcoded deployer,
+`update_authorities` rotates the verifier and slash authority, and a
+`LivenessReceipt` PDA keyed on the proof hash makes replay fail at account
+creation. 21 host tests cover the lifecycle table, slash clamping, the release
+window and task-id seed limits.
+
+Two deliberate shapes worth knowing. `slash` only accepts a bond that is
+already `Challenged`, so the dispute path cannot be skipped — slashing
+straight from `Attested` would make the challenge decorative. And `release`
+exists at all because a bond that can never come back is not collateral, it is
+a confiscation; it requires an unchallenged bond and an elapsed window.
+
+`slash` and `challenge` are implemented and tested, and nothing in the backend
+calls them. That is the brief's instruction and it is also the honest demo
+line: the bond is staked and the attestation is minted; no false attestation
+has ever actually been punished.
 
 **SAS** — the credential layer: one Credential for Union whose authorized
 signer is our verifier, one Schema for `clip_judgment`, and a tokenized
