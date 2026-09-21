@@ -1,4 +1,4 @@
-package ai.loosh.tapfarm
+package ai.loosh.union
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -12,7 +12,7 @@ import android.content.SharedPreferences
  * this demo, so the address belongs in the app rather than in the build.
  *
  * The compiled-in value is still the default, so a build made with
- * `-PtapfarmApiBase=...` behaves exactly as before until someone edits it.
+ * `-PunionApiBase=...` behaves exactly as before until someone edits it.
  */
 class ApiConfig(context: Context) {
 

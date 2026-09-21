@@ -1,4 +1,4 @@
-package ai.loosh.tapfarm
+package ai.loosh.union
 
 import android.app.Application
 import android.net.Uri
@@ -16,7 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-enum class Screen { CONNECT, CAMPAIGNS, SOLVING, POSE_PRIMER, POSE_TASK, CLIP_PRIMER, CLIP_TASK, LIVENESS }
+enum class Screen { CONNECT, CAMPAIGNS, SOLVING, POSE_PRIMER, POSE_TASK, CLIP_PRIMER, CLIP_TASK, LIVENESS, VERIFY, NETWORK }
 
 /** Ghost-overlay modes, matching the server's pools. */
 /** Modes are the wire values the backend expects; do not localise them. */
@@ -86,10 +86,16 @@ data class UiState(
     val clipResult: ClipResult? = null,
     val clipQualification: ClipQualification? = null,
     val clipQualified: Boolean = false,
+    /** Last paid clip task, so its attestation can be looked up. */
+    val lastPaidClipTaskId: String? = null,
     val uiClipBalance: Double = 0.0,
     // --- liveness ---
     val livenessSession: LivenessSession? = null,
     val livenessProof: LivenessProof? = null,
+    // --- credential and network ---
+    val attestation: Attestation? = null,
+    val networkStats: NetworkStats? = null,
+    val leaderboard: List<LeaderRow> = emptyList(),
     val busy: String? = null,
     val error: String? = null,
     val lastSignature: String? = null,
@@ -108,16 +114,16 @@ data class UiState(
         get() = poseTask != null && !poseSubmitted && busy == null
 }
 
-class TapFarmViewModel(application: Application) : AndroidViewModel(application) {
+class UnionViewModel(application: Application) : AndroidViewModel(application) {
 
     private val config = ApiConfig(application)
-    private val api = TapFarmApi { config.baseUrl }
+    private val api = UnionApi { config.baseUrl }
 
     private val adapter = MobileWalletAdapter(
         connectionIdentity = ConnectionIdentity(
-            identityUri = Uri.parse("https://tapfarm.loosh.ai"),
+            identityUri = Uri.parse("https://union.loosh.ai"),
             iconUri = Uri.parse("favicon.ico"),
-            identityName = "Tap",
+            identityName = "Union",
         )
     ).apply { blockchain = Solana.Devnet }
 
@@ -365,6 +371,9 @@ class TapFarmViewModel(application: Application) : AndroidViewModel(application)
                 clipQualified = result.qualified,
                 clipQualification = result.qualification ?: it.clipQualification,
                 uiClipBalance = result.uiBalance,
+                lastPaidClipTaskId =
+                    if (result.mode == ClipMode.EARN && !result.flagged) task.taskId
+                    else it.lastPaidClipTaskId,
             )
         }
         refresh()
@@ -430,6 +439,28 @@ class TapFarmViewModel(application: Application) : AndroidViewModel(application)
         _state.update {
             it.copy(screen = Screen.CLIP_PRIMER, livenessSession = null)
         }
+    }
+
+    // --- credential and network --------------------------------------------
+
+    fun openVerify(taskId: String) = launchGuarded("Reading the chain") {
+        val wallet = requireWallet() ?: return@launchGuarded
+        _state.update { it.copy(screen = Screen.VERIFY, attestation = null) }
+        val attestation = api.verify(wallet, taskId)
+        _state.update { it.copy(attestation = attestation) }
+    }
+
+    fun openNetwork() = launchGuarded("Loading the network") {
+        _state.update { it.copy(screen = Screen.NETWORK) }
+        // Independently, so a leaderboard failure does not blank the counts
+        // and vice versa - two panels on one screen should not share a fate.
+        val stats = runCatching { api.networkStats() }.getOrNull()
+        val rows = runCatching { api.leaderboard() }.getOrDefault(emptyList())
+        _state.update { it.copy(networkStats = stats ?: it.networkStats, leaderboard = rows) }
+    }
+
+    fun leaveDetail() {
+        _state.update { it.copy(screen = Screen.CAMPAIGNS) }
     }
 
     fun dismissError() = _state.update { it.copy(error = null) }

@@ -1,4 +1,4 @@
-package ai.loosh.tapfarm
+package ai.loosh.union
 
 import java.security.MessageDigest
 

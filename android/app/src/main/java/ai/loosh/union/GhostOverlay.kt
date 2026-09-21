@@ -1,4 +1,4 @@
-package ai.loosh.tapfarm
+package ai.loosh.union
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween

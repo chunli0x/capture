@@ -30,7 +30,7 @@
         android:icon="@android:drawable/ic_menu_compass"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.TapFarm">
+        android:theme="@style/Theme.Union">
 
         <activity
             android:name=".MainActivity"

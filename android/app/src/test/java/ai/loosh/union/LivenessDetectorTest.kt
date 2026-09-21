@@ -1,4 +1,4 @@
-package ai.loosh.tapfarm
+package ai.loosh.union
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
