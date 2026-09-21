@@ -15,6 +15,10 @@ activityCompose = "1.13.0"
 mwa = "2.2.0"
 okhttp = "4.12.0"
 coil = "3.6.2"
+# CameraX + ML Kit for the on-device liveness check. Face detection runs
+# locally: no image leaves the device, which is the claim the demo makes.
+camerax = "1.6.2"
+mlkitFace = "16.1.7"
 junit = "4.13.2"
 
 [libraries]
@@ -32,6 +36,11 @@ mwa-clientlib-ktx = { group = "com.solanamobile", name = "mobile-wallet-adapter-
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
 coil-network-okhttp = { group = "io.coil-kt.coil3", name = "coil-network-okhttp", version.ref = "coil" }
+camerax-core = { group = "androidx.camera", name = "camera-core", version.ref = "camerax" }
+camerax-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
+camerax-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
+camerax-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
+mlkit-face-detection = { group = "com.google.mlkit", name = "face-detection", version.ref = "mlkitFace" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]

@@ -45,6 +45,8 @@ data class Submission(
 data class Contributor(
     val balance: Int,
     val uiBalance: Double,
+    val uiClipBalance: Double,
+    val clipQualified: Boolean,
     val uiReferralUnclaimed: Double,
     val uiTotalClaimable: Double,
     val solved: Int,
@@ -137,6 +139,60 @@ data class PreparedClaim(
 /** Raised for a 4xx the UI is expected to handle rather than show as a crash. */
 class ApiException(val status: Int, message: String) : IOException(message)
 
+/** A served clip-judgment task. The answer is never part of this. */
+data class ClipTask(
+    val taskId: String,
+    val mode: String,
+    val clipUrl: String,
+    val question: String,
+    val choices: List<String>,
+    /** False during qualification: blind means no escape hatch. */
+    val canFlag: Boolean,
+    val reward: Int,
+    /** A stand-in clip. The UI refuses to present these as real footage. */
+    val placeholder: Boolean,
+)
+
+data class ClipQualification(
+    val graded: Int,
+    val correct: Int,
+    val required: Int,
+    val accuracy: Double,
+    val passed: Boolean,
+    /** What a uniform guesser would have scored on this gate. */
+    val chancePass: Double,
+    val retryAvailable: Boolean,
+    val retryReadyAt: Double?,
+)
+
+data class ClipResult(
+    val mode: String,
+    val reward: Int,
+    val uiBalance: Double,
+    val qualified: Boolean,
+    val flagged: Boolean,
+    /** Practice only. Null during a blind run and in paid work. */
+    val correct: Boolean?,
+    val expected: String?,
+    val qualification: ClipQualification?,
+)
+
+/** A server-issued liveness challenge. Single use, short lived. */
+data class LivenessSession(
+    val sessionId: String,
+    val challenge: String,
+    val nonce: String,
+    val ttlSeconds: Double,
+)
+
+data class LivenessProof(
+    val proofHashHex: String,
+    val taskId: String,
+    val challenge: String,
+    /** The server's own words for what this establishes. Shown, not paraphrased. */
+    val attests: String,
+)
+
 /**
  * Backend client.
  *
@@ -212,6 +268,8 @@ class TapFarmApi(private val baseUrlProvider: () -> String = { BuildConfig.API_B
         Contributor(
             balance = o.getInt("balance"),
             uiBalance = o.getDouble("ui_balance"),
+            uiClipBalance = o.optDouble("ui_clip_balance", 0.0),
+            clipQualified = o.optBoolean("clip_qualified", false),
             uiReferralUnclaimed = o.getDouble("ui_referral_unclaimed"),
             uiTotalClaimable = o.getDouble("ui_total_claimable"),
             solved = o.getInt("solved"),
@@ -330,6 +388,125 @@ class TapFarmApi(private val baseUrlProvider: () -> String = { BuildConfig.API_B
                 .put("reason", reason),
         )
     }
+
+    suspend fun nextClipTask(contributor: String, mode: String): ClipTask =
+        withContext(Dispatchers.IO) {
+            val o = get("/clip/task/next?contributor=$contributor&mode=$mode")
+            val choices = o.getJSONArray("choices")
+            ClipTask(
+                taskId = o.getString("task_id"),
+                mode = o.getString("mode"),
+                clipUrl = absoluteUrl(o.getString("clip_url")),
+                question = o.getString("question"),
+                choices = (0 until choices.length()).map { choices.getString(it) },
+                canFlag = o.getBoolean("can_flag"),
+                reward = o.getInt("reward"),
+                placeholder = o.getBoolean("placeholder"),
+            )
+        }
+
+    suspend fun submitClip(
+        contributor: String,
+        taskId: String,
+        choice: String,
+    ): ClipResult = withContext(Dispatchers.IO) {
+        clipResult(
+            post(
+                "/clip/submit",
+                JSONObject()
+                    .put("contributor", contributor)
+                    .put("task_id", taskId)
+                    .put("choice", choice),
+            )
+        )
+    }
+
+    suspend fun flagClip(contributor: String, taskId: String): ClipResult =
+        withContext(Dispatchers.IO) {
+            clipResult(
+                post(
+                    "/clip/flag",
+                    JSONObject()
+                        .put("contributor", contributor)
+                        .put("task_id", taskId)
+                        .put("choice", ""),
+                )
+            )
+        }
+
+    suspend fun clipQualification(contributor: String): ClipQualification =
+        withContext(Dispatchers.IO) {
+            clipQualification(get("/clip/qualification/$contributor"))
+        }
+
+    suspend fun retryClipQualification(contributor: String): ClipQualification =
+        withContext(Dispatchers.IO) {
+            clipQualification(
+                post(
+                    "/clip/qualification/retry",
+                    JSONObject().put("contributor", contributor),
+                )
+            )
+        }
+
+    suspend fun livenessSession(contributor: String, taskId: String): LivenessSession =
+        withContext(Dispatchers.IO) {
+            val o = post(
+                "/liveness/session",
+                JSONObject().put("contributor", contributor).put("task_id", taskId),
+            )
+            LivenessSession(
+                sessionId = o.getString("session_id"),
+                challenge = o.getString("challenge"),
+                nonce = o.getString("nonce"),
+                ttlSeconds = o.getDouble("ttl_seconds"),
+            )
+        }
+
+    suspend fun completeLiveness(
+        contributor: String,
+        sessionId: String,
+        resultDigestHex: String,
+    ): LivenessProof = withContext(Dispatchers.IO) {
+        val o = post(
+            "/liveness/complete",
+            JSONObject()
+                .put("contributor", contributor)
+                .put("session_id", sessionId)
+                .put("result_digest", resultDigestHex),
+        )
+        LivenessProof(
+            proofHashHex = o.getString("liveness_proof_hash"),
+            taskId = o.getString("task_id"),
+            challenge = o.getString("challenge"),
+            attests = o.getString("attests"),
+        )
+    }
+
+    private fun clipResult(o: JSONObject) = ClipResult(
+        mode = o.getString("mode"),
+        reward = o.getInt("reward"),
+        uiBalance = o.getDouble("ui_balance"),
+        qualified = o.getBoolean("qualified"),
+        flagged = o.getBoolean("flagged"),
+        correct = if (o.isNull("correct")) null else o.getBoolean("correct"),
+        expected = if (o.isNull("expected")) null else o.getString("expected"),
+        qualification =
+            if (o.isNull("qualification")) null
+            else clipQualification(o.getJSONObject("qualification")),
+    )
+
+    private fun clipQualification(o: JSONObject) = ClipQualification(
+        graded = o.getInt("graded"),
+        correct = o.getInt("correct"),
+        required = o.getInt("required"),
+        accuracy = o.getDouble("accuracy"),
+        passed = o.getBoolean("passed"),
+        chancePass = o.getDouble("chance_pass"),
+        retryAvailable = o.getBoolean("retry_available"),
+        retryReadyAt =
+            if (o.isNull("retry_ready_at")) null else o.getDouble("retry_ready_at"),
+    )
 
     suspend fun prepareClaim(contributor: String): PreparedClaim = withContext(Dispatchers.IO) {
         val o = post("/claim/prepare", JSONObject().put("contributor", contributor))
