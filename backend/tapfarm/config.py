@@ -149,6 +149,21 @@ class Settings(BaseSettings):
     clip_max_retries: int = Field(default=1, ge=0)
     clip_retry_cooldown_seconds: float = Field(default=3600.0, ge=0.0)
 
+    # --- the attestation layer ----------------------------------------------
+    # Deployed union-bond program. Empty means attestations cannot be minted,
+    # which /attestation/prepare reports rather than failing obscurely.
+    bond_program_id: str = ""
+
+    # HUMAN escrowed behind one attestation, in base units. Small enough that a
+    # demo can show the whole loop; in production this has to exceed what a
+    # false attestation is worth to the person buying it, which is a pricing
+    # question rather than a default.
+    attestation_bond: int = 100_000  # 0.1 HUMAN
+
+    # SAS credential authority. Empty means the treasury, which is what
+    # bootstrap creates and what would have issued the credential.
+    sas_credential_authority: str = ""
+
     # How long a liveness challenge stays answerable. Long enough to read the
     # prompt and blink; short enough that a captured session is not a durable
     # asset.

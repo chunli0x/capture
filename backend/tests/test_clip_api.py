@@ -67,6 +67,7 @@ def env(monkeypatch, tmp_path):
         main_mod.pose_store,
         main_mod.clip_store,
         main_mod.liveness_sessions,
+        main_mod.network_tracker,
         main_mod.referrals,
     ):
         factory.cache_clear()
@@ -431,3 +432,74 @@ class TestLivenessOverHttp:
             ).json()
             hashes.add(body["liveness_proof_hash"])
         assert len(hashes) == 2
+
+
+class TestNetworkSurfaces:
+    def test_stats_name_the_estimate_as_an_estimate(self, client):
+        body = client.get("/network/stats").json()
+        assert body["online_now_is_estimate"] is True
+        assert "not yet on-chain" in body["source"]
+        assert set(body) >= {"online_now_estimate", "acted_today", "work_proven"}
+
+    def test_the_board_is_empty_before_anyone_works(self, client):
+        assert client.get("/network/leaderboard").json()["rows"] == []
+
+    def test_paid_work_puts_a_contributor_on_the_board(self, client, truth):
+        who = _who()
+        _run_blind(client, truth, who)
+        for _ in range(4):
+            task = client.get(
+                "/clip/task/next", params={"contributor": who, "mode": "earn"}
+            ).json()
+            client.post(
+                "/clip/submit",
+                json={"contributor": who, "task_id": task["task_id"], "choice": "phone"},
+            )
+        rows = client.get("/network/leaderboard").json()["rows"]
+        assert len(rows) == 1
+        assert rows[0]["human"] == who
+        assert rows[0]["rank"] == 1
+        assert "..." in rows[0]["human_short"]
+        assert rows[0]["work_count"] == 4
+
+    def test_practice_and_qualification_do_not_count_as_work(self, client, truth):
+        """Practice is unpaid training and a gate is not a contribution."""
+        who = _who()
+        task = client.get(
+            "/clip/task/next", params={"contributor": who, "mode": "practice"}
+        ).json()
+        client.post(
+            "/clip/submit",
+            json={
+                "contributor": who,
+                "task_id": task["task_id"],
+                "choice": truth[task["task_id"]],
+            },
+        )
+        _run_blind(client, truth, who)
+        assert client.get("/network/leaderboard").json()["rows"] == []
+
+    def test_the_board_says_what_it_ranks_on(self, client):
+        assert "accuracy" in client.get("/network/leaderboard").json()["scored_on"]
+
+
+class TestAttestationAndVerifyGating:
+    def test_attestation_is_off_without_a_bond_program(self, client):
+        """A missing program is reported, not raised as something opaque."""
+        response = client.post(
+            "/attestation/prepare",
+            json={
+                "contributor": _who(),
+                "task_id": "qualify-0001",
+                "liveness_proof_hash": "ab" * 32,
+            },
+        )
+        assert response.status_code == 503
+        assert "bond program" in response.json()["detail"]
+
+    def test_verify_is_off_without_a_bond_program(self, client):
+        response = client.get(f"/verify/{_who()}/qualify-0001")
+        assert response.status_code == 503
+
+    def test_a_bad_pubkey_is_rejected_by_verify(self, client):
+        assert client.get("/verify/not-a-key/t").status_code == 400
