@@ -375,6 +375,16 @@ class ClipTaskStore:
             flagged=False,
         )
 
+    def last_grade_correct(self, contributor: str) -> bool:
+        """Was the most recent hidden golden item answered correctly?
+
+        Needed by the leaderboard, which has to score accuracy without the
+        client ever learning it. Returns False when nothing gradeable has been
+        submitted, so an ungraded live item is never counted as a win.
+        """
+        grades = self.state(contributor).drift_grades
+        return bool(grades) and grades[-1].correct is True
+
     def drift_accuracy(self, contributor: str) -> float | None:
         """Rolling accuracy on hidden golden items, or None if none graded yet."""
         grades = self.state(contributor).drift_grades

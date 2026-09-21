@@ -34,7 +34,17 @@ from tapfarm.config import settings
 from tapfarm.clip.dataset import ClipTaskRecord
 from tapfarm.clip.dataset import load_records as load_clip_records
 from tapfarm.clip.dataset import load_truth as load_clip_truth
+import time
+
+from solders.message import Message
+from solders.transaction import Transaction
+from spl.token.instructions import get_associated_token_address
+
+from tapfarm import sas
+from tapfarm.bond_client import BondStatus, decode_bond, derive_bond, post_bond_ix
 from tapfarm.clip.scoring import FLAG_UNCLEAR
+from tapfarm.verifier import VerifierKeyError, load_verifier
+from tapfarm.leaderboard import NetworkTracker
 from tapfarm.liveness import (
     Challenge,
     LivenessError,
@@ -155,6 +165,11 @@ def _clip_qualified(contributor: str) -> bool:
 @functools.lru_cache(maxsize=1)
 def liveness_sessions() -> LivenessSessionStore:
     return LivenessSessionStore(ttl_seconds=settings().liveness_ttl_seconds)
+
+
+@functools.lru_cache(maxsize=1)
+def network_tracker() -> NetworkTracker:
+    return NetworkTracker()
 
 
 @functools.lru_cache(maxsize=1)
@@ -414,11 +429,44 @@ def _treasury() -> Keypair:
     return _load_treasury(settings().treasury_keypair_path)
 
 
+def _verifier() -> Keypair:
+    """The key that co-signs every attestation.
+
+    Loaded through `verifier.py`, which refuses a key whose pubkey is not the
+    configured verifier - a valid but wrong key would sign happily and have
+    every mint rejected on-chain.
+    """
+    cfg = settings()
+    return load_verifier(cfg.verifier_keypair_path, cfg.verifier_pubkey)
+
+
 def _mint() -> Pubkey:
     raw = settings().tap_mint
     if not raw:
         raise HTTPException(503, "TAP mint unset; run scripts/bootstrap_devnet.sh")
     return Pubkey.from_string(raw)
+
+
+def _payout_mint() -> tuple[Pubkey, int, str]:
+    """What a claim actually pays out, and at what precision.
+
+    USDC, not the token. Paying workers a stablecoin is what keeps the token
+    a staking and access instrument rather than the thing people are working
+    for - the distinction the pitch rests on when asked whether the token is
+    a security.
+
+    TAP remains the fallback so a deployment that has not been given a USDC
+    mint still pays rather than refusing to, and the returned symbol says
+    which one happened so no screen has to guess.
+    """
+    cfg = settings()
+    if cfg.usdc_mint:
+        return Pubkey.from_string(cfg.usdc_mint), cfg.usdc_decimals, "USDC"
+    if cfg.tap_mint:
+        return Pubkey.from_string(cfg.tap_mint), cfg.tap_decimals, "TAP"
+    raise HTTPException(
+        503, "no payout mint configured; run scripts/bootstrap_devnet.sh"
+    )
 
 
 def _parse_pubkey(value: str) -> Pubkey:
@@ -683,6 +731,82 @@ class LivenessCompleteOut(BaseModel):
     )
 
 
+class AttestationPrepareIn(BaseModel):
+    contributor: str
+    task_id: str
+    liveness_proof_hash: str
+
+
+class AttestationPrepareOut(BaseModel):
+    """A transaction the wallet signs to mint its own attestation."""
+
+    transaction: str = Field(
+        description="base64 wire-format tx, verifier-partial-signed"
+    )
+    bond_account: str
+    attestation_account: str
+    bond_amount: int
+    ui_bond_amount: float
+    cluster: str
+    # What the resulting record does and does not establish. Carried in the
+    # response so a client cannot present it as more than it is.
+    attests: str = (
+        "a verifier-vouched, bond-secured attestation that this human "
+        "completed this task; not cryptographic proof of humanness"
+    )
+
+
+class VerifyOut(BaseModel):
+    """The portable credential, as a buyer checks it."""
+
+    found: bool
+    human: str | None = None
+    task_id: str | None = None
+    status: str | None = None
+    bond_amount: int | None = None
+    ui_bond_amount: float | None = None
+    attested_at: int | None = None
+    verifier: str | None = None
+    liveness_proof_hash: str | None = None
+    bond_account: str | None = None
+    attestation_account: str | None = None
+    cluster: str
+    # The three checks the demo's verify screen renders as badges.
+    verified_human: bool = False
+    task_complete: bool = False
+    staked: bool = False
+    # One sentence a buyer can quote without overstating it.
+    summary: str
+
+
+class NetworkStatsOut(BaseModel):
+    # Soft: a heartbeat count, not a verified population. Named so on the wire
+    # so a UI cannot render it as anything firmer.
+    online_now_estimate: int
+    acted_today: int
+    work_proven: int
+    # Says plainly which numbers are which, because a leaderboard that mixes
+    # a heartbeat with on-chain counts invites reading all three as proven.
+    online_now_is_estimate: bool = True
+    source: str
+
+
+class LeaderboardRow(BaseModel):
+    rank: int
+    human: str
+    human_short: str
+    quality_score: float
+    accuracy: float
+    work_count: int
+    bond: int
+    ui_bond: float
+
+
+class LeaderboardOut(BaseModel):
+    rows: list[LeaderboardRow]
+    scored_on: str
+
+
 class ClipRetryIn(BaseModel):
     contributor: str
 
@@ -692,6 +816,10 @@ class ClaimPrepareIn(BaseModel):
 
 
 class ClaimPrepareOut(BaseModel):
+    # Which token actually moved. USDC where configured; a deployment without
+    # a USDC mint falls back to TAP and says so rather than paying silently in
+    # something other than what the UI promised.
+    payout_symbol: str = "TAP"
     transaction: str = Field(description="base64 wire-format tx, treasury-partial-signed")
     amount: int
     ui_amount: float
@@ -959,6 +1087,17 @@ def clip_submit(body: ClipSubmitIn) -> ClipSubmitOut:
         raise HTTPException(409, str(exc)) from exc
     except InvalidChoice as exc:
         raise HTTPException(400, str(exc)) from exc
+
+    # Only paid work counts towards the board: practice is unpaid training and
+    # a qualification run is a gate, not a contribution.
+    if result.mode == "earn" and not result.flagged:
+        network_tracker().record_work(
+            body.contributor,
+            graded=result.quality_signal == "golden_item",
+            correct=clip_store().last_grade_correct(body.contributor),
+        )
+    else:
+        network_tracker().seen(body.contributor)
     return _clip_submit_out(body.contributor, result)
 
 
@@ -1107,6 +1246,251 @@ def liveness_complete(body: LivenessCompleteIn) -> LivenessCompleteOut:
     )
 
 
+@app.post("/attestation/prepare", response_model=AttestationPrepareOut)
+async def attestation_prepare(body: AttestationPrepareIn) -> AttestationPrepareOut:
+    """Build the attestation-mint transaction for the wallet to sign.
+
+    Two instructions, one transaction: `post_bond` escrows HUMAN and creates
+    the bond PDA, and SAS `create_attestation` issues the credential with its
+    nonce set to that bond. Splitting them would allow a crash to leave a
+    credential with no stake behind it, which is precisely the claim this
+    product says it does not make.
+
+    The human is the fee payer and a required signer, so the transaction
+    cannot land without their wallet. The verifier partial-signs here.
+    """
+    human = _parse_pubkey(body.contributor)
+    cfg = settings()
+
+    if not cfg.bond_program_id:
+        raise HTTPException(503, "bond program not configured; attestations are off")
+    if not cfg.human_mint:
+        raise HTTPException(503, "HUMAN mint unset; run scripts/bootstrap_devnet.sh")
+
+    try:
+        liveness_hash = bytes.fromhex(body.liveness_proof_hash)
+    except ValueError as exc:
+        raise HTTPException(400, f"liveness_proof_hash must be hex: {exc}") from exc
+    if len(liveness_hash) != 32:
+        raise HTTPException(400, "liveness_proof_hash must be 32 bytes")
+
+    # The proof must be one this server issued and has not already spent.
+    # Checking here turns a replay into a 409 instead of a failed instruction.
+    if not liveness_sessions().has_seen(liveness_hash):
+        raise HTTPException(
+            403,
+            "unknown liveness proof; complete a liveness check for this task first",
+        )
+
+    gate = _claim_gate(body.contributor)
+    if not gate.allowed:
+        raise HTTPException(403, gate.reason)
+
+    try:
+        verifier = _verifier()
+    except VerifierKeyError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+    program_id = _parse_pubkey(cfg.bond_program_id)
+    human_mint = _parse_pubkey(cfg.human_mint)
+    human_tokens = get_associated_token_address(human, human_mint)
+
+    try:
+        bond_ix = post_bond_ix(
+            program_id=program_id,
+            payer=human,
+            human=human,
+            verifier=verifier.pubkey(),
+            human_mint=human_mint,
+            human_tokens=human_tokens,
+            task_id=body.task_id,
+            liveness_proof_hash=liveness_hash,
+            amount=cfg.attestation_bond,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    bond_account, _ = derive_bond(program_id, human, body.task_id)
+
+    # The join: SAS's nonce is our bond PDA, so each record names the other.
+    authority = (
+        _parse_pubkey(cfg.sas_credential_authority)
+        if cfg.sas_credential_authority
+        else _treasury().pubkey()
+    )
+    credential, _ = sas.derive_credential(authority, sas.CREDENTIAL_NAME)
+    schema, _ = sas.derive_schema(credential, sas.CLIP_JUDGMENT_SCHEMA_NAME)
+    attestation, _ = sas.derive_attestation(credential, schema, bond_account)
+
+    claim = sas.ClipJudgmentClaim(
+        task_id=body.task_id,
+        liveness_proof_hash=liveness_hash,
+        bond_amount=cfg.attestation_bond,
+        attested_at=int(time.time()),
+    )
+    attestation_ix = sas.create_attestation_ix(
+        payer=human,
+        authorized_signer=verifier.pubkey(),
+        credential=credential,
+        schema=schema,
+        nonce=bond_account,
+        schema_data=claim.encode(),
+    )
+
+    async with AsyncClient(cfg.rpc_url, commitment=Confirmed) as rpc:
+        blockhash = (await rpc.get_latest_blockhash()).value.blockhash
+
+    message = Message.new_with_blockhash(
+        [bond_ix, attestation_ix], human, blockhash
+    )
+    tx = Transaction.new_unsigned(message)
+    tx.partial_sign([verifier], blockhash)
+
+    return AttestationPrepareOut(
+        transaction=base64.b64encode(bytes(tx)).decode(),
+        bond_account=str(bond_account),
+        attestation_account=str(attestation),
+        bond_amount=cfg.attestation_bond,
+        ui_bond_amount=cfg.attestation_bond / (10**cfg.human_decimals),
+        cluster=cfg.cluster,
+    )
+
+
+@app.get("/verify/{human}/{task_id}", response_model=VerifyOut)
+async def verify(human: str, task_id: str) -> VerifyOut:
+    """Answer "is this attested human real, and did they do the task?".
+
+    Reads the bond account from the chain rather than our own database. That
+    is the point of the whole design: a buyer does not have to trust this
+    endpoint, because everything it reports is on-chain and they can re-read
+    it themselves from the two addresses in the response.
+
+    What the chain establishes is identity, bond, timestamp and a verifier
+    signature. The liveness decision and the grading happened off-chain,
+    inside the verifier - the summary says so rather than leaving a reader to
+    assume the chain checked something it cannot check.
+    """
+    owner = _parse_pubkey(human)
+    cfg = settings()
+    if not cfg.bond_program_id:
+        raise HTTPException(503, "bond program not configured")
+
+    program_id = _parse_pubkey(cfg.bond_program_id)
+    try:
+        bond_account, _ = derive_bond(program_id, owner, task_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    async with AsyncClient(cfg.rpc_url, commitment=Confirmed) as rpc:
+        info = (await rpc.get_account_info(bond_account)).value
+
+    if info is None:
+        return VerifyOut(
+            found=False,
+            bond_account=str(bond_account),
+            cluster=cfg.cluster,
+            summary="No attestation exists for this human and task.",
+        )
+
+    try:
+        record = decode_bond(bytes(info.data))
+    except ValueError as exc:
+        raise HTTPException(502, f"bond account could not be decoded: {exc}") from exc
+
+    authority = (
+        _parse_pubkey(cfg.sas_credential_authority)
+        if cfg.sas_credential_authority
+        else _treasury().pubkey()
+    )
+    credential, _ = sas.derive_credential(authority, sas.CREDENTIAL_NAME)
+    schema, _ = sas.derive_schema(credential, sas.CLIP_JUDGMENT_SCHEMA_NAME)
+    attestation, _ = sas.derive_attestation(credential, schema, bond_account)
+
+    staked = record.amount > 0 and record.status is not BondStatus.SLASHED
+    summary = (
+        f"Verifier {record.verifier} vouched that this human completed "
+        f"{record.task_id}, with {record.amount} HUMAN bonded. Liveness and "
+        "grading were performed off-chain by that verifier."
+    )
+    if record.status is BondStatus.CHALLENGED:
+        summary += " This attestation is currently challenged."
+    elif record.status is BondStatus.SLASHED:
+        summary += " This attestation was slashed."
+    elif record.status is BondStatus.RELEASED:
+        summary += " The bond behind it has since been released."
+
+    return VerifyOut(
+        found=True,
+        human=str(record.human),
+        task_id=record.task_id,
+        status=record.status.label,
+        bond_amount=record.amount,
+        ui_bond_amount=record.amount / (10**cfg.human_decimals),
+        attested_at=record.attested_at,
+        verifier=str(record.verifier),
+        liveness_proof_hash=record.liveness_proof_hash.hex(),
+        bond_account=str(bond_account),
+        attestation_account=str(attestation),
+        cluster=cfg.cluster,
+        verified_human=record.status is BondStatus.ATTESTED,
+        task_complete=True,
+        staked=staked,
+        summary=summary,
+    )
+
+
+@app.get("/network/stats", response_model=NetworkStatsOut)
+def network_stats() -> NetworkStatsOut:
+    """Headline counts for the network screen.
+
+    `online_now_estimate` is an off-chain heartbeat: contributors this process
+    has heard from recently. It is a live estimate and is named as one on the
+    wire, because it is the single number here that nobody can verify and the
+    easiest to accidentally present as proven.
+
+    The other two are counted from local records in this build. They become
+    on-chain counts once attestations are being minted; until then reporting
+    them as on-chain would be the overclaim this project keeps avoiding, so
+    `source` says where they came from.
+    """
+    stats = network_tracker().snapshot()
+    return NetworkStatsOut(
+        online_now_estimate=stats.online_now,
+        acted_today=stats.acted_today,
+        work_proven=stats.work_proven,
+        source=stats.source,
+    )
+
+
+@app.get("/network/leaderboard", response_model=LeaderboardOut)
+def leaderboard(limit: int = 25) -> LeaderboardOut:
+    """Ranked by quality, with volume as a tiebreak only.
+
+    Accuracy dominates on purpose. A board a farm could climb by doing more
+    work would reward exactly the behaviour the bond exists to punish, so
+    volume can only separate contributors who are already equally accurate.
+    See `leaderboard.py`.
+    """
+    cfg = settings()
+    rows = network_tracker().leaderboard(limit=max(1, min(limit, 100)))
+    return LeaderboardOut(
+        rows=[
+            LeaderboardRow(
+                rank=i + 1,
+                human=row.human,
+                human_short=row.short,
+                quality_score=round(row.score, 4),
+                accuracy=round(row.accuracy, 4),
+                work_count=row.work_count,
+                bond=row.bond,
+                ui_bond=row.bond / (10**cfg.human_decimals),
+            )
+            for i, row in enumerate(rows)
+        ],
+        scored_on="rolling gold-standard accuracy, with volume as a tiebreak",
+    )
+
+
 @app.get("/contributor/{contributor}")
 def contributor(contributor: str) -> dict[str, object]:
     _parse_pubkey(contributor)
@@ -1155,7 +1539,7 @@ async def claim_prepare(body: ClaimPrepareIn) -> ClaimPrepareOut:
     cfg = settings()
     contributor_key = _parse_pubkey(body.contributor)
     treasury = _treasury()
-    mint = _mint()
+    mint, payout_decimals, payout_symbol = _payout_mint()
 
     # The blockhash is fetched *before* the balances are read, which is the only
     # await in this handler. Doing it the other way round - read, await, zero -
@@ -1179,7 +1563,7 @@ async def claim_prepare(body: ClaimPrepareIn) -> ClaimPrepareOut:
             treasury=treasury.pubkey(),
             mint=mint,
             amount=snapshot.total,
-            decimals=cfg.tap_decimals,
+            decimals=payout_decimals,
             blockhash=blockhash,
         )
         treasury_sign(tx, treasury)
@@ -1194,8 +1578,9 @@ async def claim_prepare(body: ClaimPrepareIn) -> ClaimPrepareOut:
     return ClaimPrepareOut(
         transaction=serialize_for_wallet(tx),
         amount=amount,
-        ui_amount=amount / (10**cfg.tap_decimals),
+        ui_amount=amount / (10**payout_decimals),
         mint=str(mint),
+        payout_symbol=payout_symbol,
         fee_payer=body.contributor,
         cluster=cfg.cluster,
         task_amount=amount - referral_amount - pose_amount,
