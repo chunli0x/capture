@@ -3,6 +3,15 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- The liveness check. Requested at the moment it is needed rather than
+         at launch, so the prompt arrives with its reason on screen. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Neither is required: a device without a camera can still do every
+         other part of the app, and marking them required would hide it from
+         Chromebooks and tablets that have no front sensor. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
+
     <!-- MWA discovers wallets by resolving this scheme. Without the queries
          entry, Android 11+ package visibility rules hide every installed
          wallet and MWA reports NoWalletFound on a device that has one. -->

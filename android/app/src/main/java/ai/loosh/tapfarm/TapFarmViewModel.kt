@@ -16,9 +16,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-enum class Screen { CONNECT, CAMPAIGNS, SOLVING, POSE_PRIMER, POSE_TASK }
+enum class Screen { CONNECT, CAMPAIGNS, SOLVING, POSE_PRIMER, POSE_TASK, CLIP_PRIMER, CLIP_TASK, LIVENESS }
 
 /** Ghost-overlay modes, matching the server's pools. */
+/** Modes are the wire values the backend expects; do not localise them. */
+object ClipMode {
+    const val PRACTICE = "practice"
+    const val QUALIFY = "qualify"
+    const val EARN = "earn"
+}
+
 object PoseMode {
     const val PRACTICE = "practice"
     const val QUALIFY = "qualify"
@@ -73,6 +80,16 @@ data class UiState(
     val qualification: Qualification? = null,
     val poseQualified: Boolean = false,
     val practiceDone: Int = 0,
+    // --- clip judgment ---
+    val clipTask: ClipTask? = null,
+    val clipMode: String = ClipMode.PRACTICE,
+    val clipResult: ClipResult? = null,
+    val clipQualification: ClipQualification? = null,
+    val clipQualified: Boolean = false,
+    val uiClipBalance: Double = 0.0,
+    // --- liveness ---
+    val livenessSession: LivenessSession? = null,
+    val livenessProof: LivenessProof? = null,
     val busy: String? = null,
     val error: String? = null,
     val lastSignature: String? = null,
@@ -150,6 +167,10 @@ class TapFarmViewModel(application: Application) : AndroidViewModel(application)
         // route itself without another branch here.
         if (campaign.taskType == "ghost_pose") {
             openGhostCampaign()
+            return
+        }
+        if (campaign.taskType == "clip_judgment") {
+            openClipCampaign()
             return
         }
         _state.update { it.copy(screen = Screen.SOLVING) }
@@ -313,6 +334,104 @@ class TapFarmViewModel(application: Application) : AndroidViewModel(application)
     private fun startingPose(task: PoseTask): GhostPose =
         GhostPose(x = task.canvas * 0.26f, y = task.canvas * 0.26f, roll = 0f, scale = 1f)
 
+    // --- clip judgment -----------------------------------------------------
+
+    fun openClipCampaign() {
+        _state.update { it.copy(screen = Screen.CLIP_PRIMER, error = null) }
+    }
+
+    fun startClip(mode: String) {
+        _state.update {
+            it.copy(clipMode = mode, clipResult = null, clipTask = null)
+        }
+        nextClipTask()
+    }
+
+    fun nextClipTask() = launchGuarded("Loading clip") {
+        val wallet = requireWallet() ?: return@launchGuarded
+        val task = api.nextClipTask(wallet, _state.value.clipMode)
+        _state.update {
+            it.copy(screen = Screen.CLIP_TASK, clipTask = task, clipResult = null)
+        }
+    }
+
+    fun answerClip(choice: String) = launchGuarded("Submitting") {
+        val wallet = requireWallet() ?: return@launchGuarded
+        val task = _state.value.clipTask ?: return@launchGuarded
+        val result = api.submitClip(wallet, task.taskId, choice)
+        _state.update {
+            it.copy(
+                clipResult = result,
+                clipQualified = result.qualified,
+                clipQualification = result.qualification ?: it.clipQualification,
+                uiClipBalance = result.uiBalance,
+            )
+        }
+        refresh()
+    }
+
+    fun flagClip() = launchGuarded("Flagging") {
+        val wallet = requireWallet() ?: return@launchGuarded
+        val task = _state.value.clipTask ?: return@launchGuarded
+        val result = api.flagClip(wallet, task.taskId)
+        _state.update { it.copy(clipResult = result) }
+    }
+
+    fun retryClipQualification() = launchGuarded("Resetting qualification") {
+        val wallet = requireWallet() ?: return@launchGuarded
+        val qualification = api.retryClipQualification(wallet)
+        _state.update {
+            it.copy(clipQualification = qualification, clipResult = null)
+        }
+    }
+
+    fun leaveClip() {
+        _state.update {
+            it.copy(screen = Screen.CAMPAIGNS, clipTask = null, clipResult = null)
+        }
+    }
+
+    // --- liveness ----------------------------------------------------------
+
+    /**
+     * Ask the server for a challenge, then show the camera.
+     *
+     * The session is requested here rather than on the camera screen so a
+     * server error surfaces before the permission prompt: being asked for the
+     * camera and then told the backend is unreachable is a worse first
+     * impression than the reverse.
+     */
+    fun startLiveness(taskId: String) = launchGuarded("Starting liveness check") {
+        val wallet = requireWallet() ?: return@launchGuarded
+        val session = api.livenessSession(wallet, taskId)
+        _state.update {
+            it.copy(
+                screen = Screen.LIVENESS,
+                livenessSession = session,
+                livenessProof = null,
+            )
+        }
+    }
+
+    fun completeLiveness(resultDigestHex: String) = launchGuarded("Checking") {
+        val wallet = requireWallet() ?: return@launchGuarded
+        val session = _state.value.livenessSession ?: return@launchGuarded
+        val proof = api.completeLiveness(wallet, session.sessionId, resultDigestHex)
+        _state.update {
+            it.copy(
+                livenessProof = proof,
+                livenessSession = null,
+                screen = Screen.CLIP_PRIMER,
+            )
+        }
+    }
+
+    fun cancelLiveness() {
+        _state.update {
+            it.copy(screen = Screen.CLIP_PRIMER, livenessSession = null)
+        }
+    }
+
     fun dismissError() = _state.update { it.copy(error = null) }
 
     private suspend fun refresh() {
@@ -330,6 +449,8 @@ class TapFarmViewModel(application: Application) : AndroidViewModel(application)
                 claimable = summary.claimable,
                 eligibilityReason = summary.reason,
                 referral = referral ?: it.referral,
+                uiClipBalance = summary.uiClipBalance,
+                clipQualified = summary.clipQualified,
             )
         }
     }

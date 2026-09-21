@@ -131,6 +131,28 @@ fun TapFarmApp(sender: ActivityResultSender, vm: TapFarmViewModel = viewModel())
                     onFlag = vm::flagTask,
                     onBack = vm::leavePose,
                 )
+                Screen.CLIP_PRIMER -> ClipPrimerScreen(
+                    state = state,
+                    onStart = vm::startClip,
+                    onProveHuman = { vm.startLiveness("clip-session") },
+                    onRetry = vm::retryClipQualification,
+                    onBack = vm::leaveClip,
+                )
+                Screen.CLIP_TASK -> ClipScreen(
+                    task = state.clipTask ?: return@Column,
+                    submitted = state.clipResult,
+                    busy = state.busy,
+                    onAnswer = vm::answerClip,
+                    onFlag = vm::flagClip,
+                    onNext = vm::nextClipTask,
+                    onLeave = vm::leaveClip,
+                )
+                Screen.LIVENESS -> LivenessScreen(
+                    challengeWire = state.livenessSession?.challenge.orEmpty(),
+                    busy = state.busy,
+                    onPassed = vm::completeLiveness,
+                    onCancel = vm::cancelLiveness,
+                )
                 Screen.SOLVING -> SolvingScreen(
                     state = state,
                     onToggle = vm::toggleCell,
