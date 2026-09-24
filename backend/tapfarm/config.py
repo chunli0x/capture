@@ -149,6 +149,20 @@ class Settings(BaseSettings):
     clip_max_retries: int = Field(default=1, ge=0)
     clip_retry_cooldown_seconds: float = Field(default=3600.0, ge=0.0)
 
+    # --- the demand side: agents buying a human judgment --------------------
+    # Price quoted to an agent for one judgment, as x402 states it.
+    judge_price_usd: str = "$0.30"
+
+    # How many independent humans must judge before a verdict is returned.
+    # Three is the smallest number that can produce a majority with a dissent
+    # visible; one judge is an opinion, two is a tie waiting to happen.
+    judge_quorum: int = Field(default=3, ge=1)
+
+    # Jev. Empty key means no classifier is configured, and the router falls
+    # back to a fixed one that says so rather than pretending to have run.
+    jev_api_key: str = ""
+    jev_model: str = "jev-1.13.0"
+
     # --- the attestation layer ----------------------------------------------
     # Deployed union-bond program. Empty means attestations cannot be minted,
     # which /attestation/prepare reports rather than failing obscurely.

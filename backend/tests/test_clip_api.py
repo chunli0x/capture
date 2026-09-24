@@ -68,9 +68,14 @@ def env(monkeypatch, tmp_path):
         main_mod.clip_store,
         main_mod.liveness_sessions,
         main_mod.network_tracker,
+        main_mod.router,
+        main_mod.routing_log,
+        main_mod.payment_ledger,
         main_mod.referrals,
     ):
         factory.cache_clear()
+
+    main_mod._judge_requests.clear()
 
     with TestClient(main_mod.app) as client:
         yield client, load_truth(clip_dir)
@@ -503,3 +508,173 @@ class TestAttestationAndVerifyGating:
 
     def test_a_bad_pubkey_is_rejected_by_verify(self, client):
         assert client.get("/verify/not-a-key/t").status_code == 400
+
+
+class TestAgentDemandSide:
+    """The agent loop, over HTTP: route, pay, judge, collect."""
+
+    def _judge_body(self, **overrides):
+        body = {
+            "task_type": "success_failure",
+            "question": "Did the robot complete this pick?",
+            "choices": ["yes", "no"],
+            "state": "Lifted box to 82mm then dropped it. Agent confidence 0.51.",
+        }
+        body.update(overrides)
+        return body
+
+    def test_an_unpaid_request_gets_402_with_solana_requirements(self, client):
+        response = client.post("/v1/judge", json=self._judge_body())
+        assert response.status_code == 402
+        assert response.headers.get("PAYMENT-REQUIRED")
+
+        import base64, json as jsonlib
+        accepts = jsonlib.loads(
+            base64.b64decode(response.headers["PAYMENT-REQUIRED"])
+        )["accepts"][0]
+        assert accepts["network"].startswith("solana:")
+        assert accepts["scheme"] == "exact"
+
+    def test_the_quote_says_the_router_was_simulated(self, client):
+        """No Jev key is configured in tests, and the response admits it."""
+        routing = client.post("/v1/judge", json=self._judge_body()).json()["routing"]
+        assert routing["simulated"] is True
+        assert routing["model"] == "fixed-router"
+        assert routing["escalate"] is True
+
+    def test_an_unknown_task_type_is_refused(self, client):
+        response = client.post("/v1/judge", json=self._judge_body(task_type="vibes"))
+        assert response.status_code == 400
+
+    def test_a_single_choice_judgment_is_refused(self, client):
+        response = client.post("/v1/judge", json=self._judge_body(choices=["yes"]))
+        assert response.status_code == 400
+
+    def _pay_and_queue(self, client):
+        quote = client.post("/v1/judge", json=self._judge_body())
+        reference = quote.json()["reference"]
+        import base64, json as jsonlib
+        signature = base64.b64encode(
+            jsonlib.dumps({"payload": {"reference": reference, "payer": "agent"}}).encode()
+        ).decode()
+        return client.post(
+            "/v1/judge",
+            json=self._judge_body(),
+            headers={"PAYMENT-SIGNATURE": signature},
+        ), signature
+
+    def test_a_paid_request_is_queued(self, client):
+        accepted, _ = self._pay_and_queue(client)
+        assert accepted.status_code == 200
+        body = accepted.json()
+        assert body["status"] == "queued"
+        assert body["judges_required"] == 3
+        assert "not settled on chain" in body["payment_verification"]
+
+    def test_a_receipt_cannot_be_spent_twice(self, client):
+        """Otherwise one payment buys unlimited judgments."""
+        _, signature = self._pay_and_queue(client)
+        replay = client.post(
+            "/v1/judge",
+            json=self._judge_body(),
+            headers={"PAYMENT-SIGNATURE": signature},
+        )
+        assert replay.status_code == 402
+        assert "already been used" in replay.json()["detail"]
+
+    def test_an_invented_receipt_is_refused(self, client):
+        import base64, json as jsonlib
+        signature = base64.b64encode(
+            jsonlib.dumps({"payload": {"reference": "made-up", "payer": "x"}}).encode()
+        ).decode()
+        response = client.post(
+            "/v1/judge",
+            json=self._judge_body(),
+            headers={"PAYMENT-SIGNATURE": signature},
+        )
+        assert response.status_code == 402
+
+    def test_queued_work_appears_in_the_human_feed(self, client):
+        accepted, _ = self._pay_and_queue(client)
+        queue = client.get("/agent/queue").json()
+        assert len(queue) == 1
+        assert queue[0]["request_id"] == accepted.json()["request_id"]
+        assert queue[0]["question"].startswith("Did the robot")
+
+    def test_the_verdict_is_withheld_until_the_quorum_is_in(self, client):
+        """A running majority would let an agent stop paying attention early."""
+        accepted, _ = self._pay_and_queue(client)
+        request_id = accepted.json()["request_id"]
+        who = _who()
+
+        for i in range(2):
+            client.post(
+                f"/agent/judge/{request_id}",
+                params={"contributor": _who(), "choice": "yes"},
+            )
+            polled = client.get(f"/v1/judge/{request_id}").json()
+            assert polled["status"] == "awaiting_humans"
+            assert polled["verdict"] is None
+
+        client.post(
+            f"/agent/judge/{request_id}",
+            params={"contributor": who, "choice": "yes"},
+        )
+        done = client.get(f"/v1/judge/{request_id}").json()
+        assert done["status"] == "complete"
+        assert done["verdict"] == "yes"
+        assert done["agreement"] == "3/3"
+
+    def test_a_dissent_is_visible_in_the_agreement(self, client):
+        accepted, _ = self._pay_and_queue(client)
+        request_id = accepted.json()["request_id"]
+        for choice in ("yes", "yes", "no"):
+            client.post(
+                f"/agent/judge/{request_id}",
+                params={"contributor": _who(), "choice": choice},
+            )
+        done = client.get(f"/v1/judge/{request_id}").json()
+        assert done["verdict"] == "yes"
+        assert done["agreement"] == "2/3"
+
+    def test_a_judgment_outside_the_offered_choices_is_refused(self, client):
+        accepted, _ = self._pay_and_queue(client)
+        response = client.post(
+            f"/agent/judge/{accepted.json()['request_id']}",
+            params={"contributor": _who(), "choice": "maybe"},
+        )
+        assert response.status_code == 400
+
+    def test_a_completed_request_takes_no_more_judgments(self, client):
+        accepted, _ = self._pay_and_queue(client)
+        request_id = accepted.json()["request_id"]
+        for _ in range(3):
+            client.post(
+                f"/agent/judge/{request_id}",
+                params={"contributor": _who(), "choice": "yes"},
+            )
+        extra = client.post(
+            f"/agent/judge/{request_id}",
+            params={"contributor": _who(), "choice": "no"},
+        )
+        assert extra.status_code == 409
+
+    def test_a_completed_request_leaves_the_feed(self, client):
+        accepted, _ = self._pay_and_queue(client)
+        request_id = accepted.json()["request_id"]
+        for _ in range(3):
+            client.post(
+                f"/agent/judge/{request_id}",
+                params={"contributor": _who(), "choice": "yes"},
+            )
+        assert client.get("/agent/queue").json() == []
+
+    def test_polling_an_unknown_request_is_a_404(self, client):
+        assert client.get("/v1/judge/nope").status_code == 404
+
+    def test_routing_decisions_are_logged_for_tuning(self, client):
+        client.post("/v1/judge", json=self._judge_body())
+        recent = client.get("/agent/routing/recent").json()
+        assert recent["escalation_rate"] == 1.0
+        assert recent["decisions"][0]["task_type"] == "success_failure"
+        assert recent["decisions"][0]["escalate"] is True

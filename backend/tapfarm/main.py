@@ -12,10 +12,11 @@ import functools
 import json
 import math
 import pathlib
+import secrets
 import threading
 from dataclasses import dataclass
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -44,6 +45,15 @@ from tapfarm import sas
 from tapfarm.bond_client import BondStatus, decode_bond, derive_bond, post_bond_ix
 from tapfarm.clip.scoring import FLAG_UNCLEAR
 from tapfarm.verifier import VerifierKeyError, load_verifier
+from tapfarm import x402
+from tapfarm.jev import (
+    TASK_TYPES,
+    FixedRouter,
+    JevClassifier,
+    JevError,
+    RoutingLog,
+    decide,
+)
 from tapfarm.leaderboard import NetworkTracker
 from tapfarm.liveness import (
     Challenge,
@@ -170,6 +180,36 @@ def liveness_sessions() -> LivenessSessionStore:
 @functools.lru_cache(maxsize=1)
 def network_tracker() -> NetworkTracker:
     return NetworkTracker()
+
+
+@functools.lru_cache(maxsize=1)
+def router():
+    """The escalation classifier, or a fixed one when none is configured.
+
+    Falling back rather than failing: an unconfigured Jev key should not stop
+    the demand side working offline. The fallback names itself in every logged
+    decision, so a run without a real classifier is never mistaken for one
+    with.
+    """
+    cfg = settings()
+    if not cfg.jev_api_key:
+        return FixedRouter()
+    return JevClassifier(cfg.jev_api_key, model=cfg.jev_model)
+
+
+@functools.lru_cache(maxsize=1)
+def routing_log() -> RoutingLog:
+    return RoutingLog()
+
+
+@functools.lru_cache(maxsize=1)
+def payment_ledger() -> x402.PaymentLedger:
+    return x402.PaymentLedger()
+
+
+# Agent-submitted judge requests, awaiting human verdicts.
+_judge_requests: dict[str, x402.JudgeRequest] = {}
+_judge_lock = threading.Lock()
 
 
 @functools.lru_cache(maxsize=1)
@@ -807,6 +847,47 @@ class LeaderboardOut(BaseModel):
     scored_on: str
 
 
+class JudgeIn(BaseModel):
+    """What an agent sends to buy a human judgment."""
+
+    task_type: str
+    question: str
+    choices: list[str]
+    media_url: str | None = None
+    # Free-text state for the router. The agent's own summary of what it saw.
+    state: str = ""
+
+
+class RoutingOut(BaseModel):
+    escalate: bool
+    reasons: list[str]
+    probabilities: dict[str, float]
+    model: str
+    # True when no classifier is configured and a fixed router answered, so a
+    # reader never mistakes a stub for a calibrated decision.
+    simulated: bool
+
+
+class JudgeAcceptedOut(BaseModel):
+    request_id: str
+    status: str
+    routing: RoutingOut
+    judges_required: int
+    judges_so_far: int
+    # Stated rather than implied: the inbound leg is not settled on chain in
+    # this build.
+    payment_verification: str = "receipt shape only; not settled on chain"
+
+
+class JudgeVerdictOut(BaseModel):
+    request_id: str
+    status: str
+    verdict: str | None
+    agreement: str | None
+    judges: int
+    routing: RoutingOut
+
+
 class ClipRetryIn(BaseModel):
     contributor: str
 
@@ -1354,6 +1435,232 @@ async def attestation_prepare(body: AttestationPrepareIn) -> AttestationPrepareO
         ui_bond_amount=cfg.attestation_bond / (10**cfg.human_decimals),
         cluster=cfg.cluster,
     )
+
+
+@app.post("/v1/judge")
+async def judge(body: JudgeIn, request: Request) -> Response:
+    """Buy one human judgment. Answers 402 until a payment arrives.
+
+    The flow, in the order an agent meets it:
+
+    1. No payment header -> route the request through the escalation
+       classifier. If it says a human is not needed, say so and charge
+       nothing; selling a judgment the agent did not need would be the easiest
+       way to make this product dishonest.
+    2. Otherwise answer `402 Payment Required` with a price, using x402 V2's
+       header transport on Solana.
+    3. With a valid, unspent receipt -> enqueue to the human feed and hold.
+    """
+    cfg = settings()
+    if body.task_type not in TASK_TYPES:
+        raise HTTPException(
+            400, f"task_type must be one of {', '.join(TASK_TYPES)}"
+        )
+    if len(body.choices) < 2:
+        raise HTTPException(400, "a judgment needs at least two choices")
+
+    state = body.state or body.question
+    try:
+        answers = router().classify(state)
+    except JevError as exc:
+        # Fail towards the human. A router that cannot answer is not evidence
+        # that nobody needs to look, and the expensive mistake here is
+        # skipping a judgment that was needed.
+        log_note = f"router unavailable ({exc}); escalating by default"
+        answers = FixedRouter().answers
+        decision = decide(answers)
+        decision = type(decision)(
+            escalate=True, reasons=[log_note], answers=answers
+        )
+    else:
+        decision = decide(answers)
+
+    routing_log().record(body.task_type, decision)
+    routing = RoutingOut(
+        escalate=decision.escalate,
+        reasons=decision.reasons,
+        probabilities=decision.answers.as_dict(),
+        model=decision.answers.model,
+        simulated=decision.answers.model == "fixed-router",
+    )
+
+    if not decision.escalate:
+        return JSONResponse(
+            {
+                "status": "no_human_needed",
+                "routing": routing.model_dump(),
+                "detail": "the agent may proceed; nothing was charged",
+            }
+        )
+
+    signature = request.headers.get(x402.PAYMENT_SIGNATURE_HEADER)
+    if not signature:
+        requirement = x402.PaymentRequirement(
+            scheme=x402.SCHEME_EXACT,
+            network=x402.network_for(cfg.cluster),
+            price=cfg.judge_price_usd,
+            asset=cfg.usdc_mint or "USDC",
+            pay_to=str(_treasury().pubkey()),
+            resource="/v1/judge",
+            description=f"One human judgment: {body.question}",
+        )
+        reference = payment_ledger().issue(cfg.judge_price_usd)
+        header = x402.payment_required_header([requirement])
+        return JSONResponse(
+            status_code=402,
+            content={
+                "status": "payment_required",
+                "reference": reference,
+                "price": cfg.judge_price_usd,
+                "network": requirement.network,
+                "routing": routing.model_dump(),
+            },
+            headers={
+                x402.PAYMENT_REQUIRED_HEADER: header,
+                # The reference travels in the body too: it is what the client
+                # echoes back, and a header-only value is easy to drop.
+                "X-Payment-Reference": reference,
+            },
+        )
+
+    try:
+        receipt = x402.parse_payment_signature(signature)
+        payment_ledger().spend(receipt)
+    except x402.ReceiptError as exc:
+        raise HTTPException(402, str(exc)) from exc
+
+    request_id = secrets.token_hex(8)
+    with _judge_lock:
+        _judge_requests[request_id] = x402.JudgeRequest(
+            request_id=request_id,
+            task_type=body.task_type,
+            question=body.question,
+            choices=list(body.choices),
+            media_url=body.media_url,
+            price=cfg.judge_price_usd,
+            payer=receipt.payer,
+            created_at=time.time(),
+        )
+
+    return JSONResponse(
+        JudgeAcceptedOut(
+            request_id=request_id,
+            status="queued",
+            routing=routing,
+            judges_required=cfg.judge_quorum,
+            judges_so_far=0,
+        ).model_dump()
+    )
+
+
+@app.get("/v1/judge/{request_id}", response_model=JudgeVerdictOut)
+def judge_result(request_id: str) -> JudgeVerdictOut:
+    """Poll for the verdict. Held until the quorum of humans has judged."""
+    cfg = settings()
+    with _judge_lock:
+        entry = _judge_requests.get(request_id)
+    if entry is None:
+        raise HTTPException(404, "unknown judge request")
+
+    verdict, agreed, total = entry.agreement
+    resolved = total >= cfg.judge_quorum
+    return JudgeVerdictOut(
+        request_id=request_id,
+        status="complete" if resolved else "awaiting_humans",
+        # Withheld until the quorum is in. Returning a running majority would
+        # let an agent read one judge's answer and stop paying attention.
+        verdict=verdict if resolved else None,
+        agreement=f"{agreed}/{total}" if resolved else None,
+        judges=total,
+        routing=RoutingOut(
+            escalate=True,
+            reasons=["already escalated"],
+            probabilities={},
+            model="n/a",
+            simulated=False,
+        ),
+    )
+
+
+@app.get("/agent/queue")
+def agent_queue(limit: int = 20) -> list[dict]:
+    """Agent-submitted work, for the human feed.
+
+    Shown beside clip tasks in the same feed. The judge path deliberately
+    reuses the flag and golden-item machinery rather than growing a parallel
+    one - a second scoring path is how two quality standards appear.
+    """
+    with _judge_lock:
+        pending = [
+            entry
+            for entry in _judge_requests.values()
+            if len(entry.verdicts) < settings().judge_quorum
+        ]
+    pending.sort(key=lambda e: e.created_at)
+    return [
+        {
+            "request_id": entry.request_id,
+            "task_type": entry.task_type,
+            "question": entry.question,
+            "choices": entry.choices,
+            "media_url": entry.media_url,
+            "price": entry.price,
+            "judges_so_far": len(entry.verdicts),
+            "judges_required": settings().judge_quorum,
+        }
+        for entry in pending[:limit]
+    ]
+
+
+@app.post("/agent/judge/{request_id}")
+def submit_agent_judgment(request_id: str, contributor: str, choice: str) -> dict:
+    """A human's verdict on an agent's request."""
+    _parse_pubkey(contributor)
+    cfg = settings()
+    with _judge_lock:
+        entry = _judge_requests.get(request_id)
+        if entry is None:
+            raise HTTPException(404, "unknown judge request")
+        if choice not in entry.choices:
+            raise HTTPException(400, f"{choice!r} is not one of {entry.choices}")
+        if len(entry.verdicts) >= cfg.judge_quorum:
+            raise HTTPException(409, "this request already has its verdicts")
+        entry.verdicts.append(choice)
+        so_far = len(entry.verdicts)
+
+    # Agent work counts towards the board, and has no ground truth, so it is
+    # recorded ungraded - the same rule live clip work follows.
+    network_tracker().record_work(contributor, graded=False)
+    return {
+        "request_id": request_id,
+        "judges_so_far": so_far,
+        "judges_required": cfg.judge_quorum,
+        "complete": so_far >= cfg.judge_quorum,
+    }
+
+
+@app.get("/agent/routing/recent")
+def routing_recent(limit: int = 25) -> dict:
+    """Recent routing decisions and the escalation rate.
+
+    Exposed because the four thresholds are a stated hypothesis. Tuning them
+    needs the decisions in front of whoever is tuning.
+    """
+    log_ = routing_log()
+    return {
+        "escalation_rate": log_.escalation_rate,
+        "decisions": [
+            {
+                "at": r.at,
+                "task_type": r.task_type,
+                "escalate": r.escalate,
+                "reasons": r.reasons,
+                "probabilities": r.answers,
+                "model": r.model,
+            }
+            for r in log_.recent(limit)
+        ],
+    }
 
 
 @app.get("/verify/{human}/{task_id}", response_model=VerifyOut)
