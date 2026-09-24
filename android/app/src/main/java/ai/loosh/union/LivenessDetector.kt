@@ -118,6 +118,25 @@ class LivenessDetector(val challenge: LivenessChallenge) {
 
     private var holdCount = 0
 
+    /**
+     * What the passive classifier concluded, folded into the digest.
+     *
+     * "unavailable" is a real, distinguishable value rather than an absence.
+     * A session where LiteRT would not load produces a different proof hash
+     * from one where the texture check ran and passed, so an attestation
+     * records which checks actually happened instead of implying both did.
+     */
+    var passiveCheck: String = "unavailable"
+        private set
+
+    fun recordPassiveCheck(outcome: LivenessOutcome, available: Boolean) {
+        passiveCheck = if (!available) "unavailable" else when (outcome) {
+            LivenessOutcome.PASSED -> "live"
+            LivenessOutcome.SPOOF_SUSPECTED -> "spoof_suspected"
+            LivenessOutcome.PENDING -> "inconclusive"
+        }
+    }
+
     /** Feed one frame. `null` means no face was detected. */
     fun accept(sample: FaceSample?): LivenessPhase {
         framesSeen++
@@ -247,14 +266,15 @@ class LivenessDetector(val challenge: LivenessChallenge) {
      */
     fun resultDigest(): ByteArray {
         val summary = buildString {
-            append("v1|")
+            append("v2|")
             append(challenge.wireName).append('|')
             append(phase.name).append('|')
             append(framesSeen).append('|')
             append(facesSeen).append('|')
             append(Math.round(extremeYaw)).append('|')
             append(Math.round(minEyeOpen * 100)).append('|')
-            append(Math.round(maxSmile * 100))
+            append(Math.round(maxSmile * 100)).append('|')
+            append(passiveCheck)
         }
         return MessageDigest.getInstance("SHA-256").digest(summary.toByteArray())
     }

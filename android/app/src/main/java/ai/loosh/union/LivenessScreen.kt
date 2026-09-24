@@ -40,6 +40,7 @@ import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
+import android.graphics.Bitmap
 import java.util.concurrent.Executors
 
 /**
@@ -142,6 +143,13 @@ private fun LivenessCamera(
     var hint by remember { mutableStateOf(detector.hint()) }
     var finished by remember { mutableStateOf(false) }
 
+    // The passive texture check. Null when this device cannot run it, which is
+    // surfaced rather than silently dropped - see SpoofClassifier.
+    val classifier = remember { SpoofClassifier.createOrNull(context) }
+    DisposableEffect(classifier) { onDispose { classifier?.close() } }
+    val fusion = remember(challenge) { LivenessFusion() }
+    var spoofSuspected by remember { mutableStateOf(false) }
+
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     DisposableEffect(Unit) { onDispose { analysisExecutor.shutdown() } }
 
@@ -188,10 +196,22 @@ private fun LivenessCamera(
 
                     analysis.setAnalyzer(
                         analysisExecutor,
-                        faceAnalyzer(faceDetector) { sample ->
+                        faceAnalyzer(faceDetector, classifier, fusion) { sample ->
                             val phase = detector.accept(sample)
-                            hint = detector.hint()
-                            if (phase == LivenessPhase.PASSED && !finished) {
+                            val outcome = fusion.outcome(phase == LivenessPhase.PASSED)
+                            detector.recordPassiveCheck(outcome, classifier != null)
+                            spoofSuspected = fusion.spoofSuspected
+                            hint = when {
+                                spoofSuspected ->
+                                    "That looks like a photo or a screen. " +
+                                        "Try again with your own face."
+                                else -> detector.hint()
+                            }
+                            // Both checks, or the classifier being genuinely
+                            // unavailable on this device. Never a spoof.
+                            val ready = outcome == LivenessOutcome.PASSED ||
+                                (classifier == null && phase == LivenessPhase.PASSED)
+                            if (ready && !finished) {
                                 finished = true
                                 onPassed(detector.resultDigestHex())
                             }
@@ -228,6 +248,8 @@ private fun LivenessCamera(
 @androidx.annotation.OptIn(ExperimentalGetImage::class)
 private fun faceAnalyzer(
     faceDetector: com.google.mlkit.vision.face.FaceDetector,
+    classifier: SpoofClassifier?,
+    fusion: LivenessFusion,
     onSample: (FaceSample?) -> Unit,
 ) = ImageAnalysis.Analyzer { proxy ->
     val media = proxy.image
@@ -237,13 +259,35 @@ private fun faceAnalyzer(
     }
     faceDetector.process(InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees))
         .addOnSuccessListener { faces ->
+            val face = faces.firstOrNull()
+            if (face != null && classifier != null) {
+                // Best effort: a frame we cannot crop or score is simply not
+                // evidence either way, never counted as a spoof.
+                runCatching {
+                    proxy.toBitmap()?.let { frame ->
+                        val box = FaceBox(
+                            face.boundingBox.left, face.boundingBox.top,
+                            face.boundingBox.right, face.boundingBox.bottom,
+                        )
+                        val crop = spoofCropRect(box, frame.width, frame.height)
+                        val cropped = Bitmap.createBitmap(
+                            frame, crop.left, crop.top,
+                            crop.width.coerceAtLeast(1), crop.height.coerceAtLeast(1),
+                        )
+                        val scaled = Bitmap.createScaledBitmap(
+                            cropped, SpoofModel.INPUT_SIDE, SpoofModel.INPUT_SIDE, true
+                        )
+                        classifier.classify(scaled)?.let(fusion::observe)
+                    }
+                }
+            }
             onSample(
-                faces.firstOrNull()?.let { face ->
+                face?.let {
                     FaceSample(
-                        leftEyeOpen = face.leftEyeOpenProbability,
-                        rightEyeOpen = face.rightEyeOpenProbability,
-                        headYawDeg = face.headEulerAngleY,
-                        smiling = face.smilingProbability,
+                        leftEyeOpen = it.leftEyeOpenProbability,
+                        rightEyeOpen = it.rightEyeOpenProbability,
+                        headYawDeg = it.headEulerAngleY,
+                        smiling = it.smilingProbability,
                     )
                 }
             )

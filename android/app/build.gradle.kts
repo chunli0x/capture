@@ -26,6 +26,12 @@ android {
         buildConfigField("String", "API_BASE", "\"$apiBase\"")
     }
 
+    androidResources {
+        // LiteRT memory-maps the model straight out of the APK; a compressed
+        // asset cannot be mapped and has to be unpacked to disk first.
+        noCompress += "tflite"
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true
@@ -75,6 +81,7 @@ dependencies {
     implementation(libs.camerax.lifecycle)
     implementation(libs.camerax.view)
     implementation(libs.mlkit.face.detection)
+    implementation(libs.litert)
 
     testImplementation(libs.junit)
 }
