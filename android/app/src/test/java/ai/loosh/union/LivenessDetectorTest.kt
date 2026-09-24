@@ -233,4 +233,37 @@ class LivenessDetectorTest {
             assertTrue(detector.hint().isNotBlank())
         }
     }
+
+    // -- what the digest records about the passive check ------------------------
+
+    @Test
+    fun `an unavailable classifier is recorded, not silently omitted`() {
+        // The whole point of failing visibly: an attestation minted from this
+        // session must be distinguishable from one where both checks ran.
+        val withModel = LivenessDetector(LivenessChallenge.BLINK)
+        withModel.hold(face())
+        withModel.recordPassiveCheck(LivenessOutcome.PASSED, available = true)
+
+        val withoutModel = LivenessDetector(LivenessChallenge.BLINK)
+        withoutModel.hold(face())
+        withoutModel.recordPassiveCheck(LivenessOutcome.PASSED, available = false)
+
+        assertEquals("live", withModel.passiveCheck)
+        assertEquals("unavailable", withoutModel.passiveCheck)
+        assertNotEquals(withModel.resultDigestHex(), withoutModel.resultDigestHex())
+    }
+
+    @Test
+    fun `a suspected spoof is recorded distinctly`() {
+        val detector = LivenessDetector(LivenessChallenge.BLINK)
+        detector.recordPassiveCheck(LivenessOutcome.SPOOF_SUSPECTED, available = true)
+        assertEquals("spoof_suspected", detector.passiveCheck)
+    }
+
+    @Test
+    fun `the passive check defaults to unavailable before anything runs`() {
+        // Fail-safe default: a detector that was never told about the
+        // classifier must not claim the texture check happened.
+        assertEquals("unavailable", LivenessDetector(LivenessChallenge.BLINK).passiveCheck)
+    }
 }

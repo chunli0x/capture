@@ -19,6 +19,14 @@ coil = "3.6.2"
 # locally: no image leaves the device, which is the claim the demo makes.
 camerax = "1.6.2"
 mlkitFace = "16.1.7"
+# LiteRT runs the silent-face anti-spoofing model on device.
+#
+# Pinned below 2.1.6 deliberately. From 2.1.6 the runtime pulls in a separate
+# `litert-api` artifact that declares the SAME namespace
+# (com.google.ai.edge.litert), and AGP 9 rejects two libraries sharing one -
+# the manifest merger fails before anything compiles. 2.1.5 is the newest
+# release without that split.
+litert = "2.1.5"
 junit = "4.13.2"
 
 [libraries]
@@ -41,6 +49,7 @@ camerax-camera2 = { group = "androidx.camera", name = "camera-camera2", version.
 camerax-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
 camerax-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 mlkit-face-detection = { group = "com.google.mlkit", name = "face-detection", version.ref = "mlkitFace" }
+litert = { group = "com.google.ai.edge.litert", name = "litert", version.ref = "litert" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]

@@ -56,6 +56,44 @@ Two things follow, and both are the PM's call, not a build decision:
 2. **"We could run on top of OpenPass" should not be said** until someone can
    name the integration.
 
+## The passive check, added alongside the motion challenge
+
+The motion challenge closes the still-image attack and nothing else. A **video
+replay** of the right person blinking satisfies it, because the motion really
+is there. So a second, passive check runs beside it, and both must pass.
+
+**Model:** `litert-community/Silent-Face-Anti-Spoofing-LiteRT` — MiniFASNetV2
+at the 2.7 crop scale, Apache-2.0, verified before use (1,850,744 bytes,
+sha256 `4ff758f4…08e1b2`, `TFL3` magic) and shipped in
+`android/app/src/main/assets/silentface.tflite`. Input `[1,3,80,80]` NCHW,
+**BGR**, `x/255`, from a crop ~2.7× the face box; output is a 3-way softmax
+where class 1 is live.
+
+Everything decidable is a pure function with tests — crop geometry, channel
+order, tensor layout, normalisation, the output reading, and the fusion
+policy. Each of those can be wrong in a way that still produces a
+correctly-shaped tensor the model will happily score, where the only symptom
+is a classifier that appears to guess.
+
+**When the model will not load**, on an accelerator that cannot compile the
+graph or a device missing the native library, it fails *visibly*: the passive
+check is marked `unavailable` and that value is folded into the liveness proof
+hash. A session where only the motion challenge ran therefore produces a
+different proof from one where both did, so an attestation records which
+checks actually happened rather than implying both. Failing closed would brick
+liveness on that device; failing open silently while still saying "human
+confirmed" is the dishonest option and the easier one to ship by accident.
+
+**What it still does not buy.** The upstream project ensembles two MiniFASNets
+(crop scales 2.7 and 4.0) plus a face-quality gate; this ships one of them, so
+expect it to be weaker than the paper. And the server still cannot see the
+sensor — a modified build can report success without opening the camera.
+Device attestation remains the only answer to that, and remains out of scope.
+
+**Untuned.** `LIVE_THRESHOLD` is 0.70 and `minLiveFrames` is 5. Both are first
+guesses and are the numbers most likely to be wrong; they need real spoof
+attempts on a real device.
+
 ## What the on-device check actually claims
 
 The honest framing, carried over from this repo's existing discipline:
