@@ -110,6 +110,39 @@ Seeker ships with a hardware-backed wallet in every unit.
 
 So: put the work on the phone, and pay to the wallet that is already there.
 
+## User flow
+
+Two sides, meeting in the middle.
+
+### A contributor mints an attestation
+
+1. **Connect.** The app connects to an MWA wallet on Solana devnet. On a Seeker
+   the wallet is Seed Vault-backed.
+2. **Pick a campaign.** Ghost overlay (image-plane pose) or clip judgment. Each
+   has three modes: practice (truth shown), qualify (blind gate), and earn
+   (paid).
+3. **Qualify.** Pass the blind gate against gold-standard items before paid
+   work opens.
+4. **Do a paid task.** The backend grades it; only gold-standard items carry
+   measured accuracy.
+5. **Prove you're human.** A liveness check runs on device: a motion challenge
+   plus a passive anti-spoofing model. No image leaves the phone.
+6. **Attest.** One transaction, two instructions: `post_bond` escrows a HUMAN
+   bond, and the Solana Attestation Service records an attestation whose nonce
+   is that bond. The contributor signs as fee payer; the verifier partial-signs.
+7. **Verify.** The verify screen reads the attestation back from chain; the
+   network board shows running stats and the leaderboard.
+8. **Get paid.** The contributor claims USDC in a transaction they must sign.
+
+### An agent buys a judgment
+
+1. The agent hits a step it cannot resolve and calls `/v1/judge`.
+2. Jev routes it: if no human is needed, there is no charge.
+3. Otherwise the endpoint answers 402 Payment Required (x402 V2), the agent
+   pays USDC, and the request queues.
+4. Humans judge (quorum of three), the verdict lands, and the winner is paid
+   USDC over the same claim path.
+
 ## The ghost overlay
 
 The primary task. A labeler drags a translucent outline of a known object onto
@@ -218,6 +251,7 @@ not something the code already does.
 | Campaign | Task type | Status |
 |---|---|---|
 | Ghost overlay: image-plane pose | `ghost_pose` | live |
+| Clip judgment: two-choice verdict | `clip_judgment` | live |
 | Image grid labeling | `tap_grid` | live |
 | Robotics grasp annotation | `bounding_box` | queued |
 
@@ -252,9 +286,10 @@ signature from them at all, and the wallet approval prompt would be decorative.
 Here the transfer cannot land without it, and the tests assert that — the
 transaction fails verification until the wallet signs.
 
-Rewards are denominated in TAP, created by `scripts/bootstrap_devnet.sh`. TAP is
-ours on every cluster, so the devnet mint is the real token rather than a
-stand-in for someone else's.
+Payouts are denominated in USDC, falling back to TAP when no USDC mint is
+configured. On devnet the bootstrap script mints a USDC stand-in, because
+devnet has no USDC we control; on mainnet the claim path pays the canonical
+USDC mint.
 
 ## The demand side
 
