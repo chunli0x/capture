@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.db
+
+# Secrets — real signing keys. Never commit them.
+# The verifier key authorizes every attestation: anyone holding it can mint
+# attestations the chain will accept as ours.
+backend/.env
+backend/treasury.json
+backend/verifier.json
+*.json.key
+
+# Android / Gradle
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.apk
+*.aab
+.idea/
+*.iml
+captures/
+
+# OS
+.DS_Store
+
+# Generated datasets (rebuild with tapfarm.generator.dataset)
+backend/data/
+backend/.solana-cli.yml
+
+# Program keypair controls the program address and upgrade authority.
+programs/*/program-keypair.json
+target/
+
+# Bootstrap state (records created mints so a re-run reuses them)
+backend/.bootstrap-state.json
+
+backend/.venv/
