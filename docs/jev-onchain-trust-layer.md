@@ -213,7 +213,7 @@ live in things that are independently checkable:
 
 ### 2.3 Concrete dispute/slash mechanism
 
-- **What's staked**: the signer's own bond (a slashable stake token — TAP-
+- **What's staked**: the signer's own bond (a slashable stake token — HUMAN-
   equivalent, or the subnet's own dTAO/alpha stake for a Bittensor miner).
 - **Challenge window**: fixed duration after a root posts (e.g. matching
   union-bond's existing `challenge_window_seconds` pattern — reuse it).

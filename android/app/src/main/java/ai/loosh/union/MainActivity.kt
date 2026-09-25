@@ -205,7 +205,7 @@ private fun Header(state: UiState) {
         if (state.wallet != null) {
             Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    "%.4f TAP".format(state.uiTotalClaimable),
+                    "%.4f USDC".format(state.uiTotalClaimable),
                     fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold,
                     fontFamily = FontFamily.Monospace,
@@ -316,7 +316,7 @@ private fun CampaignsScreen(
         ) {
             Text(
                 if (state.claimable) {
-                    "Claim %.4f TAP".format(state.uiTotalClaimable)
+                    "Claim %.4f USDC".format(state.uiTotalClaimable)
                 } else {
                     "Claim"
                 }
@@ -622,7 +622,7 @@ private fun CampaignRow(campaign: Campaign, onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
             )
             Text(
-                "%.4f TAP per task".format(campaign.rewardPerTask / 1_000_000.0),
+                "%.4f USDC per task".format(campaign.rewardPerTask / 1_000_000.0),
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace,
                 color = Accent,
@@ -683,7 +683,7 @@ private fun ReferralCard(state: UiState) {
                 )
             }
             Text(
-                "%.4f TAP earned".format(referral.uiEarned),
+                "%.4f USDC earned".format(referral.uiEarned),
                 fontSize = 16.sp,
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -699,7 +699,7 @@ private fun ReferralCard(state: UiState) {
             )
             if (state.uiReferralUnclaimed > 0.0) {
                 Text(
-                    "%.4f TAP of your claimable balance is referral earnings".format(
+                    "%.4f USDC of your claimable balance is referral earnings".format(
                         state.uiReferralUnclaimed
                     ),
                     fontSize = 11.sp,

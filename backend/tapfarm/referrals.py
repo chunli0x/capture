@@ -18,9 +18,9 @@ Three rules keep it that way:
 - **No self-referral and no cycles.** A wallet cannot refer itself, and two
   wallets cannot refer each other, which would otherwise let a pair skim our
   margin twice for the same work.
-- **The referrer must have both stakes.** A slashable TAP bond so a referrer has
-  something at risk if the people they bring in produce garbage, plus the SKR
-  access stake.
+- **The referrer must have both stakes.** A slashable HUMAN bond so a referrer
+  has something at risk if the people they bring in produce garbage, plus the
+  SKR access stake.
 
 ## The sybil argument
 

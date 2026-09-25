@@ -36,8 +36,8 @@ def client(monkeypatch, tmp_path):
     build_pose_dataset(pose_dir, live_per_object=10, seed=4, write_images=False)
 
     test_settings = Settings(
-        tap_mint=str(Keypair().pubkey()),
-        tap_decimals=6,
+        usdc_mint=str(Keypair().pubkey()),
+        usdc_decimals=6,
         treasury_keypair_path=str(treasury_path),
         reward_per_task=REWARD,
         dataset_dir=str(grid),

@@ -97,32 +97,27 @@ def test_default_verifier_pubkey_is_the_one_the_brief_fixed():
 class TestMintSeparation:
     """Two roles sharing a mint would defeat the unslashability invariant."""
 
-    def test_human_bond_may_not_be_the_skr_access_gate(self):
+    def test_human_and_skr_must_differ(self):
         mint = str(Keypair().pubkey())
         with pytest.raises(ValueError, match="different mints"):
-            Settings(skr_mint=mint, human_mint=mint)
+            Settings(human_mint=mint, skr_mint=mint)
 
     def test_payroll_may_not_be_the_bond(self):
         mint = str(Keypair().pubkey())
         with pytest.raises(ValueError, match="different mints"):
             Settings(human_mint=mint, usdc_mint=mint)
 
-    def test_the_existing_tap_and_skr_rule_still_holds(self):
-        mint = str(Keypair().pubkey())
-        with pytest.raises(ValueError, match="different mints"):
-            Settings(tap_mint=mint, skr_mint=mint)
-
-    def test_four_distinct_mints_are_accepted(self):
+    def test_three_distinct_mints_are_accepted(self):
         cfg = Settings(
-            tap_mint=str(Keypair().pubkey()),
             skr_mint=str(Keypair().pubkey()),
             human_mint=str(Keypair().pubkey()),
             usdc_mint=str(Keypair().pubkey()),
         )
-        assert len({cfg.tap_mint, cfg.skr_mint, cfg.human_mint, cfg.usdc_mint}) == 4
+        assert len({cfg.skr_mint, cfg.human_mint, cfg.usdc_mint}) == 3
 
     def test_unset_mints_do_not_collide_with_each_other(self):
-        """Empty is "not configured", not a value - four blanks are fine."""
+        """Empty is "not configured", not a value - three blanks are fine."""
         cfg = Settings()
         assert cfg.human_mint == ""
         assert cfg.usdc_mint == ""
+        assert cfg.skr_mint == ""

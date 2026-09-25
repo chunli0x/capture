@@ -51,8 +51,8 @@ def env(monkeypatch, tmp_path):
     )
 
     test_settings = Settings(
-        tap_mint=str(Keypair().pubkey()),
-        tap_decimals=6,
+        usdc_mint=str(Keypair().pubkey()),
+        usdc_decimals=6,
         treasury_keypair_path=str(treasury_path),
         reward_per_task=REWARD,
         dataset_dir=str(grid),

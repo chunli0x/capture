@@ -36,10 +36,10 @@ ACCOUNT_DISCRIMINATOR_LEN = 8
 class Asset(IntEnum):
     """Mirrors the program's `Asset` enum; borsh encodes it as one byte.
 
-    TAP is the slashable bond, SKR the non-slashable access stake.
+    HUMAN is the slashable bond, SKR the non-slashable access stake.
     """
 
-    TAP = 0
+    HUMAN = 0
     SKR = 1
 
 
@@ -53,7 +53,7 @@ def config_pda(program_id: Pubkey) -> tuple[Pubkey, int]:
 
 
 def vault_pda(program_id: Pubkey, mint: Pubkey) -> tuple[Pubkey, int]:
-    """Vaults are per-mint, so TAP and SKR are held in separate accounts."""
+    """Vaults are per-mint, so HUMAN and SKR are held in separate accounts."""
     return Pubkey.find_program_address([VAULT_SEED, bytes(mint)], program_id)
 
 
@@ -65,9 +65,9 @@ def build_initialize(
     *,
     program_id: Pubkey,
     admin: Pubkey,
-    tap_mint: Pubkey,
+    human_mint: Pubkey,
     skr_mint: Pubkey,
-    min_tap_stake: int,
+    min_human_stake: int,
     min_skr_stake: int,
     cooldown_seconds: int,
     slash_authority: Pubkey,
@@ -75,7 +75,7 @@ def build_initialize(
     """Mirrors `Initialize`. Creates both vaults."""
     data = (
         instruction_discriminator("initialize")
-        + struct.pack("<Q", min_tap_stake)
+        + struct.pack("<Q", min_human_stake)
         + struct.pack("<Q", min_skr_stake)
         + struct.pack("<q", cooldown_seconds)
         + bytes(slash_authority)
@@ -86,9 +86,9 @@ def build_initialize(
         accounts=[
             AccountMeta(admin, is_signer=True, is_writable=True),
             AccountMeta(config_pda(program_id)[0], is_signer=False, is_writable=True),
-            AccountMeta(vault_pda(program_id, tap_mint)[0], is_signer=False, is_writable=True),
+            AccountMeta(vault_pda(program_id, human_mint)[0], is_signer=False, is_writable=True),
             AccountMeta(vault_pda(program_id, skr_mint)[0], is_signer=False, is_writable=True),
-            AccountMeta(tap_mint, is_signer=False, is_writable=False),
+            AccountMeta(human_mint, is_signer=False, is_writable=False),
             AccountMeta(skr_mint, is_signer=False, is_writable=False),
             AccountMeta(TOKEN_PROGRAM_ID, is_signer=False, is_writable=False),
             AccountMeta(SYSTEM_PROGRAM_ID, is_signer=False, is_writable=False),
@@ -187,7 +187,7 @@ def build_slash(
 ) -> Instruction:
     """Mirrors `Slash`. Only the configured slash authority may sign this.
 
-    There is no asset parameter: the program only ever slashes TAP. SKR is not
+    There is no asset parameter: the program only ever slashes HUMAN. SKR is not
     ours to confiscate, and leaving it off the interface makes that structural.
     """
     data = instruction_discriminator("slash") + struct.pack("<Q", amount)
@@ -208,12 +208,12 @@ def build_slash(
 class Config:
     admin: Pubkey
     slash_authority: Pubkey
-    tap_mint: Pubkey
+    human_mint: Pubkey
     skr_mint: Pubkey
-    min_tap_stake: int
+    min_human_stake: int
     min_skr_stake: int
     cooldown_seconds: int
-    total_tap_staked: int
+    total_human_staked: int
     total_skr_staked: int
     slashed_pool: int
     bump: int
@@ -229,22 +229,22 @@ class Position:
 @dataclass(frozen=True)
 class StakeAccount:
     contributor: Pubkey
-    tap: Position
+    human: Position
     skr: Position
     staked_at: int
     bump: int
 
     def position(self, asset: Asset) -> Position:
-        return self.tap if asset is Asset.TAP else self.skr
+        return self.human if asset is Asset.HUMAN else self.skr
 
-    def tier(self, min_tap_stake: int) -> int:
+    def tier(self, min_human_stake: int) -> int:
         """Mirrors `logic::tier_for`. Keyed on the slashable bond only."""
-        return 1 if min_tap_stake > 0 and self.tap.amount >= min_tap_stake else 0
+        return 1 if min_human_stake > 0 and self.human.amount >= min_human_stake else 0
 
-    def referral_eligible(self, min_tap_stake: int, min_skr_stake: int) -> bool:
+    def referral_eligible(self, min_human_stake: int, min_skr_stake: int) -> bool:
         """Mirrors `logic::referral_eligible`. Requires both stakes."""
         return (
-            self.tier(min_tap_stake) == 1
+            self.tier(min_human_stake) == 1
             and min_skr_stake > 0
             and self.skr.amount >= min_skr_stake
         )
@@ -261,25 +261,25 @@ def parse_config(data: bytes) -> Config:
     body = data[ACCOUNT_DISCRIMINATOR_LEN:]
     admin = Pubkey.from_bytes(body[0:32])
     slash_authority = Pubkey.from_bytes(body[32:64])
-    tap_mint = Pubkey.from_bytes(body[64:96])
+    human_mint = Pubkey.from_bytes(body[64:96])
     skr_mint = Pubkey.from_bytes(body[96:128])
     (
-        min_tap_stake,
+        min_human_stake,
         min_skr_stake,
         cooldown_seconds,
-        total_tap_staked,
+        total_human_staked,
         total_skr_staked,
         slashed_pool,
     ) = struct.unpack_from(_CONFIG_LAYOUT, body, 128)
     return Config(
         admin=admin,
         slash_authority=slash_authority,
-        tap_mint=tap_mint,
+        human_mint=human_mint,
         skr_mint=skr_mint,
-        min_tap_stake=min_tap_stake,
+        min_human_stake=min_human_stake,
         min_skr_stake=min_skr_stake,
         cooldown_seconds=cooldown_seconds,
-        total_tap_staked=total_tap_staked,
+        total_human_staked=total_human_staked,
         total_skr_staked=total_skr_staked,
         slashed_pool=slashed_pool,
         bump=body[128 + struct.calcsize(_CONFIG_LAYOUT)],
@@ -300,13 +300,13 @@ def _parse_position(body: bytes, offset: int) -> Position:
 def parse_stake_account(data: bytes) -> StakeAccount:
     body = data[ACCOUNT_DISCRIMINATOR_LEN:]
     contributor = Pubkey.from_bytes(body[0:32])
-    tap = _parse_position(body, 32)
+    human = _parse_position(body, 32)
     skr = _parse_position(body, 32 + _POSITION_SIZE)
     tail = 32 + 2 * _POSITION_SIZE
     (staked_at,) = struct.unpack_from("<q", body, tail)
     return StakeAccount(
         contributor=contributor,
-        tap=tap,
+        human=human,
         skr=skr,
         staked_at=staked_at,
         bump=body[tail + 8],

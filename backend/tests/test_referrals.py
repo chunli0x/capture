@@ -20,7 +20,7 @@ from tapfarm.referrals import (
 )
 
 ALICE, BOB, CAROL, DAVE = "alice", "bob", "carol", "dave"
-TASK_VALUE = 10_000  # 0.01 TAP, the default reward per task
+TASK_VALUE = 10_000  # 0.01 USDC, the default reward per task
 
 
 @pytest.fixture

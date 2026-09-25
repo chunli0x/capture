@@ -12,7 +12,7 @@ here so the submission can be honest about the line between built and planned.
 - Android app, MWA wallet connect, campaign-driven task rendering
 - Tap-grid labeling campaign over a synthetic dataset
 - Contributor-signed SKR claim on devnet
-- On-chain two-token stake program (Anchor): slashable TAP bond, non-slashable
+- On-chain two-token stake program (Anchor): slashable HUMAN bond, non-slashable
   SKR access stake, per-mint vaults, cooldown and slashing
 - Gold-standard accuracy gating, wired as the slashing oracle
 - Referral accounting funded from platform margin, depth one, gated on both
@@ -46,8 +46,8 @@ listed rather than quietly implied to work, because the gap between
 misled.
 
 **One real mainnet SKR stake in the demo.** Everything else runs on devnet with
-TAP; a single genuine mainnet SKR stake transaction shows the SKR integration is
-real rather than simulated.
+HUMAN and a USDC stand-in; a single genuine mainnet SKR stake transaction shows
+the SKR integration is real rather than simulated.
 
 **Caller authentication.** Every endpoint takes a contributor pubkey as a plain
 string and trusts it. Anyone can name someone else's wallet: drain a victim's
@@ -67,8 +67,8 @@ only by the configured authority - and **no running code calls it**. Rolling
 gold-standard accuracy is computed on every submission but never triggers a
 burn, and there is no instruction to pay `slashed_pool` back out to honest
 contributors. Two pieces are missing: a backend trigger, and a
-rewards-distribution instruction. Until both land, slashed TAP would simply sit
-in the vault.
+rewards-distribution instruction. Until both land, slashed HUMAN would simply
+sit in the vault.
 
 **Tier wiring.** `GOLD_RATE_BY_TIER` says a bonded contributor is verified at 5%
 instead of 20%, and the stake program can report the tier - but `next_task` is
@@ -76,7 +76,7 @@ always called with tier 0, so the reduced rate never fires. The fix mirrors what
 referral eligibility already does: read the position through `stake_reader`.
 
 **Config updates and authority rotation.** `Config` is write-once. There is no
-instruction to rotate the slash authority or change `min_tap_stake`,
+instruction to rotate the slash authority or change `min_human_stake`,
 `min_skr_stake` or the cooldown, so a compromised authority key cannot be
 replaced without redeploying to a new program id.
 

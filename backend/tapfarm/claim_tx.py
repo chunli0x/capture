@@ -13,7 +13,7 @@ transaction it must sign for the transfer to land at all.
 
 Instruction order:
   1. create_idempotent_associated_token_account  - payer: contributor
-     No-ops if the contributor already has a TAP token account, so the first
+     No-ops if the contributor already has a USDC token account, so the first
      claim and the fiftieth take the same code path.
   2. transfer_checked  - authority: treasury
      `transfer_checked` over `transfer` so the mint and decimals are validated

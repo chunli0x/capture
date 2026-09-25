@@ -17,7 +17,7 @@ RadiantsDAO, September 8 – October 8 2026.
 > **Status: week 3 of 4.** The labeling engine (ghost overlay and clip
 > judgment), the verifier-signed attestation layer, both on-chain programs, and
 > the demand side (agents buying a human judgment over x402, with Jev routing
-> escalation) are built. A plain `pytest -q` reports **504 passed, 13 skipped**
+> escalation) are built. A plain `pytest -q` reports **503 passed, 13 skipped**
 > (the skips are on-chain tests behind `TAPFARM_E2E=1`), alongside **42** Rust
 > logic tests across both programs. The on-device MWA handshake is the open
 > item. See [docs/SPIKE.md](docs/SPIKE.md) for the full ledger of what is
@@ -42,14 +42,16 @@ pays over **x402 V2** and the request queues for a quorum of humans to judge.
 
 ## Tokens
 
-Four mints, four jobs. The split is not cosmetic — it decides what we are allowed
-to destroy.
+Three mints, three jobs. The split is not cosmetic — it decides what we are
+allowed to destroy.
 
-**TAP** is ours: what contributors earn, and the **slashable** quality bond.
-`slash` is implemented on the stake program and tested on-chain, but **nothing
-in the backend calls it yet** — a bond cannot currently be burned by bad work,
-because no running code path triggers it. Wiring that up is listed in
-[PLATFORM.md](docs/PLATFORM.md) under work that is decided and not yet built.
+**HUMAN** is the slashable bond — the single asset a slash may ever touch. It is
+the labeling quality bond in the stake program and the attestation bond behind
+every credential. `slash` is implemented on the stake program and tested
+on-chain, but **nothing in the backend calls it yet** — a bond cannot currently
+be burned by bad work, because no running code path triggers it. Wiring that up
+is listed in [PLATFORM.md](docs/PLATFORM.md) under work that is decided and not
+yet built.
 
 **SKR** is Solana Mobile's. We never mint it and we never burn it. It is a
 **non-slashable** access stake: locking real SKR signals platform commitment and
@@ -63,14 +65,8 @@ mint to occupy the access-stake slot in tests. It is a test fixture, is never
 shown to a user as SKR, and on mainnet that slot holds the canonical SKR mint —
 the program cannot tell the difference, which is the point.
 
-**HUMAN** is the attestation bond: the slashable stake behind an attestation.
-It is a separate mint from the access gate for the same reason the stake program
-takes two mints — so that "SKR is never slashed" is a fact about the system
-rather than a promise about our future conduct. Slashing is implemented but not
-yet enforced.
-
-**USDC** is payroll. Contributors are paid a stablecoin, never the token. On
-devnet the bootstrap script mints a stand-in because devnet has no USDC we
+**USDC** is payroll. Contributors are paid a stablecoin, never a project token.
+On devnet the bootstrap script mints a stand-in because devnet has no USDC we
 control; on mainnet this slot holds the canonical USDC mint and the treasury
 holds a balance rather than mint authority. The stand-in is never shown as if it
 were real USDC.
@@ -79,8 +75,8 @@ were real USDC.
 
 | | Default | Why |
 |---|---|---|
-| Reward per task | 0.01 TAP | 100 tasks to a whole token — visible movement, not dust |
-| Minimum TAP bond | 0.1 TAP (~10 tasks) | Demo-tuned. In production a bond must exceed what a burst of bad labeling extracts before the accuracy window catches it |
+| Reward per task | 0.01 USDC | 100 tasks to a whole dollar — visible movement, not dust |
+| Minimum HUMAN bond | 0.1 HUMAN (~10 tasks) | Demo-tuned. In production a bond must exceed what a burst of bad labeling extracts before the accuracy window catches it |
 | Minimum SKR stake | 1 SKR | A commitment signal, not collateral — only has to be inconvenient to fake at scale |
 | Unstake cooldown | 24h | Long enough to score a bad actor before they exit, short enough not to feel punitive |
 | Platform fee | 20% of task value | Our margin |
@@ -104,7 +100,7 @@ Four rules keep this one on the right side:
   first hop, so there is no downline — and a downline is what makes a pyramid.
 - **No self-referral, no mutual referral.** A wallet cannot refer itself, and
   two wallets cannot refer each other and skim the fee twice for the same work.
-- **Both stakes required.** A referrer needs a slashable TAP bond and the SKR
+- **Both stakes required.** A referrer needs a slashable HUMAN bond and the SKR
   access stake, so they have something at risk if the people they bring in
   produce garbage.
 - **No pure recruiters.** Referral earnings are gated behind the same accuracy
@@ -303,10 +299,9 @@ signature from them at all, and the wallet approval prompt would be decorative.
 Here the transfer cannot land without it, and the tests assert that — the
 transaction fails verification until the wallet signs.
 
-Payouts are denominated in USDC, falling back to TAP when no USDC mint is
-configured. On devnet the bootstrap script mints a USDC stand-in, because
-devnet has no USDC we control; on mainnet the claim path pays the canonical
-USDC mint.
+Payouts are denominated in USDC, always. On devnet the bootstrap script mints a
+USDC stand-in, because devnet has no USDC we control; on mainnet the claim path
+pays the canonical USDC mint.
 
 ## How the demand side works
 
@@ -371,7 +366,7 @@ backend/
   tapfarm/sas.py         Solana Attestation Service client
   tapfarm/liveness.py    Liveness sessions and proof hash
 programs/
-  tapfarm-stake/         Anchor program: TAP bond, SKR access stake, slashing
+  tapfarm-stake/         Anchor program: HUMAN bond, SKR access stake, slashing
   union-bond/            Anchor program: HUMAN attestation bond, challenge/slash/release
 scripts/    Devnet bootstrap and program deploy
 docs/       Spike notes, platform roadmap
@@ -418,7 +413,7 @@ Three rules do the work, each specified by a test in
   who was accurate and then starts scripting loses eligibility rather than
   coasting on history.
 
-**The TAP bond.** Detection alone is a treadmill — a scripter whose accuracy
+**The HUMAN bond.** Detection alone is a treadmill — a scripter whose accuracy
 collapses just funds a new wallet, so the design puts a bond at risk and makes
 rolling accuracy the signal that would burn it.
 
@@ -471,7 +466,7 @@ absent during the blind run.
 cd backend && pip install -r requirements.txt
 python -m tapfarm.generator.dataset --out data/tapgrid --count 10000
 python -m tapfarm.pose.dataset --out data/pose
-pytest -q                                                    # 504, offline
+pytest -q                                                    # 503, offline
 cargo test -p tapfarm-stake -p union-bond --lib              # 42, program logic
 uvicorn tapfarm.main:app --host 0.0.0.0 --port 8000
 

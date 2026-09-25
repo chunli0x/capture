@@ -1,24 +1,26 @@
-//! Tap stake program - two stakes, two jobs.
+//! Stake program - two stakes, two jobs.
 //!
-//! **TAP** is our token and the slashable quality bond. Gold-standard tasks
-//! detect bad labeling, but detection with no cost is a treadmill: a scripter
-//! whose accuracy collapses just funds a new wallet. The bond makes bad
-//! labeling expensive, which is what makes the data worth buying.
+//! **HUMAN** is the slashable quality bond. Gold-standard tasks detect bad
+//! labeling, but detection with no cost is a treadmill: a scripter whose
+//! accuracy collapses just funds a new wallet. The bond makes bad labeling
+//! expensive, which is what makes the data worth buying. HUMAN is the one
+//! slashable asset across the system — it is also the attestation bond in
+//! `union-bond`.
 //!
 //! **SKR** is Solana Mobile's token and is **never slashed**. It is an access
 //! stake: locking it signals commitment to the platform and unlocks referral
 //! earnings. Burning someone else's token as a punishment is not ours to do,
-//! so `slash` can only ever touch the TAP vault - enforced here rather than by
+//! so `slash` can only ever touch the HUMAN vault - enforced here rather than by
 //! convention.
 //!
 //! ```text
-//!   stake(Tap) ──► quality tier          stake(Skr) ──► referral eligibility
+//!   stake(Human) ──► quality tier         stake(Skr) ──► referral eligibility
 //!     │                                     │
 //!     ├─ slash ──► burned to reward pool    │  (never slashable)
 //!     │                                     │
 //!     └─ request_unstake ─► cooldown ─► withdraw ◄──────┘
 //!                             ▲
-//!                             └── slashing still reaches the TAP bond here
+//!                             └── slashing still reaches the HUMAN bond here
 //! ```
 //!
 //! `request_unstake` deliberately does **not** reduce the bond. If it did, a
@@ -39,7 +41,7 @@ pub const VAULT_SEED: &[u8] = b"vault";
 /// selects which mint the passed accounts must match.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Asset {
-    Tap,
+    Human,
     Skr,
 }
 
@@ -48,11 +50,11 @@ pub enum Asset {
 pub mod logic {
     /// Tier 0 is the unstaked onboarding tier; tier 1 unlocks the higher rate.
     ///
-    /// Keyed on the TAP bond alone: what earns a contributor better-paid work
+    /// Keyed on the HUMAN bond alone: what earns a contributor better-paid work
     /// is collateral we can actually slash if the work is bad. Holding SKR says
     /// nothing about label quality.
-    pub fn tier_for(tap_staked: u64, min_tap_stake: u64) -> u8 {
-        if min_tap_stake > 0 && tap_staked >= min_tap_stake {
+    pub fn tier_for(human_staked: u64, min_human_stake: u64) -> u8 {
+        if min_human_stake > 0 && human_staked >= min_human_stake {
             1
         } else {
             0
@@ -62,12 +64,12 @@ pub mod logic {
     /// Referral earnings require both stakes: a slashable bond so a referrer
     /// has something at risk, and an SKR stake as platform commitment.
     pub fn referral_eligible(
-        tap_staked: u64,
-        min_tap_stake: u64,
+        human_staked: u64,
+        min_human_stake: u64,
         skr_staked: u64,
         min_skr_stake: u64,
     ) -> bool {
-        tier_for(tap_staked, min_tap_stake) == 1
+        tier_for(human_staked, min_human_stake) == 1
             && min_skr_stake > 0
             && skr_staked >= min_skr_stake
     }
@@ -100,16 +102,16 @@ pub mod tapfarm_stake {
 
     pub fn initialize(
         ctx: Context<Initialize>,
-        min_tap_stake: u64,
+        min_human_stake: u64,
         min_skr_stake: u64,
         cooldown_seconds: i64,
         slash_authority: Pubkey,
     ) -> Result<()> {
-        require!(min_tap_stake > 0, StakeError::InvalidMinStake);
+        require!(min_human_stake > 0, StakeError::InvalidMinStake);
         require!(min_skr_stake > 0, StakeError::InvalidMinStake);
         require!(cooldown_seconds >= 0, StakeError::InvalidCooldown);
         require_keys_neq!(
-            ctx.accounts.tap_mint.key(),
+            ctx.accounts.human_mint.key(),
             ctx.accounts.skr_mint.key(),
             StakeError::DuplicateMint
         );
@@ -117,12 +119,12 @@ pub mod tapfarm_stake {
         let config = &mut ctx.accounts.config;
         config.admin = ctx.accounts.admin.key();
         config.slash_authority = slash_authority;
-        config.tap_mint = ctx.accounts.tap_mint.key();
+        config.human_mint = ctx.accounts.human_mint.key();
         config.skr_mint = ctx.accounts.skr_mint.key();
-        config.min_tap_stake = min_tap_stake;
+        config.min_human_stake = min_human_stake;
         config.min_skr_stake = min_skr_stake;
         config.cooldown_seconds = cooldown_seconds;
-        config.total_tap_staked = 0;
+        config.total_human_staked = 0;
         config.total_skr_staked = 0;
         config.slashed_pool = 0;
         config.bump = ctx.bumps.config;
@@ -173,8 +175,8 @@ pub mod tapfarm_stake {
             amount,
             total: new_total,
             tier: logic::tier_for(
-                ctx.accounts.stake_account.tap.amount,
-                config.min_tap_stake
+                ctx.accounts.stake_account.human.amount,
+                config.min_human_stake
             ),
         });
         Ok(())
@@ -266,35 +268,35 @@ pub mod tapfarm_stake {
         Ok(())
     }
 
-    /// Burn part of a TAP bond. Called by the slash authority when a
+    /// Burn part of a HUMAN bond. Called by the slash authority when a
     /// contributor's rolling gold-standard accuracy falls below threshold; the
     /// scoring rules live in the backend (tapfarm/scoring.py), which is the
     /// oracle here.
     ///
     /// There is no asset parameter on purpose. SKR is Solana Mobile's token and
-    /// confiscating it is not ours to do, so the only slashable stake is TAP -
+    /// confiscating it is not ours to do, so the only slashable stake is HUMAN -
     /// a property of the interface, not of how carefully it is called.
     ///
-    /// Slashed TAP stays in the vault attributed to `slashed_pool`, to be paid
+    /// Slashed HUMAN stays in the vault attributed to `slashed_pool`, to be paid
     /// back out as campaign rewards: honest contributors are paid out of
     /// dishonest ones.
     pub fn slash(ctx: Context<Slash>, amount: u64) -> Result<()> {
         require!(amount > 0, StakeError::ZeroAmount);
 
-        let slashed = logic::clamp_slash(ctx.accounts.stake_account.tap.amount, amount);
+        let slashed = logic::clamp_slash(ctx.accounts.stake_account.human.amount, amount);
         require!(slashed > 0, StakeError::NothingToSlash);
 
         let contributor = ctx.accounts.stake_account.contributor;
         let stake_account = &mut ctx.accounts.stake_account;
-        stake_account.tap.amount = stake_account
-            .tap
+        stake_account.human.amount = stake_account
+            .human
             .amount
             .checked_sub(slashed)
             .ok_or(StakeError::MathOverflow)?;
-        let remaining = stake_account.tap.amount;
+        let remaining = stake_account.human.amount;
 
         let config = &mut ctx.accounts.config;
-        config.total_tap_staked = config.total_tap_staked.saturating_sub(slashed);
+        config.total_human_staked = config.total_human_staked.saturating_sub(slashed);
         config.slashed_pool = config
             .slashed_pool
             .checked_add(slashed)
@@ -321,12 +323,12 @@ pub struct Position {
 pub struct Config {
     pub admin: Pubkey,
     pub slash_authority: Pubkey,
-    pub tap_mint: Pubkey,
+    pub human_mint: Pubkey,
     pub skr_mint: Pubkey,
-    pub min_tap_stake: u64,
+    pub min_human_stake: u64,
     pub min_skr_stake: u64,
     pub cooldown_seconds: i64,
-    pub total_tap_staked: u64,
+    pub total_human_staked: u64,
     pub total_skr_staked: u64,
     pub slashed_pool: u64,
     pub bump: u8,
@@ -335,7 +337,7 @@ pub struct Config {
 impl Config {
     fn mint_for(&self, asset: Asset) -> Pubkey {
         match asset {
-            Asset::Tap => self.tap_mint,
+            Asset::Human => self.human_mint,
             Asset::Skr => self.skr_mint,
         }
     }
@@ -347,7 +349,7 @@ impl Config {
 
     fn add_total(&mut self, asset: Asset, amount: u64) -> Result<()> {
         let total = match asset {
-            Asset::Tap => &mut self.total_tap_staked,
+            Asset::Human => &mut self.total_human_staked,
             Asset::Skr => &mut self.total_skr_staked,
         };
         *total = total.checked_add(amount).ok_or(StakeError::MathOverflow)?;
@@ -356,7 +358,7 @@ impl Config {
 
     fn sub_total(&mut self, asset: Asset, amount: u64) {
         let total = match asset {
-            Asset::Tap => &mut self.total_tap_staked,
+            Asset::Human => &mut self.total_human_staked,
             Asset::Skr => &mut self.total_skr_staked,
         };
         *total = total.saturating_sub(amount);
@@ -367,7 +369,7 @@ impl Config {
 #[derive(InitSpace)]
 pub struct StakeAccount {
     pub contributor: Pubkey,
-    pub tap: Position,
+    pub human: Position,
     pub skr: Position,
     pub staked_at: i64,
     pub bump: u8,
@@ -376,14 +378,14 @@ pub struct StakeAccount {
 impl StakeAccount {
     pub fn position(&self, asset: Asset) -> &Position {
         match asset {
-            Asset::Tap => &self.tap,
+            Asset::Human => &self.human,
             Asset::Skr => &self.skr,
         }
     }
 
     pub fn position_mut(&mut self, asset: Asset) -> &mut Position {
         match asset {
-            Asset::Tap => &mut self.tap,
+            Asset::Human => &mut self.human,
             Asset::Skr => &mut self.skr,
         }
     }
@@ -406,12 +408,12 @@ pub struct Initialize<'info> {
     #[account(
         init,
         payer = admin,
-        seeds = [VAULT_SEED, tap_mint.key().as_ref()],
+        seeds = [VAULT_SEED, human_mint.key().as_ref()],
         bump,
-        token::mint = tap_mint,
+        token::mint = human_mint,
         token::authority = config,
     )]
-    pub tap_vault: Account<'info, TokenAccount>,
+    pub human_vault: Account<'info, TokenAccount>,
 
     #[account(
         init,
@@ -423,7 +425,7 @@ pub struct Initialize<'info> {
     )]
     pub skr_vault: Account<'info, TokenAccount>,
 
-    pub tap_mint: Account<'info, Mint>,
+    pub human_mint: Account<'info, Mint>,
     pub skr_mint: Account<'info, Mint>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
@@ -566,7 +568,7 @@ pub enum StakeError {
     InvalidMinStake,
     #[msg("cooldown cannot be negative")]
     InvalidCooldown,
-    #[msg("TAP and SKR mints must differ")]
+    #[msg("HUMAN and SKR mints must differ")]
     DuplicateMint,
     #[msg("amount must be greater than zero")]
     ZeroAmount,
@@ -594,27 +596,27 @@ pub enum StakeError {
 mod tests {
     use super::logic::*;
 
-    const MIN_TAP: u64 = 100_000; // 0.1 TAP
+    const MIN_HUMAN: u64 = 100_000; // 0.1 HUMAN
     const MIN_SKR: u64 = 1_000_000; // 1 SKR
 
     #[test]
     fn unstaked_contributor_is_tier_zero() {
-        assert_eq!(tier_for(0, MIN_TAP), 0);
+        assert_eq!(tier_for(0, MIN_HUMAN), 0);
     }
 
     #[test]
     fn below_minimum_is_still_tier_zero() {
-        assert_eq!(tier_for(MIN_TAP - 1, MIN_TAP), 0);
+        assert_eq!(tier_for(MIN_HUMAN - 1, MIN_HUMAN), 0);
     }
 
     #[test]
     fn exactly_the_minimum_unlocks_the_staked_tier() {
-        assert_eq!(tier_for(MIN_TAP, MIN_TAP), 1);
+        assert_eq!(tier_for(MIN_HUMAN, MIN_HUMAN), 1);
     }
 
     #[test]
     fn above_the_minimum_stays_tier_one() {
-        assert_eq!(tier_for(MIN_TAP * 50, MIN_TAP), 1);
+        assert_eq!(tier_for(MIN_HUMAN * 50, MIN_HUMAN), 1);
     }
 
     #[test]
@@ -625,28 +627,28 @@ mod tests {
     #[test]
     fn skr_alone_does_not_unlock_the_work_tier() {
         // Holding SKR says nothing about label quality.
-        assert_eq!(tier_for(0, MIN_TAP), 0);
-        assert!(!referral_eligible(0, MIN_TAP, MIN_SKR * 100, MIN_SKR));
+        assert_eq!(tier_for(0, MIN_HUMAN), 0);
+        assert!(!referral_eligible(0, MIN_HUMAN, MIN_SKR * 100, MIN_SKR));
     }
 
     #[test]
     fn referral_needs_both_stakes() {
-        assert!(referral_eligible(MIN_TAP, MIN_TAP, MIN_SKR, MIN_SKR));
+        assert!(referral_eligible(MIN_HUMAN, MIN_HUMAN, MIN_SKR, MIN_SKR));
     }
 
     #[test]
     fn referral_denied_without_the_slashable_bond() {
-        assert!(!referral_eligible(MIN_TAP - 1, MIN_TAP, MIN_SKR, MIN_SKR));
+        assert!(!referral_eligible(MIN_HUMAN - 1, MIN_HUMAN, MIN_SKR, MIN_SKR));
     }
 
     #[test]
     fn referral_denied_without_the_skr_stake() {
-        assert!(!referral_eligible(MIN_TAP, MIN_TAP, MIN_SKR - 1, MIN_SKR));
+        assert!(!referral_eligible(MIN_HUMAN, MIN_HUMAN, MIN_SKR - 1, MIN_SKR));
     }
 
     #[test]
     fn referral_denied_when_nothing_is_staked() {
-        assert!(!referral_eligible(0, MIN_TAP, 0, MIN_SKR));
+        assert!(!referral_eligible(0, MIN_HUMAN, 0, MIN_SKR));
     }
 
     #[test]

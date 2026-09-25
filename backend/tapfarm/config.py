@@ -2,16 +2,17 @@
 
 ## The tokens
 
-**USDC** is payroll. Contributors are paid a stablecoin, never the token, so
-the token is not what anyone is working for.
-**HUMAN** is the attestation bond: the slashable stake behind an attestation.
-Slashing is not wired in v1 - the bond is staked and shown, enforcement is v2 -
-but HUMAN is the asset the slash path will ever be able to touch.
+Three mints, three jobs. The split is not cosmetic — it decides what we are
+allowed to destroy.
+
+**USDC** is payroll. Contributors are paid a stablecoin, never a project token,
+so the token is not what anyone is working for.
+**HUMAN** is the slashable bond — the single asset a slash path may ever touch.
+It backs both the attestation (`union-bond`) and the labeling quality bond
+(`tapfarm-stake`). Slashing is not wired in v1 - the bond is staked and shown,
+enforcement is v2 - but HUMAN is the only asset the slash path will ever reach.
 **SKR** is Solana Mobile's: a non-slashable access gate. We never mint SKR and
 never burn it.
-**TAP** is ours, and predates the Union pivot: the earn-side token and the
-labeling quality bond. It stays wired because the labeling campaigns still use
-it; new attestation work bonds HUMAN and pays USDC.
 
 ## Where the numbers come from
 
@@ -19,13 +20,13 @@ The defaults below are tuned so a demo is watchable - a contributor reaches a
 stakeable balance in about ten tasks - and the ratios, not the absolute values,
 are the part that carries over to production.
 
-- `reward_per_task` 0.01 TAP: 100 tasks to a whole token, so the balance moves
+- `reward_per_task` 0.01 USDC: 100 tasks to a whole dollar, so the balance moves
   visibly on screen without the numbers looking like dust.
-- `min_tap_stake` 0.1 TAP, about ten tasks of honest work. Deliberately low so
-  the demo can show the whole earn-stake-unlock loop. In production a bond has
-  to exceed what a burst of bad labeling can extract before the accuracy window
-  catches up, which is a much larger multiple of per-task value - the right way
-  to set it is from the window length in `scoring.py`, not by taste.
+- `min_human_stake` 0.1 HUMAN, about ten tasks of honest work. Deliberately low
+  so the demo can show the whole earn-stake-unlock loop. In production a bond
+  has to exceed what a burst of bad labeling can extract before the accuracy
+  window catches up, which is a much larger multiple of per-task value - the
+  right way to set it is from the window length in `scoring.py`, not by taste.
 - `min_skr_stake` 1 SKR: nominal. It is a commitment signal, not collateral, so
   it only has to be inconvenient to fake at scale.
 - `cooldown_seconds` 24h: long enough that a bad actor's accuracy is scored
@@ -60,15 +61,11 @@ class Settings(BaseSettings):
     rpc_url: str = "https://api.devnet.solana.com"
     cluster: str = "devnet"
 
-    # --- TAP: earnings and the slashable bond -------------------------------
-    # Created by scripts/bootstrap_devnet.sh. Ours on every cluster.
-    tap_mint: str = ""
-    tap_decimals: int = 6
-
-    # --- HUMAN: the slashable attestation bond ------------------------------
-    # Created by scripts/bootstrap_devnet.sh. The only asset an attestation
-    # slash may ever target; making that structural is the point of a separate
-    # mint, exactly as SKR's unslashability is structural in the program.
+    # --- HUMAN: the slashable bond ------------------------------------------
+    # Created by scripts/bootstrap_devnet.sh. The single asset any slash may
+    # ever target — both the attestation bond (union-bond) and the labeling
+    # quality bond (tapfarm-stake). Making that structural is the point of one
+    # shared mint, exactly as SKR's unslashability is structural in the program.
     human_mint: str = ""
     human_decimals: int = 6
 
@@ -98,8 +95,8 @@ class Settings(BaseSettings):
     treasury_keypair_path: str = "treasury.json"
 
     # --- economics ----------------------------------------------------------
-    reward_per_task: int = 10_000  # 0.01 TAP
-    min_tap_stake: int = 100_000  # 0.1 TAP, ~10 tasks
+    reward_per_task: int = 10_000  # 0.01 USDC
+    min_human_stake: int = 100_000  # 0.1 HUMAN, ~10 tasks
     min_skr_stake: int = 1_000_000  # 1 SKR
     cooldown_seconds: int = 86_400  # 24h
 
@@ -201,7 +198,6 @@ class Settings(BaseSettings):
         would be defeated by configuration rather than by code.
         """
         named = {
-            "tap_mint": self.tap_mint,
             "skr_mint": self.skr_mint,
             "human_mint": self.human_mint,
             "usdc_mint": self.usdc_mint,

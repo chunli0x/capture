@@ -86,10 +86,10 @@ class StakeReader:
             return None
 
     async def is_referral_eligible(
-        self, contributor: str, *, min_tap_stake: int, min_skr_stake: int
+        self, contributor: str, *, min_human_stake: int, min_skr_stake: int
     ) -> bool:
-        """Both stakes required: a slashable bond, plus the SKR access stake."""
+        """Both stakes required: a slashable HUMAN bond, plus the SKR access stake."""
         account = await self.position(contributor)
         if account is None:
             return False
-        return account.referral_eligible(min_tap_stake, min_skr_stake)
+        return account.referral_eligible(min_human_stake, min_skr_stake)

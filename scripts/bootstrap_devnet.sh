@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Bootstrap: treasury keypair and the mints - TAP, HUMAN, a USDC stand-in, and
+# Bootstrap: treasury keypair and the mints - HUMAN, a USDC stand-in, and
 # a local access-stake mint.
 #
 #   ./scripts/bootstrap_devnet.sh                     # devnet
 #   CLUSTER=localhost ./scripts/bootstrap_devnet.sh   # solana-test-validator
 #
-# HUMAN is the attestation bond: the asset a slash may ever target. It is a
-# separate mint from the access gate for the same reason the stake program
-# takes two mints - so that "SKR is never slashed" is a fact about the system
-# rather than a promise about our future conduct.
+# HUMAN is the slashable bond: the one asset a slash may ever target, used both
+# as the labeling quality bond (tapfarm-stake) and the attestation bond
+# (union-bond). It is a separate mint from the access gate for the same reason
+# the stake program takes two mints - so that "SKR is never slashed" is a fact
+# about the system rather than a promise about our future conduct.
 #
 # USDC on devnet is a stand-in we mint, because payroll is a stablecoin and
 # devnet has no USDC we control. On mainnet this slot holds the canonical USDC
@@ -19,9 +20,6 @@
 # attestation; it is generated once, out of band, and installed on the backend
 # host at backend/verifier.json with 0600. A bootstrap script that minted a
 # fresh authority on every run would be the wrong shape entirely.
-#
-# TAP is ours on every cluster - it is what contributors earn and the bond they
-# post - so minting it here is the real thing, not a stand-in.
 #
 # SKR is Solana Mobile's and does not exist on devnet. We deliberately do not
 # mint anything called SKR: putting a counterfeit of someone else's token in
@@ -42,7 +40,6 @@ CLI_CONFIG="$BACKEND_DIR/.solana-cli.yml"
 # fresh pair every time and silently orphaning the previous ones.
 STATE_FILE="$BACKEND_DIR/.bootstrap-state.json"
 DECIMALS=6
-TAP_SUPPLY=1000000
 ACCESS_SUPPLY=1000
 HUMAN_SUPPLY=1000000
 USDC_SUPPLY=1000000
@@ -111,13 +108,6 @@ create_mint() {
   echo "$mint"
 }
 
-if TAP_MINT="$(recorded_mint tap_mint)"; then
-  echo "reusing TAP mint $TAP_MINT"
-else
-  echo "creating TAP mint..."
-  TAP_MINT="$(create_mint "$TAP_SUPPLY")"
-fi
-
 if ACCESS_MINT="$(recorded_mint access_mint)"; then
   echo "reusing access-stake mint $ACCESS_MINT"
 else
@@ -128,7 +118,7 @@ fi
 if HUMAN_MINT="$(recorded_mint human_mint)"; then
   echo "reusing HUMAN bond mint $HUMAN_MINT"
 else
-  echo "creating HUMAN mint (the slashable attestation bond)..."
+  echo "creating HUMAN mint (the slashable bond)..."
   HUMAN_MINT="$(create_mint "$HUMAN_SUPPLY")"
 fi
 
@@ -139,14 +129,13 @@ else
   USDC_MINT="$(create_mint "$USDC_SUPPLY")"
 fi
 
-python3 - "$STATE_FILE" "$CLUSTER" "$TAP_MINT" "$ACCESS_MINT" "$HUMAN_MINT" \
+python3 - "$STATE_FILE" "$CLUSTER" "$ACCESS_MINT" "$HUMAN_MINT" \
          "$USDC_MINT" "$TREASURY_PUBKEY" <<'PYEOF'
 import json, sys
-path, cluster, tap, access, human, usdc, treasury = sys.argv[1:8]
+path, cluster, access, human, usdc, treasury = sys.argv[1:7]
 json.dump(
     {
         "cluster": cluster,
-        "tap_mint": tap,
         "access_mint": access,
         "human_mint": human,
         "usdc_mint": usdc,
@@ -160,8 +149,7 @@ PYEOF
 cat <<EOF
 
 ==============================================================
-  TAP mint      : $TAP_MINT
-  HUMAN mint    : $HUMAN_MINT   (attestation bond)
+  HUMAN mint    : $HUMAN_MINT   (slashable bond)
   USDC mint     : $USDC_MINT   (payroll stand-in)
   access mint   : $ACCESS_MINT   (local test fixture)
   treasury      : $TREASURY_PUBKEY
@@ -170,8 +158,6 @@ cat <<EOF
 
 Write backend/.env:
 
-  TAPFARM_TAP_MINT=$TAP_MINT
-  TAPFARM_TAP_DECIMALS=$DECIMALS
   TAPFARM_HUMAN_MINT=$HUMAN_MINT
   TAPFARM_USDC_MINT=$USDC_MINT
   TAPFARM_SKR_MINT=$ACCESS_MINT

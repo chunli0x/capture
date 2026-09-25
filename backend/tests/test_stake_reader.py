@@ -14,14 +14,14 @@ from tapfarm.stake_client import Position, StakeAccount
 from tapfarm.stake_reader import StakeReader
 
 PROGRAM = Pubkey.from_string("9brNsPyt6cb9yVv9kFNvN9xwd9ww41BJqiyG4DpCR1aQ")
-MIN_TAP = 100_000
+MIN_HUMAN = 100_000
 MIN_SKR = 1_000_000
 
 
-def _account(tap: int, skr: int) -> StakeAccount:
+def _account(human: int, skr: int) -> StakeAccount:
     return StakeAccount(
         contributor=Keypair().pubkey(),
-        tap=Position(amount=tap, unstake_amount=0, unstake_requested_at=0),
+        human=Position(amount=human, unstake_amount=0, unstake_requested_at=0),
         skr=Position(amount=skr, unstake_amount=0, unstake_requested_at=0),
         staked_at=0,
         bump=255,
@@ -45,7 +45,7 @@ WHO = "6MyDMxNwbwtRjbfDLXVCG7GKtSuKHqAeS4gunLnEbHHK"
 
 
 async def test_repeated_reads_hit_rpc_once(anyio_backend=None):
-    reader = _CountingReader(_account(MIN_TAP, MIN_SKR))
+    reader = _CountingReader(_account(MIN_HUMAN, MIN_SKR))
     for _ in range(5):
         await reader.position(WHO)
     assert reader.fetches == 1
@@ -60,14 +60,14 @@ async def test_absent_stake_account_is_cached_too():
 
 
 async def test_expiry_causes_a_refetch():
-    reader = _CountingReader(_account(MIN_TAP, MIN_SKR), ttl_seconds=0)
+    reader = _CountingReader(_account(MIN_HUMAN, MIN_SKR), ttl_seconds=0)
     await reader.position(WHO)
     await reader.position(WHO)
     assert reader.fetches == 2
 
 
 async def test_invalidate_forces_a_refetch():
-    reader = _CountingReader(_account(MIN_TAP, MIN_SKR))
+    reader = _CountingReader(_account(MIN_HUMAN, MIN_SKR))
     await reader.position(WHO)
     reader.invalidate(WHO)
     await reader.position(WHO)
@@ -79,25 +79,25 @@ async def test_no_program_configured_means_nobody_is_eligible():
     reader = StakeReader("http://unused", None)
     assert await reader.position(WHO) is None
     assert not await reader.is_referral_eligible(
-        WHO, min_tap_stake=MIN_TAP, min_skr_stake=MIN_SKR
+        WHO, min_human_stake=MIN_HUMAN, min_skr_stake=MIN_SKR
     )
 
 
 @pytest.mark.parametrize(
-    "tap,skr,expected",
+    "human,skr,expected",
     [
-        (MIN_TAP, MIN_SKR, True),
-        (MIN_TAP - 1, MIN_SKR, False),
-        (MIN_TAP, MIN_SKR - 1, False),
+        (MIN_HUMAN, MIN_SKR, True),
+        (MIN_HUMAN - 1, MIN_SKR, False),
+        (MIN_HUMAN, MIN_SKR - 1, False),
         (0, 0, False),
-        (MIN_TAP * 10, MIN_SKR * 10, True),
+        (MIN_HUMAN * 10, MIN_SKR * 10, True),
     ],
 )
-async def test_eligibility_requires_both_stakes(tap, skr, expected):
-    reader = _CountingReader(_account(tap, skr))
+async def test_eligibility_requires_both_stakes(human, skr, expected):
+    reader = _CountingReader(_account(human, skr))
     assert (
         await reader.is_referral_eligible(
-            WHO, min_tap_stake=MIN_TAP, min_skr_stake=MIN_SKR
+            WHO, min_human_stake=MIN_HUMAN, min_skr_stake=MIN_SKR
         )
         is expected
     )
@@ -106,5 +106,5 @@ async def test_eligibility_requires_both_stakes(tap, skr, expected):
 async def test_missing_stake_account_is_not_eligible():
     reader = _CountingReader(None)
     assert not await reader.is_referral_eligible(
-        WHO, min_tap_stake=MIN_TAP, min_skr_stake=MIN_SKR
+        WHO, min_human_stake=MIN_HUMAN, min_skr_stake=MIN_SKR
     )

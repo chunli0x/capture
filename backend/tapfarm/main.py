@@ -379,7 +379,7 @@ async def _credit_referrer(referee: str, task_value: int) -> None:
     cfg = settings()
     eligible = await stake_reader().is_referral_eligible(
         referrer,
-        min_tap_stake=cfg.min_tap_stake,
+        min_human_stake=cfg.min_human_stake,
         min_skr_stake=cfg.min_skr_stake,
     )
     ledger.credit_for_task(referee, task_value, is_eligible=lambda _who: eligible)
@@ -480,32 +480,21 @@ def _verifier() -> Keypair:
     return load_verifier(cfg.verifier_keypair_path, cfg.verifier_pubkey)
 
 
-def _mint() -> Pubkey:
-    raw = settings().tap_mint
-    if not raw:
-        raise HTTPException(503, "TAP mint unset; run scripts/bootstrap_devnet.sh")
-    return Pubkey.from_string(raw)
-
-
 def _payout_mint() -> tuple[Pubkey, int, str]:
     """What a claim actually pays out, and at what precision.
 
-    USDC, not the token. Paying workers a stablecoin is what keeps the token
-    a staking and access instrument rather than the thing people are working
-    for - the distinction the pitch rests on when asked whether the token is
-    a security.
-
-    TAP remains the fallback so a deployment that has not been given a USDC
-    mint still pays rather than refusing to, and the returned symbol says
-    which one happened so no screen has to guess.
+    USDC, always. Paying workers a stablecoin is what keeps the token a
+    staking and access instrument rather than the thing people are working for
+    - the distinction the pitch rests on when asked whether the token is a
+    security. There is no fallback: a deployment without a USDC mint has
+    nothing correct to pay in, so it refuses rather than paying in something
+    the UI did not promise.
     """
     cfg = settings()
     if cfg.usdc_mint:
         return Pubkey.from_string(cfg.usdc_mint), cfg.usdc_decimals, "USDC"
-    if cfg.tap_mint:
-        return Pubkey.from_string(cfg.tap_mint), cfg.tap_decimals, "TAP"
     raise HTTPException(
-        503, "no payout mint configured; run scripts/bootstrap_devnet.sh"
+        503, "no USDC mint configured; run scripts/bootstrap_devnet.sh"
     )
 
 
@@ -897,10 +886,8 @@ class ClaimPrepareIn(BaseModel):
 
 
 class ClaimPrepareOut(BaseModel):
-    # Which token actually moved. USDC where configured; a deployment without
-    # a USDC mint falls back to TAP and says so rather than paying silently in
-    # something other than what the UI promised.
-    payout_symbol: str = "TAP"
+    # Which token actually moved. Always USDC: the payout mint has no fallback.
+    payout_symbol: str = "USDC"
     transaction: str = Field(description="base64 wire-format tx, treasury-partial-signed")
     amount: int
     ui_amount: float
@@ -919,7 +906,7 @@ def health() -> dict[str, object]:
     return {
         "ok": True,
         "cluster": cfg.cluster,
-        "mint_configured": bool(cfg.tap_mint),
+        "mint_configured": bool(cfg.usdc_mint),
         "treasury_present": pathlib.Path(cfg.treasury_keypair_path).exists(),
         "dataset_present": (dataset / "manifest.jsonl").exists(),
     }
@@ -971,7 +958,7 @@ async def submit_task(body: SubmitIn) -> SubmitOut:
         correct=result.correct,
         reward=result.reward,
         balance=result.balance,
-        ui_balance=result.balance / (10**cfg.tap_decimals),
+        ui_balance=result.balance / (10**cfg.usdc_decimals),
         accuracy=result.accuracy,
         gold_samples=result.gold_samples,
         claimable=result.claimable,
@@ -1009,7 +996,7 @@ async def _referral_out(contributor: str) -> ReferralOut:
 
     eligible = await stake_reader().is_referral_eligible(
         contributor,
-        min_tap_stake=cfg.min_tap_stake,
+        min_human_stake=cfg.min_human_stake,
         min_skr_stake=cfg.min_skr_stake,
     )
     if eligible:
@@ -1018,7 +1005,7 @@ async def _referral_out(contributor: str) -> ReferralOut:
         reason = "staking is not configured on this deployment"
     else:
         reason = (
-            f"stake at least {cfg.min_tap_stake / 10**cfg.tap_decimals:g} TAP and "
+            f"stake at least {cfg.min_human_stake / 10**cfg.human_decimals:g} HUMAN and "
             f"{cfg.min_skr_stake / 10**cfg.skr_decimals:g} SKR to earn referral rewards"
         )
 
@@ -1027,9 +1014,9 @@ async def _referral_out(contributor: str) -> ReferralOut:
         referrer=ledger.referrer_of(contributor),
         referees=stats.referees,
         earned=stats.earned,
-        ui_earned=stats.earned / (10**cfg.tap_decimals),
+        ui_earned=stats.earned / (10**cfg.usdc_decimals),
         unclaimed=stats.unclaimed,
-        ui_unclaimed=stats.unclaimed / (10**cfg.tap_decimals),
+        ui_unclaimed=stats.unclaimed / (10**cfg.usdc_decimals),
         eligible=eligible,
         reason=reason,
     )
@@ -1074,7 +1061,7 @@ def pose_submit(body: PoseSubmitIn) -> PoseSubmitOut:
         mode=result.mode,
         reward=result.reward,
         balance=result.balance,
-        ui_balance=result.balance / (10**cfg.tap_decimals),
+        ui_balance=result.balance / (10**cfg.usdc_decimals),
         qualified=result.qualified,
         feedback=(
             PoseFeedbackOut(**vars(result.feedback)) if result.feedback else None
@@ -1248,7 +1235,7 @@ def _clip_submit_out(contributor: str, result) -> ClipSubmitOut:
         mode=result.mode,
         reward=result.reward,
         balance=result.balance,
-        ui_balance=result.balance / (10**cfg.tap_decimals),
+        ui_balance=result.balance / (10**cfg.usdc_decimals),
         qualified=result.qualified,
         flagged=result.flagged,
         correct=result.correct,
@@ -1812,16 +1799,16 @@ def contributor(contributor: str) -> dict[str, object]:
     return {
         "contributor": contributor,
         "balance": state.balance,
-        "ui_balance": state.balance / (10**cfg.tap_decimals),
+        "ui_balance": state.balance / (10**cfg.usdc_decimals),
         "pose_balance": pose_balance,
-        "ui_pose_balance": pose_balance / (10**cfg.tap_decimals),
+        "ui_pose_balance": pose_balance / (10**cfg.usdc_decimals),
         "clip_balance": clip_balance,
-        "ui_clip_balance": clip_balance / (10**cfg.tap_decimals),
+        "ui_clip_balance": clip_balance / (10**cfg.usdc_decimals),
         "clip_qualified": _clip_qualified(contributor),
         "referral_unclaimed": referral_unclaimed,
-        "ui_referral_unclaimed": referral_unclaimed / (10**cfg.tap_decimals),
+        "ui_referral_unclaimed": referral_unclaimed / (10**cfg.usdc_decimals),
         "total_claimable": total,
-        "ui_total_claimable": total / (10**cfg.tap_decimals),
+        "ui_total_claimable": total / (10**cfg.usdc_decimals),
         "solved": len(state.seen) - len(state.outstanding),
         "accuracy": eligibility.accuracy,
         "gold_samples": eligibility.samples,
