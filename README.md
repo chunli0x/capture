@@ -14,18 +14,18 @@ proof of humanness, and slashing is implemented but not yet enforced.
 Built for [CLOCK IN](https://docs.solanamobile.com/hackathon/) — Solana Mobile ×
 RadiantsDAO, September 8 – October 8 2026.
 
-> **Status: week 2 of 4.** Task serving, the labeling UI, the contributor-signed
-> claim, the two-token stake program and referral accounting are built, and
-> everything on-chain is proven against a live validator. A plain `pytest -q`
-> reports **247 passed, 12 skipped** (the skips are on-chain tests behind
-> `TAPFARM_E2E=1`); with a validator that becomes **259 passed**, alongside
-> **21** Rust logic tests. The
-> on-device MWA handshake is the open item. See [docs/SPIKE.md](docs/SPIKE.md)
-> for the full ledger of what is proven and what is not.
+> **Status: week 3 of 4.** The labeling engine (ghost overlay and clip
+> judgment), the verifier-signed attestation layer, both on-chain programs, and
+> the demand side (agents buying a human judgment over x402, with Jev routing
+> escalation) are built. A plain `pytest -q` reports **504 passed, 13 skipped**
+> (the skips are on-chain tests behind `TAPFARM_E2E=1`), alongside **42** Rust
+> logic tests across both programs. The on-device MWA handshake is the open
+> item. See [docs/SPIKE.md](docs/SPIKE.md) for the full ledger of what is
+> proven and what is not.
 
 ## Tokens
 
-Two tokens, two jobs. The split is not cosmetic — it decides what we are allowed
+Four mints, four jobs. The split is not cosmetic — it decides what we are allowed
 to destroy.
 
 **TAP** is ours: what contributors earn, and the **slashable** quality bond.
@@ -45,6 +45,18 @@ Because SKR does not exist on devnet, the bootstrap script creates a plain local
 mint to occupy the access-stake slot in tests. It is a test fixture, is never
 shown to a user as SKR, and on mainnet that slot holds the canonical SKR mint —
 the program cannot tell the difference, which is the point.
+
+**HUMAN** is the attestation bond: the slashable stake behind an attestation.
+It is a separate mint from the access gate for the same reason the stake program
+takes two mints — so that "SKR is never slashed" is a fact about the system
+rather than a promise about our future conduct. Slashing is implemented but not
+yet enforced.
+
+**USDC** is payroll. Contributors are paid a stablecoin, never the token. On
+devnet the bootstrap script mints a stand-in because devnet has no USDC we
+control; on mainnet this slot holds the canonical USDC mint and the treasury
+holds a balance rather than mint authority. The stand-in is never shown as if it
+were real USDC.
 
 ### The numbers
 
@@ -244,6 +256,36 @@ Rewards are denominated in TAP, created by `scripts/bootstrap_devnet.sh`. TAP is
 ours on every cluster, so the devnet mint is the real token rather than a
 stand-in for someone else's.
 
+## The demand side
+
+The other half of the loop: an agent that hits a step it cannot resolve pays
+for a human verdict, and the human who clocks in supplies it. The agent's
+payment arrives over **x402** (the HTTP-402 payment protocol, V2), the request
+queues into the human feed, a quorum of humans judges, and the winner is paid
+USDC over the existing claim path.
+
+### Escalation: Jev decides when a human is worth it
+
+Not every unresolved step is worth a human. **Jev** (TypeSafe AI's "System One"
+classifier) answers four routing questions as calibrated probabilities:
+
+- `needs_human` — does this require a human to judge or verify?
+- `is_ambiguous` — could a careful human reasonably disagree?
+- `is_risky` — does acting on it need human sign-off?
+- `agent_confidence_ok` — is the agent's stated confidence justified?
+
+Any one threshold firing escalates. If none fire, the agent is not charged and
+gets `no_human_needed`. Jev only routes; it cannot produce the judgment itself,
+which the type enforces: the routing result has four probability fields and no
+verdict field, so there is nowhere for an answer to the actual question to live.
+With no Jev key configured, the router falls back to a fixed one that names
+itself `fixed-router` and returns `simulated: true`. Details in
+[docs/DEMAND-SIDE.md](docs/DEMAND-SIDE.md).
+
+The inbound payment is simulated: `verify_payment` checks the receipt shape, not
+on-chain settlement, and `/v1/judge` says so in its own response — a queued
+judgment is never read as a confirmed transfer.
+
 ## Solana Mobile integration
 
 - **Mobile Wallet Adapter** for authorization and for `signAndSendTransactions`.
@@ -264,14 +306,21 @@ Vault-backed.
 android/    Kotlin + Jetpack Compose app, MWA integration
 backend/
   tapfarm/pose/          Ghost overlay: shapes, renderer, golden set, scoring
+  tapfarm/clip/          Clip-judgment campaign
   tapfarm/generator/     Synthetic scene generation, dataset + YOLO labels
   tapfarm/scoring.py     Gold-standard grading, claim eligibility
   tapfarm/claim_tx.py    Two-signer claim transaction
   tapfarm/stake_client.py Instruction builders for the stake program
+  tapfarm/bond_client.py Instruction builders for the union-bond program
   tapfarm/referrals.py   Referral graph, accrual and balances
   tapfarm/stake_reader.py Cached on-chain stake lookups for eligibility
+  tapfarm/jev.py         Escalation routing: Jev classifier, thresholds
+  tapfarm/x402.py        x402 payment challenge (inbound leg)
+  tapfarm/sas.py         Solana Attestation Service client
+  tapfarm/liveness.py    Liveness sessions and proof hash
 programs/
   tapfarm-stake/         Anchor program: TAP bond, SKR access stake, slashing
+  union-bond/            Anchor program: HUMAN attestation bond, challenge/slash/release
 scripts/    Devnet bootstrap and program deploy
 docs/       Spike notes, platform roadmap
 ```
@@ -370,8 +419,8 @@ absent during the blind run.
 cd backend && pip install -r requirements.txt
 python -m tapfarm.generator.dataset --out data/tapgrid --count 10000
 python -m tapfarm.pose.dataset --out data/pose
-pytest -q                                                    # 247, offline
-cargo test -p tapfarm-stake --lib                            # 21, program logic
+pytest -q                                                    # 504, offline
+cargo test -p tapfarm-stake -p union-bond --lib              # 42, program logic
 uvicorn tapfarm.main:app --host 0.0.0.0 --port 8000
 
 cd android && ./gradlew installDebug -PtapfarmApiBase=http://<LAN-IP>:8000
@@ -380,7 +429,7 @@ cd android && ./gradlew installDebug -PtapfarmApiBase=http://<LAN-IP>:8000
 `--host 0.0.0.0` matters: the phone reaches the backend over the LAN, not
 localhost.
 
-The on-chain tests (259 with a validator) need one running:
+The on-chain tests need a validator running:
 
 ```bash
 solana-test-validator --reset --quiet &
