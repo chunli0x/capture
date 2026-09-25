@@ -25,7 +25,7 @@ the flow doc is out of date in a way worth acting on.
 
 ## Recommendation: keep both legs on Solana
 
-`09-user-flow.md` §1–2 describes the agent's payment as "USDC on Base". x402
+The user-flow draft (`README.md` → "User flow") describes the agent's payment as "USDC on Base". x402
 runs natively on Solana with SPL tokens, and **Solana carries roughly 70% of
 the protocol's monthly transaction volume** — around $3.3M USDC settled in a
 single week, more than any other supported chain.

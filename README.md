@@ -23,6 +23,23 @@ RadiantsDAO, September 8 – October 8 2026.
 > item. See [docs/SPIKE.md](docs/SPIKE.md) for the full ledger of what is
 > proven and what is not.
 
+## The demand side — agents pay for a human judgment
+
+The other half of the loop, and the headline of week 3: an agent that hits a
+step it cannot resolve calls `/v1/judge`, **Jev** (TypeSafe AI's "System One"
+classifier) routes whether a human is even needed, and — if one is — the agent
+pays over **x402 V2** and the request queues for a quorum of humans to judge.
+
+> **Why Jev matters.** Not every unresolved step is worth a human. Jev answers
+> four routing questions as *calibrated probabilities* (`needs_human`,
+> `is_ambiguous`, `is_risky`, `agent_confidence_ok`) in milliseconds; if none
+> crosses its threshold the agent is told `no_human_needed` and **charged
+> nothing**. Jev only decides *when* to escalate — it can never produce the
+> judgment itself, which the type system enforces (the routing result has four
+> probability fields and no verdict field). See [docs/DEMAND-SIDE.md](docs/DEMAND-SIDE.md)
+> for the integration, and [docs/jev-onchain-trust-layer.md](docs/jev-onchain-trust-layer.md)
+> for the on-chain trust-layer design (judgments as signed opinions, not facts).
+
 ## Tokens
 
 Four mints, four jobs. The split is not cosmetic — it decides what we are allowed
@@ -291,7 +308,7 @@ configured. On devnet the bootstrap script mints a USDC stand-in, because
 devnet has no USDC we control; on mainnet the claim path pays the canonical
 USDC mint.
 
-## The demand side
+## How the demand side works
 
 The other half of the loop: an agent that hits a step it cannot resolve pays
 for a human verdict, and the human who clocks in supplies it. The agent's

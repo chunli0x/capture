@@ -46,7 +46,7 @@ log = logging.getLogger(__name__)
 # Pinned, per the build spec. An escalation rule tuned against one model
 # version is not automatically right for the next one.
 DEFAULT_JEV_MODEL = "jev-1.13.0"
-DEFAULT_JEV_URL = "https://api.typesafe.ai/v1/decide"
+DEFAULT_JEV_URL = "https://api.typesafe.ai/v1/systemone"
 
 # The four routing questions, verbatim from the integration spec so the wording
 # the thresholds were chosen against is the wording actually sent.
