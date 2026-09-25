@@ -4,7 +4,7 @@
 transaction they are cryptographically required to sign, on real hardware,
 before any feature work depends on it.
 
-This is scheduled first because it is the only part of Tap that cannot be
+This is scheduled first because it is the only part of Union that cannot be
 worked around. If MWA does not behave on the Seeker, everything downstream
 changes — and the time to discover that is day 2, not day 28.
 

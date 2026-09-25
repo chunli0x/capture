@@ -1,4 +1,4 @@
-"""Tap API.
+"""Union API.
 
 Task serving and grading are in tapfarm.tasks; the claim transaction is in
 tapfarm.claim_tx. This module wires them to HTTP and enforces one rule that
@@ -92,7 +92,7 @@ from tapfarm.referrals import ReferralError, ReferralLedger
 from tapfarm.stake_reader import StakeReader
 from tapfarm.tasks import TaskExhausted, TaskStore, UnknownTask
 
-app = FastAPI(title="Tap", version="0.3.0")
+app = FastAPI(title="Union", version="0.3.0")
 
 
 @functools.lru_cache(maxsize=1)

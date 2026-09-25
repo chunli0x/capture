@@ -190,7 +190,7 @@ private fun Header(state: UiState) {
     ) {
         Column {
             Text(
-                "Tap",
+                "Union",
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
