@@ -23,6 +23,7 @@ from seeker.media import (
 from seeker.schemas import Labels, agree
 from solders.keypair import Keypair
 from sqlalchemy import select
+from sqlalchemy.engine import make_url
 
 
 class FakeChain:
@@ -77,6 +78,10 @@ def pilot(tmp_path):
         skr_mint=str(Keypair().pubkey()),
         verifier_key_file=tmp_path / "unused",
     )
+    if os.environ.get("SEEKER_TEST_DATABASE"):
+        assert (make_url(settings.database_url).database or "").endswith("_test"), (
+            "Refusing to reset a database not ending in _test"
+        )
     app = create_app(settings, chain=chain, moderator=mod)
     Base.metadata.drop_all(app.state.database.engine)
     Base.metadata.create_all(app.state.database.engine)
