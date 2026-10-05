@@ -1,0 +1,52 @@
+name: Seeker pilot
+on:
+  push:
+    branches: ["seeker/**"]
+  pull_request:
+    paths: ["backend/seeker/**", "backend/tests/test_seeker*", "programs/seeker-bounty/**", "android/**", ".github/workflows/seeker.yml"]
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: seeker_test
+          POSTGRES_PASSWORD: test_only
+          POSTGRES_DB: seeker_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements-seeker.txt && pip check
+      - run: pytest -q tests/test_seeker_flow.py tests/test_seeker_chain.py
+        env:
+          SEEKER_TEST_DATABASE: postgresql+psycopg://seeker_test:test_only@localhost:5432/seeker_test
+  program:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p seeker-bounty --lib
+      - name: Build actual SBF program
+        run: |
+          curl -fsSL https://github.com/anza-xyz/agave/releases/download/v4.3.0/solana-release-x86_64-unknown-linux-gnu.tar.bz2 -o /tmp/agave.tar.bz2
+          tar -xjf /tmp/agave.tar.bz2 -C /tmp
+          export PATH="/tmp/solana-release/bin:$PATH"
+          cargo build-sbf --manifest-path programs/seeker-bounty/Cargo.toml
+          test -s target/deploy/seeker_bounty.so
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r backend/requirements-seeker.txt
+      - name: Execute token transfers and adversarial constraints in LiteSVM
+        working-directory: backend
+        run: pytest -q tests/test_seeker_runtime.py

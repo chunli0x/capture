@@ -24,6 +24,9 @@ android {
         val apiBase = (project.findProperty("unionApiBase") as String?)
             ?: "http://10.0.2.2:8000"
         buildConfigField("String", "API_BASE", "\"$apiBase\"")
+        val seekerBase = (project.findProperty("seekerApiBase") as String?) ?: "http://10.0.2.2:8001"
+        require(!seekerBase.contains('"') && !seekerBase.contains('\n'))
+        buildConfigField("String", "SEEKER_API_BASE", "\"$seekerBase\"")
     }
 
     androidResources {
@@ -40,7 +43,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            // Release signing must be supplied by the release operator.
         }
     }
 
@@ -85,3 +88,4 @@ dependencies {
 
     testImplementation(libs.junit)
 }
+

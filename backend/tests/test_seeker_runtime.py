@@ -1,0 +1,277 @@
+"""Execute compiled SBF and SPL token CPIs in LiteSVM. No external wallet or funds."""
+
+import json
+import struct
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from seeker.chain import SYSTEM, Chain, discriminator, meta
+from solders.account import Account
+from solders.instruction import Instruction
+from solders.keypair import Keypair
+from solders.litesvm import LiteSVM
+from solders.message import Message
+from solders.pubkey import Pubkey
+from solders.transaction import Transaction
+from solders.transaction_metadata import FailedTransactionMetadata
+from spl.token.constants import TOKEN_PROGRAM_ID
+from spl.token.instructions import get_associated_token_address
+
+SO = Path(__file__).resolve().parents[2] / "target/deploy/seeker_bounty.so"
+pytestmark = pytest.mark.skipif(
+    not SO.exists(), reason="build seeker-bounty SBF first for real program execution"
+)
+
+
+def token_account(mint, owner, amount):
+    data = bytearray(165)
+    data[:32] = bytes(mint)
+    data[32:64] = bytes(owner)
+    data[64:72] = struct.pack("<Q", amount)
+    data[108] = 1
+    return Account(10_000_000, bytes(data), TOKEN_PROGRAM_ID)
+
+
+def mint_account(authority):
+    data = (
+        struct.pack("<I", 1)
+        + bytes(authority)
+        + struct.pack("<QB", 1_000_000_000, 6)
+        + bytes([1])
+        + bytes(36)
+    )
+    assert len(data) == 82
+    return Account(10_000_000, data, TOKEN_PROGRAM_ID)
+
+
+@pytest.fixture
+def runtime(tmp_path):
+    svm = LiteSVM()
+    admin, worker, other, verifier = [Keypair() for _ in range(4)]
+    key = tmp_path / "key.json"
+    key.write_text(json.dumps(list(bytes(verifier))))
+    chain = Chain(
+        SimpleNamespace(
+            program_id="9ryH9pVVpnQdu1dx6jUaZLEMsb3YdvqWid3vt8DpnVWR",
+            usdc_mint=str(Keypair().pubkey()),
+            skr_mint=str(Keypair().pubkey()),
+            verifier_key_file=key,
+            min_bond=100,
+            cluster="localnet",
+            rpc_url="http://127.0.0.1:8899",
+        )
+    )
+    svm.add_program(chain.program, SO.read_bytes())
+    for k in (admin, worker, other, verifier):
+        svm.airdrop(k.pubkey(), 10_000_000_000)
+    for mint in (chain.usdc, chain.skr):
+        svm.set_account(mint, mint_account(admin.pubkey()))
+        for k in (admin, worker, other):
+            svm.set_account(
+                get_associated_token_address(k.pubkey(), mint),
+                token_account(mint, k.pubkey(), 10_000),
+            )
+    cfg = (
+        discriminator("Config", "account")
+        + bytes(admin.pubkey())
+        + bytes(verifier.pubkey())
+        + bytes(chain.usdc)
+        + bytes(chain.skr)
+        + struct.pack("<Q", 100)
+    )
+    svm.set_account(chain.config, Account(10_000_000, cfg, chain.program))
+    clock = svm.get_clock()
+    clock.unix_timestamp = 100
+    svm.set_clock(clock)
+    return svm, chain, admin, worker, other, verifier
+
+
+def send(rt, action, who, b=None, s=None, extra=(), modify=None):
+    svm, chain, *_ = rt
+    instructions = chain.build(action, str(who.pubkey()), b, s)
+    if modify:
+        instructions = modify(instructions)
+    svm.expire_blockhash()
+    msg = Message.new_with_blockhash(instructions, who.pubkey(), svm.latest_blockhash())
+    tx = Transaction.new_unsigned(msg)
+    tx.sign([who, *extra], msg.recent_blockhash)
+    return svm.send_transaction(tx)
+
+
+def ok(result):
+    assert not isinstance(result, FailedTransactionMetadata), str(result)
+
+
+def bad(result):
+    assert isinstance(result, FailedTransactionMetadata), str(result)
+
+
+def balance(rt, wallet, mint):
+    a = rt[0].get_account(get_associated_token_address(wallet, mint))
+    return struct.unpack("<Q", a.data[64:72])[0]
+
+
+def funded(rt, slots=2):
+    _, _, admin, worker, *_ = rt
+    b = SimpleNamespace(
+        id="01" * 16,
+        requester=str(admin.pubkey()),
+        reward=1000,
+        slots=slots,
+        deadline=1000,
+    )
+    s = SimpleNamespace(
+        worker=str(worker.pubkey()), media_hash="02" * 32, label_hash="03" * 32
+    )
+    ok(send(rt, "deposit", worker))
+    ok(send(rt, "fund", admin, b))
+    return b, s
+
+
+def test_actual_cpi_payout_once_and_bond_liability(runtime):
+    rt = runtime
+    svm, c, admin, worker, other, verifier = rt
+    b, s = funded(rt)
+    assert balance(rt, admin.pubkey(), c.usdc) == 8000
+    assert balance(rt, worker.pubkey(), c.skr) == 9900
+    bad(send(rt, "withdraw", worker))
+
+    # Wrong verifier signature, even with a valid worker, cannot register media.
+    def wrong_verifier(ixs):
+        ix = ixs[-1]
+        accounts = list(ix.accounts)
+        accounts[1] = meta(other.pubkey(), True)
+        return [Instruction(ix.program_id, ix.data, accounts)]
+
+    bad(send(rt, "fulfill", worker, b, s, extra=[other], modify=wrong_verifier))
+    ok(send(rt, "fulfill", worker, b, s, extra=[verifier]))
+    bad(send(rt, "fulfill", worker, b, s, extra=[verifier]))
+    bad(send(rt, "accept", other, b, s))
+    assert balance(rt, worker.pubkey(), c.usdc) == 10_000
+
+    # A destination controlled by another wallet cannot receive the reward.
+    def wrong_destination(ixs):
+        ix = ixs[-1]
+        accounts = list(ix.accounts)
+        accounts[8] = meta(
+            get_associated_token_address(other.pubkey(), c.usdc), writable=True
+        )
+        return ixs[:-1] + [Instruction(ix.program_id, ix.data, accounts)]
+
+    bad(send(rt, "accept", admin, b, s, modify=wrong_destination))
+    ok(send(rt, "accept", admin, b, s))
+    assert balance(rt, worker.pubkey(), c.usdc) == 11_000
+    bad(send(rt, "accept", admin, b, s))
+    bad(send(rt, "reject", admin, b, s))
+    assert balance(rt, worker.pubkey(), c.usdc) == 11_000
+    clock = svm.get_clock()
+    clock.unix_timestamp = 86_501
+    svm.set_clock(clock)
+    ok(send(rt, "withdraw", worker))
+    assert balance(rt, worker.pubkey(), c.skr) == 10_000
+    ok(send(rt, "refund", admin, b))
+    assert balance(rt, admin.pubkey(), c.usdc) == 9000
+    bad(send(rt, "refund", admin, b))
+
+
+def test_refund_preserves_pending_then_expiry_unlocks(runtime):
+    rt = runtime
+    svm, c, admin, worker, _other, verifier = rt
+    b, s = funded(rt)
+    ok(send(rt, "fulfill", worker, b, s, extra=[verifier]))
+    bad(send(rt, "refund", admin, b))
+    bad(send(rt, "expire", worker, b, s))
+    clock = svm.get_clock()
+    clock.unix_timestamp = 90_000
+    svm.set_clock(clock)
+    bad(send(rt, "withdraw", worker))
+    bad(send(rt, "accept", admin, b, s))
+    ok(send(rt, "refund", admin, b))
+    assert balance(rt, admin.pubkey(), c.usdc) == 9000
+    assert balance(rt, worker.pubkey(), c.usdc) == 10_000
+    ok(send(rt, "expire", worker, b, s))
+    ok(send(rt, "refund", admin, b))
+    assert balance(rt, admin.pubkey(), c.usdc) == 10_000
+    ok(send(rt, "withdraw", worker))
+    assert balance(rt, worker.pubkey(), c.skr) == 10_000
+
+
+def test_reject_pays_nothing_and_oversubscription_blocked(runtime):
+    rt = runtime
+    _svm, c, admin, worker, other, verifier = rt
+    b, s = funded(rt, slots=1)
+    ok(send(rt, "fulfill", worker, b, s, extra=[verifier]))
+    ok(send(rt, "deposit", other))
+    s2 = SimpleNamespace(
+        worker=str(other.pubkey()), media_hash="04" * 32, label_hash="05" * 32
+    )
+    bad(send(rt, "fulfill", other, b, s2, extra=[verifier]))
+    ok(send(rt, "reject", admin, b, s))
+    assert balance(rt, worker.pubkey(), c.usdc) == 10_000
+    bad(send(rt, "accept", admin, b, s))
+    bad(send(rt, "fulfill", other, b, s2, extra=[verifier]))
+
+
+def test_wrong_mint_and_bond_identity_rejected(runtime):
+    rt = runtime
+    _svm, c, admin, worker, other, verifier = rt
+    b, s = funded(rt)
+
+    def other_bond(ixs):
+        ix = ixs[-1]
+        accounts = list(ix.accounts)
+        accounts[5] = meta(c.pda(b"bond", bytes(other.pubkey())), writable=True)
+        return [Instruction(ix.program_id, ix.data, accounts)]
+
+    ok(send(rt, "deposit", other))
+    bad(send(rt, "fulfill", worker, b, s, extra=[verifier], modify=other_bond))
+    ok(send(rt, "fulfill", worker, b, s, extra=[verifier]))
+
+    def wrong_mint(ixs):
+        ix = ixs[-1]
+        accounts = list(ix.accounts)
+        accounts[2] = meta(c.skr)
+        return ixs[:-1] + [Instruction(ix.program_id, ix.data, accounts)]
+
+    bad(send(rt, "accept", admin, b, s, modify=wrong_mint))
+    assert balance(rt, worker.pubkey(), c.usdc) == 10_000
+
+
+def test_initializer_requires_program_upgrade_authority(runtime):
+    svm, c, admin, _worker, other, verifier = runtime
+    # Remove the fixture's initialized config and install an actual loader-v3
+    # ProgramData authority, retaining the same compiled code.
+    svm.set_account(c.config, Account(0, b"", SYSTEM))
+    program = svm.get_account(c.program)
+    data_address = Pubkey.from_bytes(program.data[4:36])
+    data = svm.get_account(data_address)
+    raw = struct.pack("<IQB", 3, 0, 1) + bytes(admin.pubkey()) + SO.read_bytes()
+    svm.set_account(data_address, Account(data.lamports, raw, program.owner))
+
+    def initialize(who):
+        ix = Instruction(
+            c.program,
+            discriminator("initialize")
+            + bytes(verifier.pubkey())
+            + struct.pack("<Q", 100),
+            [
+                meta(who.pubkey(), True, True),
+                meta(c.config, writable=True),
+                meta(c.usdc),
+                meta(c.skr),
+                meta(c.program),
+                meta(data_address),
+                meta(SYSTEM),
+            ],
+        )
+        svm.expire_blockhash()
+        msg = Message.new_with_blockhash([ix], who.pubkey(), svm.latest_blockhash())
+        tx = Transaction.new_unsigned(msg)
+        tx.sign([who], msg.recent_blockhash)
+        return svm.send_transaction(tx)
+
+    bad(initialize(other))
+    ok(initialize(admin))
+    assert svm.get_account(c.config).data[8:40] == bytes(admin.pubkey())
+    bad(initialize(other))

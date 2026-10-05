@@ -70,7 +70,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    UnionApp(sender)
+                    ai.loosh.union.seeker.SeekerApp(sender)
                 }
             }
         }
@@ -878,3 +878,4 @@ private fun ErrorCard(message: String, onDismiss: () -> Unit) {
         }
     }
 }
+
