@@ -123,6 +123,9 @@ upload/confirmation must be checked on a real Seeker before a participant pilot.
 ## Known limits and decisions still needed
 
 - Not a production unique-human identity system; operator enrollment is explicit.
+  Sybil resistance is the existing SAS credential + local liveness + operator
+  enrollment. Over-18 is a self-attested signed claim (declaration, not proof);
+  this is a hackathon pilot with no hard age verification in scope.
 - Face rejection is a conservative object-pilot filter, not a guarantee of no
   minors. dHash can reject visually simple unrelated pictures; no slashing.
 - Hive/Sightengine thresholds need live benign fixtures and approved operational

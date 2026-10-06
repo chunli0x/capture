@@ -39,8 +39,11 @@ Harden reusable liveness proof binding and independent voting where used.
 Use PostgreSQL in deployment; SQLite is an explicit local test/development
 adapter only. Use a devnet-only program and labeled TEST-USDC/TEST-SKR mints.
 Do not represent an allowlisted test wallet as independently verified human.
-Registration authorization is an operator verification decision pending a
-chosen unique-human provider. Public production launch remains blocked on it.
+Sybil resistance is the existing Solana Attestation Service (SAS) credential
+plus local liveness plus explicit operator enrollment — no external
+unique-human provider is used. Over-18 is a self-attested signed claim at
+registration (a declaration, not a cryptographic proof); this is a hackathon
+pilot and no hard age verification is in scope.
 
 Reviewer compensation and platform SKR sponsorship are not invented here.
 The object pilot uses an operator-enrolled reviewer pool and worker-funded
