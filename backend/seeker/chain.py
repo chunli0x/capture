@@ -277,17 +277,24 @@ class Chain:
             )
         else:
             address = self.pda(b"bond", bytes(Pubkey.from_string(prepared.wallet)))
-        results = self.rpc(
-            "getSignaturesForAddress",
-            [str(address), {"commitment": "finalized", "limit": 100}],
-        )
-        for item in results:
-            if item["err"] is None:
-                try:
-                    self.confirm(prepared, item["signature"])
-                    return item["signature"]
-                except ChainUnavailable:
-                    continue
+        page_size = 100
+        max_pages = 20  # sane cap: walk at most 2000 signatures
+        before = None
+        for _ in range(max_pages):
+            params = {"commitment": "finalized", "limit": page_size}
+            if before is not None:
+                params["before"] = before
+            results = self.rpc("getSignaturesForAddress", [str(address), params])
+            for item in results:
+                if item["err"] is None:
+                    try:
+                        self.confirm(prepared, item["signature"])
+                        return item["signature"]
+                    except ChainUnavailable:
+                        continue
+            if len(results) < page_size:
+                break  # end of history
+            before = results[-1]["signature"]
         raise ChainUnavailable(
             "No matching finalized transaction found in recent history; supply its signature"
         )

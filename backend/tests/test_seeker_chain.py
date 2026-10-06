@@ -159,3 +159,45 @@ def test_environment_binds_config_mints_verifier_and_network(chain):
     chain.rpc = lambda *args: "mainnet"
     with pytest.raises(ChainUnavailable):
         chain.check_environment()
+
+
+def test_find_signature_paginates_beyond_first_100(chain, resources):
+    payer, _worker, b, _s = resources
+    msg = Message.new_with_blockhash(
+        chain.build("fund", str(payer.pubkey()), b), payer.pubkey(), Hash.new_unique()
+    )
+    tx = Transaction.new_unsigned(msg)
+    tx.sign([payer], msg.recent_blockhash)
+    p = SimpleNamespace(
+        wallet=str(payer.pubkey()),
+        message_hash=hashlib.sha256(bytes(msg)).hexdigest(),
+    )
+    target = str(tx.signatures[0])
+
+    decoys = [str(Keypair().sign_message(b"decoy")) for _ in range(100)]
+    page1 = [{"signature": s, "err": None} for s in decoys]
+    page2 = [{"signature": target, "err": None}]
+    tx_lookup = {
+        target: {
+            "meta": {"err": None},
+            "transaction": [base64.b64encode(bytes(tx)).decode(), "base64"],
+        }
+    }
+
+    calls = []
+
+    def fake_rpc(method, params):
+        calls.append((method, params))
+        if method == "getSignaturesForAddress":
+            return page1 if params[1].get("before") is None else page2
+        if method == "getTransaction":
+            return tx_lookup.get(params[0])
+        raise AssertionError(f"unexpected rpc method: {method}")
+
+    chain.rpc = fake_rpc
+    assert chain.find_signature(p, b) == target
+
+    sig_calls = [c for c in calls if c[0] == "getSignaturesForAddress"]
+    assert len(sig_calls) == 2
+    assert sig_calls[0][1][1] == {"commitment": "finalized", "limit": 100}
+    assert sig_calls[1][1][1]["before"] == decoys[-1]

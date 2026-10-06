@@ -30,6 +30,29 @@ private fun JSONArray.objects() = (0 until length()).map { getJSONObject(it) }
 
 private class ApiFailure(val status: Int, message: String) : java.io.IOException(message)
 
+/**
+ * What [SeekerViewModel.recover] should do for a prepared transaction id.
+ *
+ * Kept as a pure, decision-only type (no Android, no network) so the branch
+ * between replaying an exact confirm and falling back to a chain scan is unit
+ * testable without a device or the wallet adapter.
+ */
+sealed class RecoveryAction {
+    data class Confirm(val id: String, val signature: String) : RecoveryAction()
+    data class Reconcile(val id: String) : RecoveryAction()
+
+    companion object {
+        /**
+         * A persisted wallet signature lets recovery replay the exact confirm,
+         * which works even when the bounty wallet has more than 100 transactions
+         * and a chain-history scan would miss it. Without one, fall back to
+         * [Reconcile], which scans recent chain history.
+         */
+        fun forTransaction(id: String, storedSignature: String?): RecoveryAction =
+            if (storedSignature == null) Reconcile(id) else Confirm(id, storedSignature)
+    }
+}
+
 data class PilotState(
     val server: String = "",
     val wallet: String = "",
@@ -50,6 +73,20 @@ data class PilotState(
 
 class SeekerViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences("seeker.api", 0)
+
+    // A wallet-returned transaction signature, persisted by prepared transaction
+    // id so a process kill between sign and confirm can still be recovered.
+    private fun signatureKey(id: String) = "sig.$id"
+
+    private fun storeSignature(id: String, signature: String) {
+        prefs.edit().putString(signatureKey(id), signature).apply()
+    }
+
+    private fun storedSignature(id: String): String? = prefs.getString(signatureKey(id), null)
+
+    private fun clearSignature(id: String) {
+        prefs.edit().remove(signatureKey(id)).apply()
+    }
     private val mutable =
         MutableStateFlow(
             PilotState(server = prefs.getString("server", null) ?: BuildConfig.SEEKER_API_BASE)
@@ -340,27 +377,47 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
                 result.successPayload?.signatures?.first()
                     ?: error("Wallet returned no signature; use Recover.")
             val id = prepared.getString("id")
-            var confirmed = false
-            repeat(10) {
-                if (!confirmed) {
-                    try {
-                        post(
-                            "/transactions/$id/confirm",
-                            JSONObject().put("signature", Base58.encode(sig)),
-                        )
-                        confirmed = true
-                    } catch (e: Exception) {
-                        if (e !is ApiFailure || e.status != 503 || it == 9) throw e
-                        delay(1500)
-                    }
-                }
+            val signature = Base58.encode(sig)
+            // Persist before confirming so a kill between sign and confirm does
+            // not lose the signature for good.
+            storeSignature(id, signature)
+            try {
+                confirm(id, signature)
+                clearSignature(id)
+            } catch (e: Exception) {
+                // Leave the signature persisted so recover() can replay the confirm.
+                throw e
             }
             refreshData()
         }
 
+    private suspend fun confirm(id: String, signature: String) {
+        var confirmed = false
+        repeat(10) {
+            if (!confirmed) {
+                try {
+                    post(
+                        "/transactions/$id/confirm",
+                        JSONObject().put("signature", signature),
+                    )
+                    confirmed = true
+                } catch (e: Exception) {
+                    if (e !is ApiFailure || e.status != 503 || it == 9) throw e
+                    delay(1500)
+                }
+            }
+        }
+    }
+
     fun recover(id: String) =
         run("Checking finalized chain history") {
-            post("/transactions/$id/reconcile")
+            when (val action = RecoveryAction.forTransaction(id, storedSignature(id))) {
+                is RecoveryAction.Confirm -> {
+                    confirm(action.id, action.signature)
+                    clearSignature(action.id)
+                }
+                is RecoveryAction.Reconcile -> post("/transactions/${action.id}/reconcile")
+            }
             refreshData()
         }
 }
