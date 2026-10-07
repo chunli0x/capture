@@ -1,5 +1,9 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from solders.pubkey import Pubkey
+
+Kind = Literal["object", "place", "action"]
 
 
 class Strict(BaseModel):
@@ -29,9 +33,12 @@ class Enrollment(Wallet):
 class Category(Strict):
     id: int = Field(strict=True, ge=0, le=65535)
     name: str = Field(min_length=1, max_length=80)
+    # Per-bounty taxonomy namespace. Immutable once the bounty is created.
+    kind: Kind = "object"
 
 
 class CreateBounty(Strict):
+    kind: Kind = "object"
     title: str = Field(min_length=3, max_length=160)
     categories: list[Category] = Field(min_length=1, max_length=50)
     reward_usdc_units: int = Field(strict=True, ge=1, le=1_000_000_000)
@@ -39,9 +46,11 @@ class CreateBounty(Strict):
     deadline: int = Field(strict=True)
 
     @model_validator(mode="after")
-    def unique_categories(self):
+    def coherent(self):
         if len({c.id for c in self.categories}) != len(self.categories):
             raise ValueError("Category IDs must be unique")
+        if any(c.kind != self.kind for c in self.categories):
+            raise ValueError("Every category must match the bounty kind")
         return self
 
 
@@ -59,9 +68,39 @@ class Box(Strict):
         return self
 
 
+class Scene(Strict):
+    """Exactly one scene class; a place label is never multi-label."""
+
+    category_id: int = Field(strict=True, ge=0)
+
+
+class ActionSpan(Strict):
+    """One action tag with a bounded, integer-millisecond trim. start < end."""
+
+    category_id: int = Field(strict=True, ge=0)
+    start_ms: int = Field(strict=True, ge=0)
+    end_ms: int = Field(strict=True, ge=0)
+
+    @model_validator(mode="after")
+    def ordered(self):
+        if self.start_ms >= self.end_ms:
+            raise ValueError("start_ms must be strictly less than end_ms")
+        return self
+
+
 class Labels(Strict):
     media_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     boxes: list[Box] = Field(min_length=1, max_length=100)
+
+
+class PlaceLabels(Strict):
+    media_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    scene: Scene
+
+
+class ActionLabels(Strict):
+    media_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    action: ActionSpan
 
 
 class Confirm(Strict):
@@ -99,3 +138,16 @@ def agree(left, right):
         return False
 
     return all(augment(i, set()) for i in range(len(left)))
+
+
+def labels_agree(kind, a, b):
+    """Reviewer consensus for the three kinds; `agree` covers object boxes."""
+    if kind == "place":
+        return a["scene"]["category_id"] == b["scene"]["category_id"]
+    if kind == "action":
+        return (
+            a["action"]["category_id"] == b["action"]["category_id"]
+            and a["action"]["start_ms"] == b["action"]["start_ms"]
+            and a["action"]["end_ms"] == b["action"]["end_ms"]
+        )
+    return agree(a, b)

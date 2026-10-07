@@ -28,6 +28,10 @@ import org.json.JSONObject
 
 private fun JSONArray.objects() = (0 until length()).map { getJSONObject(it) }
 
+/** The bounty kind governing a submission's media + label shape (`object|place|action`). */
+private fun bountyKindOf(submission: JSONObject): String =
+    submission.optJSONObject("bounty")?.optString("kind", "object") ?: "object"
+
 private class ApiFailure(val status: Int, message: String) : java.io.IOException(message)
 
 /**
@@ -67,6 +71,7 @@ data class PilotState(
     val transactions: List<JSONObject> = emptyList(),
     val selected: JSONObject? = null,
     val image: Bitmap? = null,
+    val videoDurationMs: Int? = null,
     val reviewing: Boolean = false,
     val bond: Long = 0,
 )
@@ -266,7 +271,8 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
     fun refresh() = run("Refreshing") { refreshData() }
 
     fun close() {
-        if (!mutable.value.busy) mutable.update { it.copy(selected = null, image = null) }
+        if (!mutable.value.busy)
+            mutable.update { it.copy(selected = null, image = null, videoDurationMs = null) }
     }
 
     fun create(title: String, categories: String, reward: String, slots: String, hours: String) =
@@ -304,15 +310,19 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
     fun claim(bid: String) =
         run("Reserving a capture slot") {
             val s = post("/bounties/$bid/claim")
-            mutable.update { it.copy(selected = s, image = null, reviewing = false) }
-            if (!s.isNull("media_hash")) loadImage(s.getString("id"))
+            mutable.update {
+                it.copy(selected = s, image = null, videoDurationMs = null, reviewing = false)
+            }
+            if (!s.isNull("media_hash") && bountyKindOf(s) != "action") loadImage(s.getString("id"))
             refreshData()
         }
 
     fun open(s: JSONObject, review: Boolean) =
         run("Opening approved image") {
-            mutable.update { it.copy(selected = s, image = null, reviewing = review) }
-            if (!s.isNull("media_hash")) loadImage(s.getString("id"))
+            mutable.update {
+                it.copy(selected = s, image = null, videoDurationMs = null, reviewing = review)
+            }
+            if (!s.isNull("media_hash") && bountyKindOf(s) != "action") loadImage(s.getString("id"))
         }
 
     private suspend fun loadImage(id: String) {
@@ -325,39 +335,74 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         mutable.update { it.copy(image = image) }
     }
 
-    fun capture(claimId: String, data: ByteArray) =
-        run("Checking your photo before upload approval") {
+    fun capture(claimId: String, data: ByteArray, videoDurationMs: Int? = null) =
+        run("Checking your capture before upload approval") {
             val s = mutable.value.selected ?: error("Select a claim first")
             val id = s.getString("id")
             require(id == claimId) { "Capture belongs to another claim; open it again." }
             val result = JSONObject(String(bytes("/submissions/$id/media", raw = data)))
             s.put("media_hash", result.getString("media_hash"))
-            loadImage(id)
+            if (videoDurationMs == null) {
+                loadImage(id)
+            } else {
+                mutable.update { it.copy(image = null, videoDurationMs = videoDurationMs) }
+            }
+            refreshData()
+        }
+
+    private fun mediaHash(): String =
+        mutable.value.selected?.getString("media_hash")
+            ?: error("No approved media to label")
+
+    private fun submitLabels(payload: JSONObject) =
+        run("Submitting manual labels") {
+            val s = mutable.value.selected ?: error("No selected capture")
+            val action = if (mutable.value.reviewing) "reviews" else "labels"
+            post("/submissions/${s.getString("id")}/$action", payload)
+            mutable.update { it.copy(selected = null, image = null, videoDurationMs = null) }
             refreshData()
         }
 
     fun submit(boxes: List<LabelBox>) =
-        run("Submitting manual labels") {
-            val s = mutable.value.selected ?: error("No selected photo")
-            val array = JSONArray()
-            boxes.forEach {
-                array.put(
-                    JSONObject()
-                        .put("category_id", it.categoryId)
-                        .put("x", it.x.toDouble())
-                        .put("y", it.y.toDouble())
-                        .put("w", it.w.toDouble())
-                        .put("h", it.h.toDouble())
+        submitLabels(
+            JSONObject()
+                .put("media_hash", mediaHash())
+                .put(
+                    "boxes",
+                    JSONArray().apply {
+                        boxes.forEach {
+                            put(
+                                JSONObject()
+                                    .put("category_id", it.categoryId)
+                                    .put("x", it.x.toDouble())
+                                    .put("y", it.y.toDouble())
+                                    .put("w", it.w.toDouble())
+                                    .put("h", it.h.toDouble())
+                            )
+                        }
+                    },
                 )
-            }
-            val action = if (mutable.value.reviewing) "reviews" else "labels"
-            post(
-                "/submissions/${s.getString("id")}/$action",
-                JSONObject().put("media_hash", s.getString("media_hash")).put("boxes", array),
-            )
-            mutable.update { it.copy(selected = null, image = null) }
-            refreshData()
-        }
+        )
+
+    fun submitPlace(categoryId: Int) =
+        submitLabels(
+            JSONObject()
+                .put("media_hash", mediaHash())
+                .put("scene", JSONObject().put("category_id", categoryId))
+        )
+
+    fun submitAction(categoryId: Int, trim: TrimRange) =
+        submitLabels(
+            JSONObject()
+                .put("media_hash", mediaHash())
+                .put(
+                    "action",
+                    JSONObject()
+                        .put("category_id", categoryId)
+                        .put("start_ms", trim.startMs)
+                        .put("end_ms", trim.endMs),
+                )
+        )
 
     fun transact(path: String, sender: ActivityResultSender) =
         run("Review this test-token transaction in your wallet") {

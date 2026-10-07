@@ -12,6 +12,14 @@ import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.camera.video.FallbackStrategy
+import androidx.camera.video.FileOutputOptions
+import androidx.camera.video.Quality
+import androidx.camera.video.QualitySelector
+import androidx.camera.video.Recorder
+import androidx.camera.video.Recording
+import androidx.camera.video.VideoCapture
+import androidx.camera.video.VideoRecordEvent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -35,6 +43,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 import java.io.File
+import kotlinx.coroutines.delay
+import org.json.JSONObject
 
 @Composable
 fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
@@ -85,29 +95,54 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
         }
         if (s.selected != null) {
             val selected = s.selected!!
+            val kind = bountyKind(selected)
             TextButton(onClick = { vm.close() }, enabled = !s.busy) { Text("Back to bounties") }
             Text(
                 selected.getJSONObject("bounty").getString("title"),
                 style = MaterialTheme.typography.titleLarge,
             )
             Text(
-                if (s.reviewing)
-                    "Independent review: label every target object without seeing other labels."
-                else
-                    "Capture only objects you have permission to share. Avoid people and private information."
+                when {
+                    s.reviewing ->
+                        "Independent review: label this capture without seeing other labels."
+                    kind == "action" ->
+                        "Record one action clip (≤ 30 s), then choose a tag and trim. Avoid people and private information."
+                    else ->
+                        "Capture only objects or scenes you have permission to share. Avoid people and private information."
+                }
             )
-            if (
+            val editable =
+                s.reviewing ||
+                    (selected.getString("worker") == s.wallet &&
+                        selected.getString("status") == "claimed")
+            val canCapture =
                 s.image == null &&
+                    s.videoDurationMs == null &&
                     selected.isNull("media_hash") &&
                     selected.getString("worker") == s.wallet
-            ) {
-                CapturePhoto(!s.busy) { data -> vm.capture(selected.getString("id"), data) }
-            } else if (s.image != null) {
-                val editable =
-                    s.reviewing ||
-                        (selected.getString("worker") == s.wallet &&
-                            selected.getString("status") == "claimed")
-                PhotoEditor(s, editable, !s.busy, vm::submit)
+            when (kind) {
+                "action" ->
+                    if (canCapture) {
+                        CaptureVideo(!s.busy) { data, durationMs ->
+                            vm.capture(selected.getString("id"), data, durationMs)
+                        }
+                    } else if (s.videoDurationMs != null) {
+                        ActionEditor(s, editable, !s.busy, vm::submitAction)
+                    } else {
+                        Text("Action clip already captured.")
+                    }
+                "place" ->
+                    if (canCapture) {
+                        CapturePhoto(!s.busy) { data -> vm.capture(selected.getString("id"), data) }
+                    } else if (s.image != null) {
+                        PlaceEditor(s, editable, !s.busy, vm::submitPlace)
+                    }
+                else ->
+                    if (canCapture) {
+                        CapturePhoto(!s.busy) { data -> vm.capture(selected.getString("id"), data) }
+                    } else if (s.image != null) {
+                        PhotoEditor(s, editable, !s.busy, vm::submit)
+                    }
             }
             return@Column
         }
@@ -530,5 +565,256 @@ private fun CapturePhoto(enabled: Boolean, onPhoto: (ByteArray) -> Unit) {
         enabled = enabled && capture != null && !capturing,
     ) {
         Text("Capture and check photo")
+    }
+}
+
+/** The bounty kind governing a submission's media + label shape (`object|place|action`). */
+private fun bountyKind(selected: JSONObject): String =
+    selected.optJSONObject("bounty")?.optString("kind", "object") ?: "object"
+
+@Composable
+private fun PlaceEditor(
+    s: PilotState,
+    editable: Boolean,
+    enabled: Boolean,
+    submit: (Int) -> Unit,
+) {
+    val bitmap = s.image ?: return
+    val selected = s.selected ?: return
+    val categories = selected.getJSONObject("bounty").getJSONArray("categories")
+    val existing = selected.optJSONObject("scene")
+    var category by
+        remember(selected, s.reviewing) {
+            mutableIntStateOf(
+                existing?.optInt("category_id", -1)?.takeIf { it >= 0 }
+                    ?: categories.getJSONObject(0).getInt("id")
+            )
+        }
+    Image(
+        bitmap.asImageBitmap(),
+        "Approved place photo",
+        Modifier.fillMaxWidth().aspectRatio(bitmap.width.toFloat() / bitmap.height),
+    )
+    Text("Choose the single scene class")
+    for (i in 0 until categories.length()) {
+        val c = categories.getJSONObject(i)
+        FilterChip(
+            selected = category == c.getInt("id"),
+            onClick = { category = c.getInt("id") },
+            label = { Text(c.getString("name")) },
+            enabled = enabled && editable,
+        )
+    }
+    if (editable) {
+        Button(onClick = { submit(category) }, enabled = enabled) {
+            Text(if (s.reviewing) "Submit independent review" else "Submit immutable label")
+        }
+    }
+}
+
+@Composable
+private fun ActionEditor(
+    s: PilotState,
+    editable: Boolean,
+    enabled: Boolean,
+    submit: (Int, TrimRange) -> Unit,
+) {
+    val selected = s.selected ?: return
+    val durationMs = s.videoDurationMs ?: return
+    val categories = selected.getJSONObject("bounty").getJSONArray("categories")
+    val existing = selected.optJSONObject("action")
+    var category by
+        remember(selected, s.reviewing) {
+            mutableIntStateOf(
+                existing?.optInt("category_id", -1)?.takeIf { it >= 0 }
+                    ?: categories.getJSONObject(0).getInt("id")
+            )
+        }
+    var startMs by
+        remember(selected, s.reviewing, durationMs) {
+            mutableIntStateOf(existing?.optInt("start_ms", 0) ?: 0)
+        }
+    var endMs by
+        remember(selected, s.reviewing, durationMs) {
+            mutableIntStateOf(existing?.optInt("end_ms", durationMs) ?: durationMs)
+        }
+    if (durationMs < 2) {
+        Text("Clip is too short to trim.", color = MaterialTheme.colorScheme.error)
+        return
+    }
+    Text("Clip length $durationMs ms. Choose one action tag, then set the trim.")
+    for (i in 0 until categories.length()) {
+        val c = categories.getJSONObject(i)
+        FilterChip(
+            selected = category == c.getInt("id"),
+            onClick = { category = c.getInt("id") },
+            label = { Text(c.getString("name")) },
+            enabled = enabled && editable,
+        )
+    }
+    Text("Start: $startMs ms")
+    Slider(
+        value = startMs.toFloat(),
+        onValueChange = { startMs = it.toInt().coerceIn(0, endMs - 1) },
+        valueRange = 0f..durationMs.toFloat(),
+        enabled = enabled && editable,
+    )
+    Text("End: $endMs ms")
+    Slider(
+        value = endMs.toFloat(),
+        onValueChange = { endMs = it.toInt().coerceIn(startMs + 1, durationMs) },
+        valueRange = 0f..durationMs.toFloat(),
+        enabled = enabled && editable,
+    )
+    val trim = trimRange(startMs, endMs, durationMs)
+    if (trim != null) Text("Trim ${trim.startMs}–${trim.endMs} ms")
+    else Text("Trim must be start < end", color = MaterialTheme.colorScheme.error)
+    if (editable) {
+        Button(
+            onClick = { trim?.let { submit(category, it) } },
+            enabled = enabled && trim != null,
+        ) {
+            Text(if (s.reviewing) "Submit independent review" else "Submit immutable labels")
+        }
+    }
+}
+
+@Composable
+private fun CaptureVideo(enabled: Boolean, onVideo: (ByteArray, Int) -> Unit) {
+    val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current
+    var permission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val request =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+            permission = it
+        }
+    var videoCapture by remember { mutableStateOf<VideoCapture<Recorder>?>(null) }
+    var recording by remember { mutableStateOf<Recording?>(null) }
+    var recordingActive by remember { mutableStateOf(false) }
+    var elapsedMs by remember { mutableIntStateOf(0) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val previewView = remember { PreviewView(context) }
+    val live = remember { java.util.concurrent.atomic.AtomicBoolean(true) }
+    DisposableEffect(Unit) {
+        live.set(true)
+        onDispose { live.set(false) }
+    }
+    if (!permission) {
+        Button(onClick = { request.launch(Manifest.permission.CAMERA) }, enabled = enabled) {
+            Text("Allow camera for action capture")
+        }
+        return
+    }
+    DisposableEffect(lifecycle, previewView) {
+        val future = ProcessCameraProvider.getInstance(context)
+        var provider: ProcessCameraProvider? = null
+        var disposed = false
+        val executor = ContextCompat.getMainExecutor(context)
+        future.addListener(
+            {
+                if (!disposed)
+                    try {
+                        provider = future.get()
+                        val preview =
+                            Preview.Builder().build().also {
+                                it.surfaceProvider = previewView.surfaceProvider
+                            }
+                        val recorder =
+                            Recorder.Builder()
+                                .setQualitySelector(
+                                    QualitySelector.from(
+                                        Quality.SD,
+                                        FallbackStrategy.lowerQualityOrHigherThan(Quality.SD),
+                                    )
+                                )
+                                .build()
+                        val capture = VideoCapture.withOutput(recorder)
+                        provider?.bindToLifecycle(
+                            lifecycle,
+                            CameraSelector.DEFAULT_BACK_CAMERA,
+                            preview,
+                            capture,
+                        )
+                        videoCapture = capture
+                    } catch (e: Exception) {
+                        error = e.message ?: "Camera unavailable"
+                    }
+            },
+            executor,
+        )
+        onDispose {
+            disposed = true
+            recording?.stop()
+            provider?.unbindAll()
+            videoCapture = null
+            recording = null
+        }
+    }
+    // Hard duration cap: stop automatically once MAX_ACTION_MS elapses.
+    LaunchedEffect(recordingActive) {
+        if (recordingActive) {
+            val startedAt = android.os.SystemClock.elapsedRealtime()
+            while (recordingActive) {
+                val e = (android.os.SystemClock.elapsedRealtime() - startedAt).toInt()
+                elapsedMs = e
+                if (e >= MAX_ACTION_MS) {
+                    recording?.stop()
+                    break
+                }
+                delay(100)
+            }
+        }
+    }
+    AndroidView(factory = { previewView }, modifier = Modifier.fillMaxWidth().height(320.dp))
+    error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    Text("Recorded ${cappedDurationMs(elapsedMs)} ms · hard cap $MAX_ACTION_MS ms")
+    Button(
+        onClick = {
+            val capture = videoCapture ?: return@Button
+            val current = recording
+            if (current == null) {
+                elapsedMs = 0
+                val file = File.createTempFile("seeker-action-", ".mp4", context.cacheDir)
+                val pending =
+                    capture.output.prepareRecording(
+                        context,
+                        FileOutputOptions.Builder(file).build(),
+                    )
+                recording =
+                    pending.start(
+                        ContextCompat.getMainExecutor(context),
+                    ) { event ->
+                        when (event) {
+                            is VideoRecordEvent.Start -> recordingActive = true
+                            is VideoRecordEvent.Finalize -> {
+                                recordingActive = false
+                                recording = null
+                                if (event.hasError()) {
+                                    error = "Recording failed (code ${event.error})"
+                                    file.delete()
+                                } else {
+                                    try {
+                                        if (live.get())
+                                            onVideo(file.readBytes(), cappedDurationMs(elapsedMs))
+                                    } finally {
+                                        file.delete()
+                                    }
+                                }
+                            }
+                            else -> Unit
+                        }
+                    }
+            } else {
+                current.stop()
+            }
+        },
+        enabled = enabled && videoCapture != null && (recording == null || recordingActive),
+    ) {
+        Text(if (recording == null) "Start recording" else "Stop recording")
     }
 }

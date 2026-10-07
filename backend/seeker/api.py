@@ -4,10 +4,13 @@ import hashlib
 import json
 import secrets
 from itertools import combinations
-from typing import Annotated
+from typing import Annotated, Union
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.responses import JSONResponse
 from solders.pubkey import Pubkey
 from solders.signature import Signature
 from sqlalchemy import func, or_, select
@@ -29,8 +32,24 @@ from .db import (
     Submission,
     now,
 )
-from .media import MediaCipher, MediaRejected, Moderation, canonicalize
-from .schemas import Confirm, CreateBounty, Enrollment, Labels, Verify, Wallet, agree
+from .media import (
+    MediaCipher,
+    MediaRejected,
+    Moderation,
+    canonicalize,
+    canonicalize_video,
+)
+from .schemas import (
+    ActionLabels,
+    Confirm,
+    CreateBounty,
+    Enrollment,
+    Labels,
+    PlaceLabels,
+    Verify,
+    Wallet,
+    labels_agree,
+)
 
 
 def fail(status, detail):
@@ -80,6 +99,7 @@ def bounty_view(b):
         "id": b.id,
         "requester": b.requester,
         "title": b.title,
+        "kind": b.kind,
         "categories": b.taxonomy,
         "reward_usdc_units": b.reward,
         "slots": b.slots,
@@ -98,6 +118,7 @@ def submission_view(s, b, actor):
         "status": s.status,
         "expires": s.expires,
         "media_hash": s.media_hash,
+        "keypoints": s.keypoints,
         "bounty": bounty_view(b),
     }
     if actor.wallet in {s.worker, b.requester}:
@@ -115,9 +136,19 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
 
     @app.exception_handler(ChainUnavailable)
     async def unavailable(_, exc):
-        from fastapi.responses import JSONResponse
-
         return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid(request, exc):
+        # `keypoints` is server-write-only: any seeker attempt to submit it is a
+        # hard 400, distinct from other schema rejections (which keep the
+        # standard 422 body).
+        if any("keypoints" in str(err.get("loc", ())) for err in exc.errors()):
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "keypoints is server-generated and cannot be submitted"},
+            )
+        return await request_validation_exception_handler(request, exc)
 
     @app.exception_handler(IntegrityError)
     async def conflict(_, exc):
@@ -163,7 +194,33 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
 
     def validate_labels(body, s, b):
         if body.media_hash != s.media_hash or not s.encrypted_media:
-            fail(409, "Labels must reference the approved immutable image")
+            fail(409, "Labels must reference the approved immutable media")
+        if isinstance(body, PlaceLabels):
+            if b.kind != "place":
+                fail(422, "This bounty expects object boxes, not a scene label")
+            cat = body.scene.category_id
+            if cat not in {c["id"] for c in b.taxonomy}:
+                fail(422, "Unknown category for this taxonomy")
+            return {"scene": {"category_id": cat}}
+        if isinstance(body, ActionLabels):
+            if b.kind != "action":
+                fail(422, "This bounty expects object boxes, not an action label")
+            span = body.action
+            if span.category_id not in {c["id"] for c in b.taxonomy}:
+                fail(422, "Unknown category for this taxonomy")
+            if s.duration_ms is None:
+                fail(409, "Media duration is unavailable")
+            if span.end_ms > s.duration_ms:
+                fail(422, "Action trim exceeds the clip duration")
+            return {
+                "action": {
+                    "category_id": span.category_id,
+                    "start_ms": span.start_ms,
+                    "end_ms": span.end_ms,
+                }
+            }
+        if b.kind != "object":
+            fail(422, "This bounty expects a single scene or action label, not boxes")
         boxes = [box.model_dump() for box in body.boxes]
         if any(
             box["category_id"] not in {c["id"] for c in b.taxonomy} for box in boxes
@@ -281,6 +338,7 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
                 request_key=idempotency_key,
                 body_hash=body_hash,
                 title=body.title,
+                kind=body.kind,
                 taxonomy=[c.model_dump() for c in body.categories],
                 reward=body.reward_usdc_units,
                 slots=body.slots,
@@ -383,24 +441,40 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
             if s.status != "claimed":
                 fail(409, "Submission is immutable")
             rate(db, "upload:" + actor.wallet, 12, 3600)
+            is_video = b.kind == "action"
+            limit = settings.max_video_bytes if is_video else settings.max_upload_bytes
         raw = bytearray()
         async for chunk in request.stream():
             raw.extend(chunk)
-            if len(raw) > settings.max_upload_bytes:
-                fail(413, "Image exceeds 15 MiB")
+            if len(raw) > limit:
+                fail(413, "Video exceeds 100 MiB" if is_video else "Image exceeds 15 MiB")
         try:
-            data, media_hash, perceptual = await run_in_threadpool(
-                canonicalize, bytes(raw)
-            )
-            if len(data) > settings.max_upload_bytes:
-                fail(413, "Canonical image exceeds 15 MiB")
-            with database.transaction() as db:
-                s, _ = own_active(db, sid, actor)
-                if s.media_hash:
-                    if s.media_hash != media_hash:
-                        fail(409, "Approved media cannot be replaced")
-                    return {"media_hash": s.media_hash}
-            verdict = await moderator.scan(data)
+            if is_video:
+                data, media_hash, perceptual, duration_ms = await run_in_threadpool(
+                    canonicalize_video, bytes(raw)
+                )
+                if len(data) > limit:
+                    fail(413, "Canonical video exceeds 100 MiB")
+                with database.transaction() as db:
+                    s, _ = own_active(db, sid, actor)
+                    if s.media_hash:
+                        if s.media_hash != media_hash:
+                            fail(409, "Approved media cannot be replaced")
+                        return {"media_hash": s.media_hash}
+                verdict = await moderator.scan_video(data)
+            else:
+                data, media_hash, perceptual = await run_in_threadpool(
+                    canonicalize, bytes(raw)
+                )
+                if len(data) > settings.max_upload_bytes:
+                    fail(413, "Canonical image exceeds 15 MiB")
+                with database.transaction() as db:
+                    s, _ = own_active(db, sid, actor)
+                    if s.media_hash:
+                        if s.media_hash != media_hash:
+                            fail(409, "Approved media cannot be replaced")
+                        return {"media_hash": s.media_hash}
+                verdict = await moderator.scan(data)
         except MediaRejected as exc:
             fail(422, str(exc))
         with database.transaction() as db:
@@ -420,8 +494,10 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
                 or (int(o.perceptual, 16) ^ int(perceptual, 16)).bit_count() <= 3
                 for o in others
             ):
-                fail(409, "Duplicate or near-duplicate image within this bounty")
+                fail(409, "Duplicate or near-duplicate media within this bounty")
             s.media_hash, s.perceptual = media_hash, perceptual
+            if is_video:
+                s.duration_ms = duration_ms
             s.encrypted_media, s.moderation = cipher.encrypt(data, media_hash), verdict
         return {"media_hash": media_hash}
 
@@ -436,9 +512,10 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
             if not s.encrypted_media:
                 fail(404, "Approved media not found")
             data = cipher.decrypt(s.encrypted_media, s.media_hash)
+            media_type = "video/mp4" if b.kind == "action" else "image/png"
         return Response(
             data,
-            media_type="image/png",
+            media_type=media_type,
             headers={
                 "Cache-Control": "private, no-store",
                 "X-Content-Type-Options": "nosniff",
@@ -446,7 +523,7 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
         )
 
     @app.post("/submissions/{sid}/labels")
-    def labels(sid: str, body: Labels, actor: Auth):
+    def labels(sid: str, body: Union[Labels, PlaceLabels, ActionLabels], actor: Auth):
         with database.transaction() as db:
             s, b = own_active(db, sid, actor)
             boxes = validate_labels(body, s, b)
@@ -459,7 +536,7 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
             return submission_view(s, b, actor)
 
     @app.post("/submissions/{sid}/reviews")
-    def review(sid: str, body: Labels, actor: Auth):
+    def review(sid: str, body: Union[Labels, PlaceLabels, ActionLabels], actor: Auth):
         with database.transaction() as db:
             actor = lock(db, Actor, actor.wallet)
             s, b = authorized_submission(db, sid, actor)
@@ -486,7 +563,7 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
                 sets = [s.labels] + [r.labels for r in reviews]
                 s.status = (
                     "eligible"
-                    if all(agree(a, b) for a, b in combinations(sets, 2))
+                    if all(labels_agree(b.kind, a, c) for a, c in combinations(sets, 2))
                     else "disputed"
                 )
             return {"status": s.status}

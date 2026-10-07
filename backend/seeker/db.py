@@ -70,6 +70,7 @@ class Bounty(Base):
     request_key: Mapped[str] = mapped_column(String(64))
     body_hash: Mapped[str] = mapped_column(String(64))
     title: Mapped[str] = mapped_column(String(160))
+    kind: Mapped[str] = mapped_column(String(16), default="object")
     taxonomy: Mapped[dict] = mapped_column(JSON)
     reward: Mapped[int] = mapped_column(BigInteger)
     slots: Mapped[int] = mapped_column(Integer)
@@ -90,10 +91,14 @@ class Submission(Base):
     status: Mapped[str] = mapped_column(String(24), default="claimed")
     media_hash: Mapped[str | None] = mapped_column(String(64))
     perceptual: Mapped[str | None] = mapped_column(String(16))
+    duration_ms: Mapped[int | None] = mapped_column(BigInteger)
     encrypted_media: Mapped[bytes | None] = mapped_column(LargeBinary)
     moderation: Mapped[dict | None] = mapped_column(JSON)
     labels: Mapped[list | None] = mapped_column(JSON)
     label_hash: Mapped[str | None] = mapped_column(String(64))
+    # Server-write-only COCO-17 pose; written by the offline keypoint job, never
+    # by a seeker (no request schema accepts it).
+    keypoints: Mapped[list | None] = mapped_column(JSON)
 
 
 class Review(Base):
