@@ -23,34 +23,27 @@ class Wallet(Strict):
 class Verify(Strict):
     challenge_id: str = Field(min_length=32, max_length=64)
     signature: str = Field(min_length=64, max_length=88)
+    over_18: bool = False
 
 
 class Enrollment(Wallet):
     worker: bool = False
     reviewer: bool = False
-
-
-class Category(Strict):
-    id: int = Field(strict=True, ge=0, le=65535)
-    name: str = Field(min_length=1, max_length=80)
-    # Per-bounty taxonomy namespace. Immutable once the bounty is created.
-    kind: Kind = "object"
+    over_18: bool = False
 
 
 class CreateBounty(Strict):
     kind: Kind = "object"
     title: str = Field(min_length=3, max_length=160)
-    categories: list[Category] = Field(min_length=1, max_length=50)
+    category_ids: list[int] = Field(min_length=1, max_length=50)
     reward_usdc_units: int = Field(strict=True, ge=1, le=1_000_000_000)
     slots: int = Field(strict=True, ge=1, le=100)
     deadline: int = Field(strict=True)
 
     @model_validator(mode="after")
     def coherent(self):
-        if len({c.id for c in self.categories}) != len(self.categories):
+        if len(set(self.category_ids)) != len(self.category_ids):
             raise ValueError("Category IDs must be unique")
-        if any(c.kind != self.kind for c in self.categories):
-            raise ValueError("Every category must match the bounty kind")
         return self
 
 

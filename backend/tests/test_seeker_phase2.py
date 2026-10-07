@@ -189,14 +189,14 @@ def mp4(
     return ftyp + moov + b"\x00" * 16
 
 
-def bounty(p, kind="object", categories=None, slots=2):
+def bounty(p, kind="object", category_ids=None, slots=2):
     c, _, h, *_ = p
-    if categories is None:
-        categories = [{"id": 1, "name": "cup", "kind": kind}]
+    if category_ids is None:
+        category_ids = [1]
     body = {
         "kind": kind,
         "title": "Phase 2 bounty",
-        "categories": categories,
+        "category_ids": category_ids,
         "reward_usdc_units": 1000,
         "slots": slots,
         "deadline": int(__import__("time").time()) + 3600,
@@ -257,12 +257,24 @@ def test_action_trim_bounds_schema():
 def test_create_bounty_kind_namespace():
     from seeker.schemas import CreateBounty
 
-    # Every category must share the bounty kind.
+    # Duplicate category ids are rejected at the schema boundary.
     with pytest.raises(ValueError):
         CreateBounty(
             kind="action",
             title="xxx",
-            categories=[{"id": 1, "name": "jump"}],
+            category_ids=[1, 1],
+            reward_usdc_units=1,
+            slots=1,
+            deadline=1234,
+        )
+    # A free-text category name (the phase-1 gap) is no longer accepted at all:
+    # `categories` is an unknown field, so the request can never mint a label.
+    with pytest.raises(ValueError):
+        CreateBounty(
+            kind="place",
+            title="xxx",
+            category_ids=[1],
+            categories=[{"id": 1, "name": "beach", "kind": "place"}],
             reward_usdc_units=1,
             slots=1,
             deadline=1234,
@@ -270,12 +282,97 @@ def test_create_bounty_kind_namespace():
     body = CreateBounty(
         kind="place",
         title="xxx",
-        categories=[{"id": 1, "name": "beach", "kind": "place"}],
+        category_ids=[1, 2],
         reward_usdc_units=1,
         slots=1,
         deadline=1234,
     )
     assert body.kind == "place"
+    assert body.category_ids == [1, 2]
+
+
+# ---- taxonomy registry + server-side resolution ----
+
+
+def test_taxonomy_endpoint_returns_registry(pilot):
+    c, *_ = pilot
+    r = c.get("/taxonomy")
+    assert r.status_code == 200, r.text
+    categories = r.json()["categories"]
+    by = {(c["id"], c["kind"]): c for c in categories}
+    # Every entry carries exactly id/name/kind.
+    assert all(set(c) == {"id", "name", "kind"} for c in categories)
+    # Spot-check the names the label pipeline relies on across namespaces.
+    assert by[(1, "object")]["name"] == "cup"
+    assert by[(1, "place")]["name"] == "beach"
+    assert by[(1, "action")]["name"] == "jump"
+
+
+def test_create_bounty_rejects_unknown_category_id(pilot):
+    c, _, h, *_ = pilot
+    r = c.post(
+        "/bounties",
+        headers={**h[0], "Idempotency-Key": os.urandom(8).hex()},
+        json={
+            "kind": "object",
+            "title": "Unknown category bounty",
+            "category_ids": [9999],
+            "reward_usdc_units": 100,
+            "slots": 1,
+            "deadline": int(__import__("time").time()) + 3600,
+        },
+    )
+    assert r.status_code == 422
+
+
+def test_create_bounty_builds_taxonomy_from_registry(pilot):
+    c, _, h, *_ = pilot
+    r = c.post(
+        "/bounties",
+        headers={**h[0], "Idempotency-Key": os.urandom(8).hex()},
+        json={
+            "kind": "object",
+            "title": "Registry taxonomy bounty",
+            "category_ids": [1, 2],
+            "reward_usdc_units": 100,
+            "slots": 1,
+            "deadline": int(__import__("time").time()) + 3600,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["categories"] == [
+        {"id": 1, "name": "cup", "kind": "object"},
+        {"id": 2, "name": "bottle", "kind": "object"},
+    ]
+
+
+def test_over_18_stored_and_returned_by_me(pilot):
+    c, _, h, keys, *_ = pilot
+    # Declared over-18 is recorded and surfaced in /me.
+    assert (
+        c.post(
+            "/operator/enroll",
+            json={
+                "wallet": str(keys[0].pubkey()),
+                "worker": True,
+                "reviewer": True,
+                "over_18": True,
+            },
+            headers={"x-operator-key": "o" * 32},
+        ).status_code
+        == 200
+    )
+    assert c.get("/me", headers=h[0]).json()["over_18"] is True
+    # Omitted over_18 defaults to False.
+    assert (
+        c.post(
+            "/operator/enroll",
+            json={"wallet": str(keys[1].pubkey()), "worker": True, "reviewer": True},
+            headers={"x-operator-key": "o" * 32},
+        ).status_code
+        == 200
+    )
+    assert c.get("/me", headers=h[1]).json()["over_18"] is False
 
 
 # ---- API: place single-class, action trim bounds ----
@@ -375,7 +472,7 @@ def test_keypoint_write_rejected_for_seekers(pilot):
             json={
                 "kind": "action",
                 "title": "x",
-                "categories": [{"id": 1, "name": "jump", "kind": "action"}],
+                "category_ids": [1],
                 "reward_usdc_units": 1,
                 "slots": 1,
                 "deadline": int(__import__("time").time()) + 3600,

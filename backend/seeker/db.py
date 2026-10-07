@@ -36,6 +36,9 @@ class Actor(Base):
     wallet: Mapped[str] = mapped_column(String(44), primary_key=True)
     worker: Mapped[bool] = mapped_column(Boolean, default=False)
     reviewer: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Self-attested over-18 declaration recorded at enrollment. A claim, not a
+    # cryptographic proof — never treated as one.
+    over_18: Mapped[bool] = mapped_column(Boolean, default=False)
     # Enrollment is an operator decision, never a claimed proof of humanity.
 
 

@@ -28,6 +28,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -41,6 +42,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 import java.io.File
 import kotlinx.coroutines.delay
@@ -58,7 +62,7 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Seeker · object pilot", style = MaterialTheme.typography.headlineSmall)
+        Text("Seeker", style = MaterialTheme.typography.headlineSmall)
         Text(
             "Devnet only • TEST-USDC rewards • TEST-SKR bond",
             style = MaterialTheme.typography.labelLarge,
@@ -70,7 +74,7 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
         s.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (s.wallet.isEmpty()) {
             Text(
-                "Capture objects, draw boxes by hand, and review the same photo independently. Payment needs the requester's explicit acceptance."
+                "Capture objects, scenes, or actions, label them by hand, and review each submission independently. Payment needs the requester's explicit acceptance."
             )
             OutlinedTextField(
                 server,
@@ -80,7 +84,16 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
                 singleLine = true,
             )
             Button(onClick = { vm.server(server) }, enabled = !s.busy) { Text("Use server") }
-            Button(onClick = { vm.connect(sender) }, enabled = !s.busy) {
+            var over18 by remember { mutableStateOf(false) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = over18,
+                    onCheckedChange = { over18 = it },
+                    enabled = !s.busy,
+                )
+                Text("I confirm I am 18 or older")
+            }
+            Button(onClick = { vm.connect(sender, over18) }, enabled = !s.busy && over18) {
                 Text("Sign in with wallet")
             }
             Text(
@@ -168,14 +181,14 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
         Button(onClick = { creating = !creating }, enabled = !s.busy) {
             Text(if (creating) "Close new bounty" else "Create bounty")
         }
-        if (creating) CreateBountyForm(s.busy, vm::create)
+        if (creating) CreateBountyForm(s.taxonomy, s.busy, vm::create)
         Text("Bounties", style = MaterialTheme.typography.titleLarge)
         s.bounties.forEach { b ->
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(b.getString("title"), style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "${b.getLong("reward_usdc_units")/1_000_000.0} TEST-USDC per accepted photo · ${b.getInt("slots")} slots · ${b.getString("status")}"
+                        "${b.getLong("reward_usdc_units")/1_000_000.0} TEST-USDC per accepted ${rewardNoun(b.optString("kind", KIND_OBJECT))} · ${b.getInt("slots")} slots · ${b.getString("status")}"
                     )
                     Text(
                         "Funding total: ${b.getLong("reward_usdc_units")*b.getInt("slots")/1_000_000.0} TEST-USDC. Pilot fee: 0."
@@ -196,7 +209,7 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
                             b.getLong("deadline") > System.currentTimeMillis() / 1000
                     )
                         Button(onClick = { vm.claim(id) }, enabled = !s.busy) {
-                            Text("Claim a photo slot")
+                            Text("Claim a slot")
                         }
                     if (
                         mine &&
@@ -222,8 +235,8 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
                     Text("Status: $status")
                     OutlinedButton(onClick = { vm.open(sub, false) }, enabled = !s.busy) {
                         Text(
-                            if (sub.isNull("media_hash")) "Capture photo"
-                            else "Open photo and labels"
+                            if (sub.isNull("media_hash")) "Capture"
+                            else "Open submission and labels"
                         )
                     }
                     if (status == "eligible" && sub.getString("worker") == s.wallet)
@@ -241,7 +254,7 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
                             onClick = { vm.transact("/submissions/$id/accept", sender) },
                             enabled = !s.busy,
                         ) {
-                            Text("Accept and pay this photo")
+                            Text("Accept and pay")
                         }
                         OutlinedButton(
                             onClick = { vm.transact("/submissions/$id/reject", sender) },
@@ -292,43 +305,71 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
 
 @Composable
 private fun CreateBountyForm(
+    taxonomy: List<TaxonomyCategory>,
     busy: Boolean,
-    create: (String, String, String, String, String, String) -> Unit,
+    create: (String, List<Int>, String, String, String, String) -> Unit,
 ) {
     var title by remember { mutableStateOf("") }
-    var categories by remember { mutableStateOf("cup") }
     var reward by remember { mutableStateOf("1") }
     var slots by remember { mutableStateOf("1") }
     var hours by remember { mutableStateOf("24") }
     var kind by remember { mutableStateOf(KIND_OBJECT) }
+    var selectedIds by remember { mutableStateOf(setOf<Int>()) }
     OutlinedTextField(title, { title = it }, label = { Text("Bounty title") })
     Text("Kind", style = MaterialTheme.typography.labelLarge)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FilterChip(
             selected = kind == KIND_OBJECT,
-            onClick = { kind = KIND_OBJECT },
+            onClick = {
+                kind = KIND_OBJECT
+                selectedIds = emptySet()
+            },
             label = { Text("Object") },
         )
         FilterChip(
             selected = kind == KIND_PLACE,
-            onClick = { kind = KIND_PLACE },
+            onClick = {
+                kind = KIND_PLACE
+                selectedIds = emptySet()
+            },
             label = { Text("Place") },
         )
         FilterChip(
             selected = kind == KIND_ACTION,
-            onClick = { kind = KIND_ACTION },
+            onClick = {
+                kind = KIND_ACTION
+                selectedIds = emptySet()
+            },
             label = { Text("Action") },
         )
     }
-    OutlinedTextField(
-        categories,
-        { categories = it },
-        label = { Text("Categories, comma separated") },
-    )
-    OutlinedTextField(reward, { reward = it }, label = { Text("TEST-USDC per accepted photo") })
+    Text("Categories", style = MaterialTheme.typography.labelLarge)
+    val available = categoriesForKind(taxonomy, kind)
+    if (available.isEmpty()) {
+        Text(
+            "No $kind categories in the registry yet.",
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+        )
+    } else {
+        available.forEach { c ->
+            FilterChip(
+                selected = c.id in selectedIds,
+                onClick = {
+                    selectedIds =
+                        if (c.id in selectedIds) selectedIds - c.id else selectedIds + c.id
+                },
+                label = { Text(c.name) },
+                enabled = !busy,
+            )
+        }
+    }
+    OutlinedTextField(reward, { reward = it }, label = { Text("TEST-USDC per accepted submission") })
     OutlinedTextField(slots, { slots = it }, label = { Text("Payable slots (1–100)") })
     OutlinedTextField(hours, { hours = it }, label = { Text("Deadline in hours (1–720)") })
-    Button(onClick = { create(title, categories, reward, slots, hours, kind) }, enabled = !busy) {
+    Button(
+        onClick = { create(title, selectedIds.toList(), reward, slots, hours, kind) },
+        enabled = !busy && title.isNotBlank() && selectedIds.isNotEmpty(),
+    ) {
         Text("Save draft")
     }
 }
@@ -591,6 +632,10 @@ private fun CapturePhoto(enabled: Boolean, onPhoto: (ByteArray) -> Unit) {
 private fun bountyKind(selected: JSONObject): String =
     selected.optJSONObject("bounty")?.optString("kind", "object") ?: "object"
 
+/** Kind-aware noun for reward copy; object keeps the phase-1 "photo", others go neutral. */
+private fun rewardNoun(kind: String): String =
+    if (kind == KIND_OBJECT) "photo" else "submission"
+
 @Composable
 private fun PlaceEditor(
     s: PilotState,
@@ -641,26 +686,47 @@ private fun ActionEditor(
     val selected = s.selected ?: return
     val durationMs = s.videoDurationMs ?: return
     val categories = selected.getJSONObject("bounty").getJSONArray("categories")
-    val existing = selected.optJSONObject("action")
+    val existing = actionLabelOf(selected)
     var category by
         remember(selected, s.reviewing) {
             mutableIntStateOf(
-                existing?.optInt("category_id", -1)?.takeIf { it >= 0 }
+                existing?.categoryId?.takeIf { it >= 0 }
                     ?: categories.getJSONObject(0).getInt("id")
             )
         }
     var startMs by
-        remember(selected, s.reviewing, durationMs) {
-            mutableIntStateOf(existing?.optInt("start_ms", 0) ?: 0)
+        remember(selected, s.reviewing) {
+            mutableIntStateOf(existing?.startMs ?: 0)
         }
     var endMs by
         remember(selected, s.reviewing, durationMs) {
-            mutableIntStateOf(existing?.optInt("end_ms", durationMs) ?: durationMs)
+            mutableIntStateOf(existing?.endMs ?: durationMs)
         }
     if (durationMs < 2) {
         Text("Clip is too short to trim.", color = MaterialTheme.colorScheme.error)
         return
     }
+    val videoUri = s.videoUri
+    if (videoUri == null) {
+        Text("Loading approved video…")
+        return
+    }
+    val context = LocalContext.current
+    val player =
+        remember(videoUri) {
+            ExoPlayer.Builder(context).build().apply {
+                setMediaItem(MediaItem.fromUri(videoUri))
+                prepare()
+                playWhenReady = false
+            }
+        }
+    DisposableEffect(player) { onDispose { player.release() } }
+    // Pin the preview to the trim start on first show, then follow the sliders.
+    LaunchedEffect(player) { player.seekTo(startMs.toLong()) }
+    AndroidView(
+        factory = { ctx -> PlayerView(ctx).apply { this.player = player; useController = true } },
+        modifier = Modifier.fillMaxWidth().height(240.dp),
+    )
     Text("Clip length $durationMs ms. Choose one action tag, then set the trim.")
     for (i in 0 until categories.length()) {
         val c = categories.getJSONObject(i)
@@ -674,14 +740,20 @@ private fun ActionEditor(
     Text("Start: $startMs ms")
     Slider(
         value = startMs.toFloat(),
-        onValueChange = { startMs = it.toInt().coerceIn(0, endMs - 1) },
+        onValueChange = {
+            startMs = it.toInt().coerceIn(0, endMs - 1)
+            player.seekTo(startMs.toLong())
+        },
         valueRange = 0f..durationMs.toFloat(),
         enabled = enabled && editable,
     )
     Text("End: $endMs ms")
     Slider(
         value = endMs.toFloat(),
-        onValueChange = { endMs = it.toInt().coerceIn(startMs + 1, durationMs) },
+        onValueChange = {
+            endMs = it.toInt().coerceIn(startMs + 1, durationMs)
+            player.seekTo(endMs.toLong())
+        },
         valueRange = 0f..durationMs.toFloat(),
         enabled = enabled && editable,
     )
@@ -696,6 +768,20 @@ private fun ActionEditor(
             Text(if (s.reviewing) "Submit independent review" else "Submit immutable labels")
         }
     }
+}
+
+/** Reads a previously submitted action label from the submission payload, if the server sent one. */
+private fun actionLabelOf(selected: JSONObject): ActionLabel? {
+    val raw =
+        selected.optJSONObject("action")
+            ?: selected.optJSONObject("boxes")?.optJSONObject("action")
+            ?: return null
+    val categoryId = raw.optInt("category_id", -1)
+    val startMs = raw.optInt("start_ms", -1)
+    val endMs = raw.optInt("end_ms", -1)
+    return if (categoryId >= 0 && startMs >= 0 && endMs > startMs) {
+        ActionLabel(categoryId, startMs, endMs)
+    } else null
 }
 
 @Composable

@@ -121,7 +121,7 @@ def bounty(p, slots=2):
     c, _, h, *_ = p
     body = {
         "title": "Label a cup",
-        "categories": [{"id": 1, "name": "cup"}],
+        "category_ids": [1],
         "reward_usdc_units": 1000,
         "slots": slots,
         "deadline": now() + 3600,
@@ -236,11 +236,28 @@ def test_auth_replay_wrong_wallet_expiry_logout(pilot):
     assert c.get("/me", headers=h[0]).status_code == 401
 
 
+def test_over_18_self_attestation_recorded_on_verify(pilot):
+    c, app, _h, _keys, *_ = pilot
+    k = Keypair()  # fresh wallet, so verify() creates the Actor with over_18
+    ch = c.post("/auth/challenge", json={"wallet": str(k.pubkey())}).json()
+    body = {
+        "challenge_id": ch["challenge_id"],
+        "signature": str(k.sign_message(ch["message"].encode())),
+        "over_18": True,
+    }
+    r = c.post("/auth/verify", json=body)
+    assert r.status_code == 200, r.text
+    token = r.json()["token"]
+    me = c.get("/me", headers={"Authorization": "Bearer " + token})
+    assert me.status_code == 200
+    assert me.json()["over_18"] is True
+
+
 def test_idempotency_ownership(pilot):
     c, _app, h, keys, *_ = pilot
     body = {
         "title": "Cup",
-        "categories": [{"id": 1, "name": "cup"}],
+        "category_ids": [1],
         "reward_usdc_units": 100,
         "slots": 1,
         "deadline": now() + 3600,

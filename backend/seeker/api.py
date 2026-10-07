@@ -50,6 +50,7 @@ from .schemas import (
     Wallet,
     labels_agree,
 )
+from . import taxonomy
 
 
 def fail(status, detail):
@@ -238,6 +239,12 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
             "production_ready": False,
         }
 
+    @app.get("/taxonomy")
+    def get_taxonomy():
+        # Closed vocabulary is server-owned and public: clients read valid ids
+        # here and can never mint a category.
+        return {"categories": taxonomy.all_categories()}
+
     @app.post("/auth/challenge")
     def challenge(body: Wallet, request: Request):
         nonce, expires = secrets.token_hex(32), now() + 120
@@ -268,7 +275,8 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
                 fail(401, "Signature does not match this wallet and challenge")
             c.used = True
             insert_once(
-                db, Actor, {"wallet": c.wallet, "worker": False, "reviewer": False}
+                db, Actor,
+                {"wallet": c.wallet, "worker": False, "reviewer": False, "over_18": body.over_18},
             )
             token = secrets.token_urlsafe(32)
             expires = now() + settings.session_seconds
@@ -291,6 +299,7 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
             "wallet": actor.wallet,
             "worker": actor.worker,
             "reviewer": actor.reviewer,
+            "over_18": actor.over_18,
             "identity_status": "operator-enrolled"
             if actor.worker or actor.reviewer
             else "wallet-only",
@@ -305,10 +314,12 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
             fail(403, "Operator authorization required")
         with database.transaction() as db:
             insert_once(
-                db, Actor, {"wallet": body.wallet, "worker": False, "reviewer": False}
+                db, Actor,
+                {"wallet": body.wallet, "worker": False, "reviewer": False, "over_18": False},
             )
             actor = lock(db, Actor, body.wallet)
             actor.worker, actor.reviewer = body.worker, body.reviewer
+            actor.over_18 = body.over_18
         return {"wallet": body.wallet, "identity_status": "operator-enrolled"}
 
     @app.post("/bounties")
@@ -333,13 +344,17 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
             if not now() + 300 <= body.deadline <= now() + 30 * 86400:
                 fail(422, "Deadline must be between five minutes and thirty days away")
             rate(db, "bounties:" + actor.wallet, 10, 3600)
+            try:
+                resolved = taxonomy.resolve(body.kind, body.category_ids)
+            except ValueError as exc:
+                fail(422, str(exc))
             b = Bounty(
                 requester=actor.wallet,
                 request_key=idempotency_key,
                 body_hash=body_hash,
                 title=body.title,
                 kind=body.kind,
-                taxonomy=[c.model_dump() for c in body.categories],
+                taxonomy=resolved,
                 reward=body.reward_usdc_units,
                 slots=body.slots,
                 deadline=body.deadline,

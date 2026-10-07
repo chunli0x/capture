@@ -5,11 +5,13 @@ import ai.loosh.union.BuildConfig
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.util.Base64
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.solana.mobilewalletadapter.clientlib.*
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
@@ -34,14 +36,12 @@ private fun bountyKindOf(submission: JSONObject): String =
 
 /** Serializes a [BountyDraft] to the create-bounty request body the server expects. */
 private fun BountyDraft.toJson(): JSONObject {
-    val cats = JSONArray()
-    categories.forEach { c ->
-        cats.put(JSONObject().put("id", c.id).put("name", c.name).put("kind", c.kind))
-    }
+    val ids = JSONArray()
+    categoryIds.forEach { ids.put(it) }
     return JSONObject()
         .put("kind", kind)
         .put("title", title)
-        .put("categories", cats)
+        .put("category_ids", ids)
         .put("reward_usdc_units", rewardUsdcUnits)
         .put("slots", slots)
         .put("deadline", deadline)
@@ -87,6 +87,8 @@ data class PilotState(
     val selected: JSONObject? = null,
     val image: Bitmap? = null,
     val videoDurationMs: Int? = null,
+    val videoUri: Uri? = null,
+    val taxonomy: List<TaxonomyCategory> = emptyList(),
     val reviewing: Boolean = false,
     val bond: Long = 0,
 )
@@ -113,7 +115,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         )
     val state = mutable.asStateFlow()
     private var token: String? = null
-    private var draftInput: List<String>? = null
+    private var draftInput: List<Any>? = null
     private var draftBody: JSONObject? = null
     private var draftKey: String? = null
     private val http =
@@ -223,7 +225,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
 
     private suspend fun list(path: String) = JSONArray(String(bytes(path))).objects()
 
-    fun connect(sender: ActivityResultSender) =
+    fun connect(sender: ActivityResultSender, over18: Boolean) =
         run("Sign in with your devnet wallet") {
             val connection = adapter.connect(sender)
             check(connection is TransactionResult.Success) { "Wallet connection was not approved." }
@@ -243,12 +245,19 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
             val signature =
                 signed.successPayload?.messages?.first()?.signatures?.first()
                     ?: error("Wallet returned no signature")
+            val verify =
+                buildVerifyRequest(
+                    challengeId = challenge.getString("challenge_id"),
+                    signature = Base58.encode(signature),
+                    over18 = over18,
+                )
             val session =
                 post(
                     "/auth/verify",
                     JSONObject()
-                        .put("challenge_id", challenge.getString("challenge_id"))
-                        .put("signature", Base58.encode(signature)),
+                        .put("challenge_id", verify.challengeId)
+                        .put("signature", verify.signature)
+                        .put("over_18", verify.over18),
                 )
             token = session.getString("token")
             mutable.update { it.copy(wallet = wallet) }
@@ -270,6 +279,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         val s = list("/submissions")
         val r = if (me.getBoolean("reviewer")) list("/review-queue") else emptyList()
         val tx = list("/transactions")
+        val taxonomy = parseTaxonomy(get("/taxonomy"))
         mutable.update {
             it.copy(
                 worker = me.getBoolean("worker"),
@@ -279,6 +289,20 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
                 submissions = s,
                 reviews = r,
                 transactions = tx,
+                taxonomy = taxonomy,
+            )
+        }
+    }
+
+    /** Parses the `GET /taxonomy` registry into per-kind categories for the creation picker. */
+    private fun parseTaxonomy(data: JSONObject): List<TaxonomyCategory> {
+        val categories = data.optJSONArray("categories") ?: return emptyList()
+        return (0 until categories.length()).map { i ->
+            val c = categories.getJSONObject(i)
+            TaxonomyCategory(
+                id = c.getInt("id"),
+                name = c.getString("name"),
+                kind = c.optString("kind", KIND_OBJECT),
             )
         }
     }
@@ -287,12 +311,14 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun close() {
         if (!mutable.value.busy)
-            mutable.update { it.copy(selected = null, image = null, videoDurationMs = null) }
+            mutable.update {
+                it.copy(selected = null, image = null, videoDurationMs = null, videoUri = null)
+            }
     }
 
     fun create(
         title: String,
-        categories: String,
+        categoryIds: List<Int>,
         reward: String,
         slots: String,
         hours: String,
@@ -301,16 +327,17 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
             val amount = reward.toBigDecimal().movePointRight(6).longValueExact()
             val duration = hours.toLong()
             require(duration in 1..720) { "Choose 1–720 hours." }
+            require(categoryIds.isNotEmpty()) { "Choose at least one category." }
             val draft =
                 buildBountyDraft(
                     kind = kind,
                     title = title,
-                    categories = categories,
+                    categoryIds = categoryIds,
                     rewardUsdcUnits = amount,
                     slots = slots.toInt(),
                     deadline = System.currentTimeMillis() / 1000 + duration * 3600,
                 )
-            val input = listOf(title, categories, reward, slots, hours, kind)
+            val input = listOf(title, categoryIds, reward, slots, hours, kind)
             val fresh = draft.toJson()
             if (draftInput != input) {
                 draftInput = input
@@ -327,19 +354,25 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         run("Reserving a capture slot") {
             val s = post("/bounties/$bid/claim")
             mutable.update {
-                it.copy(selected = s, image = null, videoDurationMs = null, reviewing = false)
+                it.copy(selected = s, image = null, videoDurationMs = null, videoUri = null, reviewing = false)
             }
-            if (!s.isNull("media_hash") && bountyKindOf(s) != "action") loadImage(s.getString("id"))
+            loadApprovedMedia(s)
             refreshData()
         }
 
     fun open(s: JSONObject, review: Boolean) =
-        run("Opening approved image") {
+        run("Opening approved media") {
             mutable.update {
-                it.copy(selected = s, image = null, videoDurationMs = null, reviewing = review)
+                it.copy(selected = s, image = null, videoDurationMs = null, videoUri = null, reviewing = review)
             }
-            if (!s.isNull("media_hash") && bountyKindOf(s) != "action") loadImage(s.getString("id"))
+            loadApprovedMedia(s)
         }
+
+    /** Loads the approved image or video backing a submission, keyed by bounty kind. */
+    private suspend fun loadApprovedMedia(s: JSONObject) {
+        if (s.isNull("media_hash")) return
+        if (bountyKindOf(s) == "action") loadVideo(s.getString("id")) else loadImage(s.getString("id"))
+    }
 
     private suspend fun loadImage(id: String) {
         val data = bytes("/submissions/$id/media")
@@ -348,7 +381,35 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
                 BitmapFactory.decodeByteArray(data, 0, data.size)
                     ?: error("Image cannot be decoded")
             }
-        mutable.update { it.copy(image = image) }
+        mutable.update { it.copy(image = image, videoUri = null) }
+    }
+
+    private suspend fun loadVideo(id: String) {
+        val data = bytes("/submissions/$id/media")
+        val file = File(getApplication<Application>().cacheDir, "seeker-video-$id.mp4")
+        withContext(Dispatchers.IO) { file.writeBytes(data) }
+        val durationMs =
+            withContext(Dispatchers.IO) {
+                runCatching { probeDurationMs(file) }.getOrDefault(0)
+            }
+        mutable.update {
+            it.copy(
+                videoUri = Uri.fromFile(file),
+                image = null,
+                videoDurationMs = if (durationMs > 0) durationMs else it.videoDurationMs,
+            )
+        }
+    }
+
+    /** Authoritative clip duration in integer ms, read from the media container itself. */
+    private fun probeDurationMs(file: File): Int {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(file.absolutePath)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toIntOrNull() ?: 0
+        } finally {
+            retriever.release()
+        }
     }
 
     fun capture(claimId: String, data: ByteArray, videoDurationMs: Int? = null) =
@@ -362,6 +423,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
                 loadImage(id)
             } else {
                 mutable.update { it.copy(image = null, videoDurationMs = videoDurationMs) }
+                loadVideo(id)
             }
             refreshData()
         }

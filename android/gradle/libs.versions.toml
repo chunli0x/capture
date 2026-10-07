@@ -28,6 +28,9 @@ mlkitFace = "16.1.7"
 # release without that split.
 litert = "2.1.5"
 junit = "4.13.2"
+# Media3 (ExoPlayer) for action-clip playback in the Seeker editor. Pinned to
+# 1.9.0 to match the transitive media3-* the CameraX video stack already pulls.
+media3 = "1.9.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -52,6 +55,8 @@ camerax-video = { group = "androidx.camera", name = "camera-video", version.ref 
 mlkit-face-detection = { group = "com.google.mlkit", name = "face-detection", version.ref = "mlkitFace" }
 litert = { group = "com.google.ai.edge.litert", name = "litert", version.ref = "litert" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
+androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
