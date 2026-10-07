@@ -1,7 +1,49 @@
-"""Initial, additive schema. Requires explicit invocation against an empty Seeker DB."""
+"""Apply Seeker schema: create_all for fresh DBs plus numbered, idempotent
+column migrations for upgrades. Run `python -m seeker.migrate`."""
+
+import importlib.util
+from pathlib import Path
+
+from sqlalchemy import inspect
 
 from .config import Settings
 from .db import Base, connect
+
+MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
+
+
+def _numbered_migrations():
+    """Yield (migration_id, columns) for every NNNN_*.py module in migrations/,
+    in filename order. Each module exposes a COLUMNS list of
+    (table, column, ddl) triples."""
+    for path in sorted(MIGRATIONS_DIR.glob("[0-9]*.py")):
+        spec = importlib.util.spec_from_file_location(
+            "seeker_migrations_" + path.stem, path
+        )
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        yield path.stem, module.COLUMNS
+
+
+def apply_migrations(engine):
+    """Idempotently apply every numbered migration. A column is added with
+    ``ALTER TABLE … ADD COLUMN`` only when it is absent, so an existing phase-1
+    DB upgrades cleanly (duration_ms stops being silently NULL) and re-running
+    is a no-op. Works on both SQLite and PostgreSQL."""
+    applied = 0
+    for migration_id, columns in _numbered_migrations():
+        for table, column, ddl in columns:
+            inspector = inspect(engine)
+            if column in {c["name"] for c in inspector.get_columns(table)}:
+                continue
+            with engine.begin() as conn:
+                conn.exec_driver_sql(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"
+                )
+            applied += 1
+    return applied
 
 
 def main():
@@ -9,7 +51,8 @@ def main():
     engine = connect(settings.database_url)
     # Version 1 is additive only, idempotent, and never touches tapfarm tables.
     Base.metadata.create_all(engine)
-    print("Seeker schema version 1 applied")
+    apply_migrations(engine)
+    print("Seeker schema applied (create_all + numbered migrations)")
 
 
 if __name__ == "__main__":

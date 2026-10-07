@@ -134,18 +134,56 @@ def _hdlr(handler):
     return _box(b"hdlr", payload)
 
 
-def _trak(handler):
-    return _box(b"trak", _box(b"mdia", _hdlr(handler)))
+def _mdhd(duration_ms, timescale=1000):
+    payload = (
+        b"\x00\x00\x00\x00"
+        + struct.pack(">II", 0, 0)
+        + struct.pack(">I", timescale)
+        + struct.pack(">I", duration_ms * timescale // 1000)
+        + struct.pack(">HH", 0x55C4, 0)
+    )
+    return _box(b"mdhd", payload)
 
 
-def mp4(duration_ms=2000, video=True, extra_video=False, audio=True):
+def _stts(sample_count, sample_delta):
+    payload = (
+        b"\x00\x00\x00\x00"
+        + struct.pack(">I", 1)
+        + struct.pack(">II", sample_count, sample_delta)
+    )
+    return _box(b"stts", payload)
+
+
+def _trak(handler, duration_ms=2000):
+    stbl = _box(b"stbl", _stts(1, duration_ms))
+    minf = _box(b"minf", stbl)
+    mdia = _box(b"mdia", _mdhd(duration_ms) + _hdlr(handler) + minf)
+    return _box(b"trak", mdia)
+
+
+def _udta(marker):
+    return _box(b"udta", _box(b"\xa9xyz", marker))
+
+
+def mp4(
+    duration_ms=2000,
+    video=True,
+    extra_video=False,
+    audio=True,
+    track_duration_ms=None,
+    marker=None,
+):
+    if track_duration_ms is None:
+        track_duration_ms = duration_ms
     children = [_mvhd(duration_ms)]
     if video:
-        children.append(_trak(b"vide"))
+        children.append(_trak(b"vide", track_duration_ms))
     if extra_video:
-        children.append(_trak(b"vide"))
+        children.append(_trak(b"vide", track_duration_ms))
     if audio:
-        children.append(_trak(b"soun"))
+        children.append(_trak(b"soun", duration_ms))
+    if marker is not None:
+        children.append(_udta(marker))
     moov = _box(b"moov", b"".join(children))
     ftyp = _box(b"ftyp", b"isom" + struct.pack(">I", 512) + b"isom")
     return ftyp + moov + b"\x00" * 16
@@ -366,6 +404,27 @@ def test_mp4_ingestion_bounds():
         canonicalize_video(png())  # not an MP4
 
 
+def test_video_duration_authoritative_from_track():
+    # mvhd lies (2000ms) while the video track's mdhd/stts runs 60000ms: the
+    # authoritative duration must exceed 30s and be rejected, not silently
+    # accepted at the spoofed 2000ms.
+    with pytest.raises(MediaRejected):
+        canonicalize_video(mp4(2000, track_duration_ms=60_000))
+    # Track duration within bounds is authoritative (maximum of mvhd and track).
+    ok, h, dhash, dur = canonicalize_video(mp4(2000, track_duration_ms=25_000))
+    assert dur == 25_000 and h == __import__("hashlib").sha256(ok).hexdigest()
+
+
+def test_canonicalize_video_strips_udta_metadata():
+    marker = b"+27.5916+085.5640"  # GPS location in an Apple ©xyz atom
+    raw = mp4(marker=marker)
+    assert marker in raw and b"\xa9xyz" in raw  # ©xyz GPS/device atom
+    canonical, h, dhash, dur = canonicalize_video(raw)
+    assert marker not in canonical
+    assert b"\xa9xyz" not in canonical
+    assert h == __import__("hashlib").sha256(canonical).hexdigest()
+
+
 def test_video_moderation_fail_closed(pilot, monkeypatch):
     import httpx
 
@@ -436,6 +495,39 @@ def test_video_pass_helpers_fail_closed():
     bad = __import__("copy").deepcopy(benign)
     bad["status"][0]["response"]["output"]["file"]["fileType"] = "image"
     assert not hive_video_pass(bad)
+
+
+def test_hive_video_pass_blocks_csam_hashes():
+    benign = {
+        "status": [
+            {
+                "status": {"code": 200},
+                "response": {
+                    "output": {
+                        "file": {
+                            "fileType": "video",
+                            "reasons": [],
+                            "frames": [{}],
+                            "classifierPrediction": {
+                                "csam_classifier": {
+                                    "csam": 0.001,
+                                    "pornography": 0.001,
+                                    "other": 0.998,
+                                }
+                            },
+                        },
+                        "hashes": [],
+                    }
+                },
+            }
+        ]
+    }
+    assert hive_video_pass(benign)
+    # A non-empty hashes list is Hive's known-CSAM hash match (PhotoDNA/MD5);
+    # it must never pass, matching the image path.
+    csam = __import__("copy").deepcopy(benign)
+    csam["status"][0]["response"]["output"]["hashes"] = [{"hash": "deadbeef"}]
+    assert not hive_video_pass(csam)
 
 
 # ---- offline keypoint job ----
@@ -541,3 +633,43 @@ def test_action_flow_keypoints_are_server_side_only(pilot):
     got = c.get("/submissions", headers=h[0]).json()
     sub = next(s for s in got if s["id"] == sid)
     assert len(sub["keypoints"]) == 4
+
+
+# ---- migration 0002: phase-2 columns ----
+
+
+def test_migration_0002_adds_phase2_columns(tmp_path):
+    from sqlalchemy import inspect
+
+    from seeker.db import connect
+    from seeker.migrate import apply_migrations
+
+    engine = connect("sqlite:///" + str(tmp_path / "old-phase1.db"))
+    # Phase-1 schema: no kind, duration_ms, or keypoints columns.
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "CREATE TABLE seeker_bounties (id VARCHAR(32) PRIMARY KEY, "
+            "requester VARCHAR(44), request_key VARCHAR(64), body_hash VARCHAR(64), "
+            "title VARCHAR(160), taxonomy JSON, reward BIGINT, slots INTEGER, "
+            "deadline BIGINT, status VARCHAR(24))"
+        )
+        conn.exec_driver_sql(
+            "CREATE TABLE seeker_submissions (id VARCHAR(32) PRIMARY KEY, "
+            "bounty_id VARCHAR(32), worker VARCHAR(44), expires BIGINT, "
+            "status VARCHAR(24), media_hash VARCHAR(64), perceptual VARCHAR(16), "
+            "encrypted_media BLOB, moderation JSON, labels JSON, label_hash VARCHAR(64))"
+        )
+    bounty_cols = {c["name"] for c in inspect(engine).get_columns("seeker_bounties")}
+    sub_cols = {c["name"] for c in inspect(engine).get_columns("seeker_submissions")}
+    assert "kind" not in bounty_cols
+    assert "duration_ms" not in sub_cols and "keypoints" not in sub_cols
+
+    # Migration adds the three columns idempotently.
+    assert apply_migrations(engine) == 3
+    assert apply_migrations(engine) == 0  # re-run is a no-op
+
+    bounty_cols = {c["name"] for c in inspect(engine).get_columns("seeker_bounties")}
+    sub_cols = {c["name"] for c in inspect(engine).get_columns("seeker_submissions")}
+    assert "kind" in bounty_cols
+    assert "duration_ms" in sub_cols and "keypoints" in sub_cols
+    engine.dispose()

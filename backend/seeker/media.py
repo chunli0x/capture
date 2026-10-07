@@ -90,15 +90,91 @@ def _mvhd_duration_ms(buf, start, end):
     return (duration * 1000) // timescale
 
 
-def _trak_handler(buf, start, end):
-    for btype, s2, e2 in _boxes(buf, start, end):
+def _mdhd_info(buf, start, end):
+    """Return (timescale, duration_units) from a media header (mdhd) box."""
+    payload = buf[start:end]
+    if len(payload) < 20:
+        raise MediaRejected("Malformed media header")
+    version = payload[0]
+    if version == 1:
+        if len(payload) < 32:
+            raise MediaRejected("Malformed 64-bit media header")
+        timescale = int.from_bytes(payload[20:24], "big")
+        duration = int.from_bytes(payload[24:32], "big")
+    else:
+        timescale = int.from_bytes(payload[12:16], "big")
+        duration = int.from_bytes(payload[16:20], "big")
+    if timescale <= 0:
+        raise MediaRejected("Invalid media timescale")
+    return timescale, duration
+
+
+def _stts_total(buf, start, end):
+    """Return (sample_count, total_duration_units) from a time-to-sample box."""
+    payload = buf[start:end]
+    if len(payload) < 8:
+        raise MediaRejected("Malformed time-to-sample box")
+    entry_count = int.from_bytes(payload[4:8], "big")
+    samples = 0
+    total = 0
+    off = 8
+    for _ in range(entry_count):
+        if off + 8 > len(payload):
+            raise MediaRejected("Truncated time-to-sample entry")
+        count = int.from_bytes(payload[off : off + 4], "big")
+        delta = int.from_bytes(payload[off + 4 : off + 8], "big")
+        samples += count
+        total += count * delta
+        off += 8
+    return samples, total
+
+
+def _trak_video_info(buf, start, end):
+    """Inspect one trak box. Returns (handler, track_duration_ms, sample_count).
+
+    track_duration_ms is the maximum of the mdhd-declared duration and the sum
+    of stts sample deltas, converted to milliseconds with the mdhd timescale.
+    """
+    handler = None
+    timescale = None
+    mdhd_duration = 0
+    sample_count = 0
+    stts_total = 0
+    for btype, s, e in _boxes(buf, start, end):
         if btype == "mdia":
-            for btype3, s3, e3 in _boxes(buf, s2, e2):
-                if btype3 == "hdlr":
-                    payload = buf[s3:e3]
+            for btype2, s2, e2 in _boxes(buf, s, e):
+                if btype2 == "hdlr":
+                    payload = buf[s2:e2]
                     if len(payload) >= 12:
-                        return payload[8:12].decode("latin1")
-    return None
+                        handler = payload[8:12].decode("latin1")
+                elif btype2 == "mdhd":
+                    timescale, mdhd_duration = _mdhd_info(buf, s2, e2)
+                elif btype2 == "minf":
+                    for btype3, s3, e3 in _boxes(buf, s2, e2):
+                        if btype3 == "stbl":
+                            for btype4, s4, e4 in _boxes(buf, s3, e3):
+                                if btype4 == "stts":
+                                    sc, tot = _stts_total(buf, s4, e4)
+                                    sample_count += sc
+                                    stts_total += tot
+    if timescale is None:
+        track_duration_ms = 0
+    else:
+        track_duration_ms = (max(mdhd_duration, stts_total) * 1000) // timescale
+    return handler, track_duration_ms, sample_count
+
+
+def _strip_metadata_atoms(buf, start, end):
+    """Zero the payload of every udta/meta box under container [start, end).
+
+    Zeroing (rather than removing) keeps every byte offset identical, so
+    chunk-offset tables (stco) stay valid and the clip remains playable while
+    GPS / device / copyright metadata (udta → ©xyz, ©nam, ©day, ©mak, ©mod, …)
+    is destroyed.
+    """
+    for btype, s, e in _boxes(buf, start, end):
+        if btype in ("udta", "meta"):
+            buf[s:e] = b"\x00" * (e - s)
 
 
 def video_dhash(raw):
@@ -113,19 +189,23 @@ def video_dhash(raw):
 
 
 def canonicalize_video(raw, max_bytes=MAX_VIDEO_BYTES, max_seconds=MAX_VIDEO_SECONDS):
-    """Validate and bound an MP4 action clip: exactly one video track, bounded
-    duration/size. Returns (canonical, sha256, perceptual, duration_ms).
+    """Validate and bound an MP4 action clip: exactly one decodable video track,
+    bounded duration/size, metadata stripped. Returns
+    (canonical, sha256, perceptual, duration_ms).
 
-    Unlike the image path there is no metadata-stripping re-encode here (that
-    needs a transcoder); the clip is stored as validated input bytes and still
-    passes the same encrypt + moderation gate. Audio-only and multi-track files
-    are rejected.
+    The authoritative duration is the maximum of the movie-level mvhd duration
+    and the video track's own mdhd/stts duration, so a track cannot spoof a
+    short clip by lying in mvhd while its samples run longer. At least one
+    decodable video sample must be declared in stts, so a moov-only or
+    audio-only file cannot pass on handler type alone. Metadata (udta/meta
+    atoms: GPS ©xyz, device, copyright) is stripped by zeroing those atoms in
+    place before the bytes are stored; no transcoder re-encode is performed.
     """
     if len(raw) > max_bytes:
         raise MediaRejected("Video exceeds size limit")
     if len(raw) < 8:
         raise MediaRejected("Invalid or empty video")
-    buf = raw
+    buf = bytearray(raw)
     end = len(buf)
     has_ftyp = False
     moov = None
@@ -136,28 +216,42 @@ def canonicalize_video(raw, max_bytes=MAX_VIDEO_BYTES, max_seconds=MAX_VIDEO_SEC
             moov = (start, stop)
     if not has_ftyp or moov is None:
         raise MediaRejected("Not an MP4 file")
-    duration_ms = None
+    mvhd_duration_ms = None
     video_tracks = 0
     audio_tracks = 0
+    track_duration_ms = 0
+    video_sample_count = 0
     ms, me = moov
     for btype, start, stop in _boxes(buf, ms, me):
         if btype == "mvhd":
-            duration_ms = _mvhd_duration_ms(buf, start, stop)
+            mvhd_duration_ms = _mvhd_duration_ms(buf, start, stop)
         elif btype == "trak":
-            handler = _trak_handler(buf, start, stop)
+            handler, t_ms, samples = _trak_video_info(buf, start, stop)
             if handler == "vide":
                 video_tracks += 1
+                track_duration_ms = t_ms
+                video_sample_count = samples
             elif handler == "soun":
                 audio_tracks += 1
     if video_tracks == 0:
         raise MediaRejected("Audio-only media is not an acceptable video")
     if video_tracks > 1:
         raise MediaRejected("Multi-track video is not supported")
-    if duration_ms is None or duration_ms <= 0:
+    if video_sample_count < 1:
+        raise MediaRejected("Video declares no decodable samples")
+    if mvhd_duration_ms is None:
+        raise MediaRejected("Video duration could not be determined")
+    duration_ms = max(mvhd_duration_ms, track_duration_ms)
+    if duration_ms <= 0:
         raise MediaRejected("Video duration could not be determined")
     if duration_ms > max_seconds * 1000:
         raise MediaRejected("Video exceeds duration limit")
-    canonical = bytes(raw)
+    # Strip GPS/device/copyright metadata before the approved bytes are stored.
+    _strip_metadata_atoms(buf, ms, me)
+    for btype, start, stop in _boxes(buf, ms, me):
+        if btype == "trak":
+            _strip_metadata_atoms(buf, start, stop)
+    canonical = bytes(buf)
     return (
         canonical,
         hashlib.sha256(canonical).hexdigest(),
@@ -223,7 +317,13 @@ def hive_video_pass(data):
         return False
     out = entries[0]["response"]["output"]
     file = out["file"]
-    if file.get("fileType") != "video" or file.get("reasons") != []:
+    if (
+        file.get("fileType") != "video"
+        or file.get("reasons") != []
+        or out.get("hashes") != []
+    ):
+        # A non-empty hashes list is Hive's known-CSAM hash match (PhotoDNA/MD5)
+        # and must never pass, mirroring the image path.
         return False
     frames = file.get("frames")
     if not isinstance(frames, list) or len(frames) == 0:
