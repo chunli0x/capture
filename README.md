@@ -14,14 +14,17 @@ proof of humanness, and slashing is implemented but not yet enforced.
 Built for [CLOCK IN](https://docs.solanamobile.com/hackathon/) — Solana Mobile ×
 RadiantsDAO, September 8 – October 8 2026.
 
-> **Status: week 3 of 4.** The labeling engine (ghost overlay and clip
-> judgment), the verifier-signed attestation layer, both on-chain programs, and
-> the demand side (agents buying a human judgment over x402, with Jev routing
-> escalation) are built. A plain `pytest -q` reports **503 passed, 13 skipped**
-> (the skips are on-chain tests behind `TAPFARM_E2E=1`), alongside **42** Rust
-> logic tests across both programs. The on-device MWA handshake is the open
-> item. See [docs/SPIKE.md](docs/SPIKE.md) for the full ledger of what is
-> proven and what is not.
+> **Status: submission-ready (week 4 of 4).** The labeling engine (ghost
+> overlay and clip judgment), the verifier-signed attestation layer, the
+> on-chain programs, and the demand side (agents buying a human judgment over
+> x402, with Jev routing escalation) are built. A plain `pytest -q` reports
+> **526 passed, 18 skipped** (the skips are on-chain tests behind `TAPFARM_E2E=1`
+> and the seeker pilot's DB-backed tests), alongside **46** Rust logic tests
+> across three programs (42 in the two Union programs, 4 in the separate
+> seeker-bounty pilot). The on-device MWA handshake is the one open item,
+> verified in CI but not yet on physical Seeker hardware. See
+> [docs/SPIKE.md](docs/SPIKE.md) for the full ledger of what is proven and what
+> is not.
 
 ## The demand side — agents pay for a human judgment
 
@@ -368,6 +371,7 @@ backend/
 programs/
   tapfarm-stake/         Anchor program: HUMAN bond, SKR access stake, slashing
   union-bond/            Anchor program: HUMAN attestation bond, challenge/slash/release
+  seeker-bounty/         Anchor program: separate object-bounty pilot (not the Union demo)
 scripts/    Devnet bootstrap and program deploy
 docs/       Spike notes, platform roadmap
 ```
@@ -432,6 +436,13 @@ with an MWA-compatible wallet installed (Phantom or Solflare, set to devnet).
 No Android toolchain is required to try it - the server address is editable in
 the app, so a prebuilt APK works on any network.
 
+> **For judges: there is no hosted backend.** The API is not deployed anywhere —
+> there is no Dockerfile or public host today. To try the app, run the backend
+> on a computer with this one command and put the printed address into the app
+> on your phone. Everything below runs on **Solana devnet with test-fixture
+> tokens** (HUMAN and a USDC stand-in; SKR does not exist on devnet) — no real
+> money moves.
+
 ```bash
 git clone https://github.com/chunli0x/captcha.git
 cd captcha
@@ -466,8 +477,8 @@ absent during the blind run.
 cd backend && pip install -r requirements.txt
 python -m tapfarm.generator.dataset --out data/tapgrid --count 10000
 python -m tapfarm.pose.dataset --out data/pose
-pytest -q                                                    # 503, offline
-cargo test -p tapfarm-stake -p union-bond --lib              # 42, program logic
+pytest -q                                                    # 526, offline
+cargo test -p tapfarm-stake -p union-bond --lib              # 42, Union program logic
 uvicorn tapfarm.main:app --host 0.0.0.0 --port 8000
 
 cd android && ./gradlew installDebug -PtapfarmApiBase=http://<LAN-IP>:8000

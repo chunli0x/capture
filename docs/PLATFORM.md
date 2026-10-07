@@ -101,7 +101,9 @@ manifest allows cleartext traffic for the local dev backend. Both are fine for a
 devnet demo and both must change before any public build.
 
 **Backend hosting.** There is no Dockerfile or deployment target. The demo runs
-the API locally over the LAN; anything judges install would need a real host.
+the API locally over the LAN via `./scripts/run_demo.sh` (documented in the
+README's "Seeing it run"); anything judges install needs a real host. Decision
+for this submission: ship the one-command local path, not a hosted API.
 
 ## Ghost overlay, v2
 
