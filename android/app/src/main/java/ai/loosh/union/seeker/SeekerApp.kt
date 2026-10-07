@@ -293,14 +293,33 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
 @Composable
 private fun CreateBountyForm(
     busy: Boolean,
-    create: (String, String, String, String, String) -> Unit,
+    create: (String, String, String, String, String, String) -> Unit,
 ) {
     var title by remember { mutableStateOf("") }
     var categories by remember { mutableStateOf("cup") }
     var reward by remember { mutableStateOf("1") }
     var slots by remember { mutableStateOf("1") }
     var hours by remember { mutableStateOf("24") }
+    var kind by remember { mutableStateOf(KIND_OBJECT) }
     OutlinedTextField(title, { title = it }, label = { Text("Bounty title") })
+    Text("Kind", style = MaterialTheme.typography.labelLarge)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = kind == KIND_OBJECT,
+            onClick = { kind = KIND_OBJECT },
+            label = { Text("Object") },
+        )
+        FilterChip(
+            selected = kind == KIND_PLACE,
+            onClick = { kind = KIND_PLACE },
+            label = { Text("Place") },
+        )
+        FilterChip(
+            selected = kind == KIND_ACTION,
+            onClick = { kind = KIND_ACTION },
+            label = { Text("Action") },
+        )
+    }
     OutlinedTextField(
         categories,
         { categories = it },
@@ -309,7 +328,7 @@ private fun CreateBountyForm(
     OutlinedTextField(reward, { reward = it }, label = { Text("TEST-USDC per accepted photo") })
     OutlinedTextField(slots, { slots = it }, label = { Text("Payable slots (1–100)") })
     OutlinedTextField(hours, { hours = it }, label = { Text("Deadline in hours (1–720)") })
-    Button(onClick = { create(title, categories, reward, slots, hours) }, enabled = !busy) {
+    Button(onClick = { create(title, categories, reward, slots, hours, kind) }, enabled = !busy) {
         Text("Save draft")
     }
 }

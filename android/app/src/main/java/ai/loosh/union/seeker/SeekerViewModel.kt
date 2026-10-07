@@ -32,6 +32,21 @@ private fun JSONArray.objects() = (0 until length()).map { getJSONObject(it) }
 private fun bountyKindOf(submission: JSONObject): String =
     submission.optJSONObject("bounty")?.optString("kind", "object") ?: "object"
 
+/** Serializes a [BountyDraft] to the create-bounty request body the server expects. */
+private fun BountyDraft.toJson(): JSONObject {
+    val cats = JSONArray()
+    categories.forEach { c ->
+        cats.put(JSONObject().put("id", c.id).put("name", c.name).put("kind", c.kind))
+    }
+    return JSONObject()
+        .put("kind", kind)
+        .put("title", title)
+        .put("categories", cats)
+        .put("reward_usdc_units", rewardUsdcUnits)
+        .put("slots", slots)
+        .put("deadline", deadline)
+}
+
 private class ApiFailure(val status: Int, message: String) : java.io.IOException(message)
 
 /**
@@ -275,27 +290,28 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
             mutable.update { it.copy(selected = null, image = null, videoDurationMs = null) }
     }
 
-    fun create(title: String, categories: String, reward: String, slots: String, hours: String) =
-        run("Creating bounty draft") {
+    fun create(
+        title: String,
+        categories: String,
+        reward: String,
+        slots: String,
+        hours: String,
+        kind: String = KIND_OBJECT,
+    ) = run("Creating bounty draft") {
             val amount = reward.toBigDecimal().movePointRight(6).longValueExact()
-            val cats = JSONArray()
-            categories
-                .split(',')
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-                .forEachIndexed { index, name ->
-                    cats.put(JSONObject().put("id", index + 1).put("name", name))
-                }
             val duration = hours.toLong()
             require(duration in 1..720) { "Choose 1–720 hours." }
-            val input = listOf(title, categories, reward, slots, hours)
-            val fresh =
-                JSONObject()
-                    .put("title", title)
-                    .put("categories", cats)
-                    .put("reward_usdc_units", amount)
-                    .put("slots", slots.toInt())
-                    .put("deadline", System.currentTimeMillis() / 1000 + duration * 3600)
+            val draft =
+                buildBountyDraft(
+                    kind = kind,
+                    title = title,
+                    categories = categories,
+                    rewardUsdcUnits = amount,
+                    slots = slots.toInt(),
+                    deadline = System.currentTimeMillis() / 1000 + duration * 3600,
+                )
+            val input = listOf(title, categories, reward, slots, hours, kind)
+            val fresh = draft.toJson()
             if (draftInput != input) {
                 draftInput = input
                 draftBody = fresh
