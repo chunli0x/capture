@@ -34,6 +34,7 @@ backend/.solana-cli.yml
 
 # Program keypair controls the program address and upgrade authority.
 programs/*/program-keypair.json
+deployer.json
 target/
 
 # Bootstrap state (records created mints so a re-run reuses them)

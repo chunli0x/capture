@@ -53,7 +53,7 @@ def runtime(tmp_path):
     key.write_text(json.dumps(list(bytes(verifier))))
     chain = Chain(
         SimpleNamespace(
-            program_id="9ryH9pVVpnQdu1dx6jUaZLEMsb3YdvqWid3vt8DpnVWR",
+            program_id="HyNNfKuyEuyc98fo2zsdyPrHmCX7tuMXvVPF8vJB12Sm",
             usdc_mint=str(Keypair().pubkey()),
             skr_mint=str(Keypair().pubkey()),
             verifier_key_file=key,

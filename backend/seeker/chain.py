@@ -19,7 +19,7 @@ from spl.token.instructions import get_associated_token_address
 
 SYSTEM = Pubkey.default()
 RENT = Pubkey.from_string("SysvarRent111111111111111111111111111111111")
-DEVNET_GENESIS = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1"
+DEVNET_GENESIS = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
 
 
 class ChainUnavailable(ValueError):

@@ -5,12 +5,12 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-seeker_bounty = "9ryH9pVVpnQdu1dx6jUaZLEMsb3YdvqWid3vt8DpnVWR"
+seeker_bounty = "HyNNfKuyEuyc98fo2zsdyPrHmCX7tuMXvVPF8vJB12Sm"
 tapfarm_stake = "9brNsPyt6cb9yVv9kFNvN9xwd9ww41BJqiyG4DpCR1aQ"
 union_bond = "BondDfbRr6dZ4TYr6yBSAqWnJb1zpCPtkTqTH1HNMz6a"
 
 [programs.devnet]
-seeker_bounty = "9ryH9pVVpnQdu1dx6jUaZLEMsb3YdvqWid3vt8DpnVWR"
+seeker_bounty = "HyNNfKuyEuyc98fo2zsdyPrHmCX7tuMXvVPF8vJB12Sm"
 
 [registry]
 url = "https://api.apr.dev"
