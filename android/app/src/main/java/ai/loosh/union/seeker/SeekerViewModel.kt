@@ -303,6 +303,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
                 id = c.getInt("id"),
                 name = c.getString("name"),
                 kind = c.optString("kind", KIND_OBJECT),
+                group = c.optString("group").takeIf { it.isNotBlank() },
             )
         }
     }
@@ -432,6 +433,19 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         mutable.value.selected?.getString("media_hash")
             ?: error("No approved media to label")
 
+    /** Appends the three optional secondary arrays, omitting any that are empty. */
+    private fun JSONObject.withSecondary(secondary: SecondarySelection): JSONObject =
+        apply {
+            secondaryLabelFields(
+                    secondary.expressions,
+                    secondary.postures,
+                    secondary.environment,
+                )
+                .forEach { (key, ids) ->
+                    put(key, JSONArray().apply { ids.forEach { put(it) } })
+                }
+        }
+
     private fun submitLabels(payload: JSONObject) =
         run("Submitting manual labels") {
             val s = mutable.value.selected ?: error("No selected capture")
@@ -441,7 +455,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
             refreshData()
         }
 
-    fun submit(boxes: List<LabelBox>) =
+    fun submit(boxes: List<LabelBox>, secondary: SecondarySelection) =
         submitLabels(
             JSONObject()
                 .put("media_hash", mediaHash())
@@ -460,16 +474,18 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
                         }
                     },
                 )
+                .withSecondary(secondary)
         )
 
-    fun submitPlace(categoryId: Int) =
+    fun submitPlace(categoryId: Int, secondary: SecondarySelection) =
         submitLabels(
             JSONObject()
                 .put("media_hash", mediaHash())
                 .put("scene", JSONObject().put("category_id", categoryId))
+                .withSecondary(secondary)
         )
 
-    fun submitAction(categoryId: Int, trim: TrimRange) =
+    fun submitAction(categoryId: Int, trim: TrimRange, secondary: SecondarySelection) =
         submitLabels(
             JSONObject()
                 .put("media_hash", mediaHash())
@@ -480,6 +496,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
                         .put("start_ms", trim.startMs)
                         .put("end_ms", trim.endMs),
                 )
+                .withSecondary(secondary)
         )
 
     fun transact(path: String, sender: ActivityResultSender) =

@@ -133,6 +133,10 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
                     s.videoDurationMs == null &&
                     selected.isNull("media_hash") &&
                     selected.getString("worker") == s.wallet
+            if (canCapture)
+                Text(
+                    "Capture low: hold the camera 6–12 inches off the ground, angled forward or upward."
+                )
             when (kind) {
                 "action" ->
                     if (canCapture) {
@@ -379,7 +383,7 @@ private fun PhotoEditor(
     s: PilotState,
     editable: Boolean,
     enabled: Boolean,
-    submit: (List<LabelBox>) -> Unit,
+    submit: (List<LabelBox>, SecondarySelection) -> Unit,
 ) {
     val bitmap = s.image ?: return
     val selected = s.selected ?: return
@@ -409,6 +413,7 @@ private fun PhotoEditor(
         }
     var start by remember { mutableStateOf<Offset?>(null) }
     var end by remember { mutableStateOf<Offset?>(null) }
+    var secondary by remember(selected, s.reviewing) { mutableStateOf(SecondarySelection()) }
     if (editable) {
         Text(
             "Choose a category, then drag a box over each object. You can also add a box using normalized coordinates below."
@@ -422,6 +427,7 @@ private fun PhotoEditor(
                 enabled = enabled,
             )
         }
+        SecondaryPicker(s.taxonomy, secondary, enabled) { secondary = it }
     }
     Box(Modifier.fillMaxWidth().aspectRatio(bitmap.width.toFloat() / bitmap.height)) {
         Image(bitmap.asImageBitmap(), "Approved object photo", Modifier.fillMaxSize())
@@ -512,7 +518,7 @@ private fun PhotoEditor(
         ) {
             Text("Undo last box")
         }
-        Button(onClick = { submit(boxes) }, enabled = enabled && boxes.isNotEmpty()) {
+        Button(onClick = { submit(boxes, secondary) }, enabled = enabled && boxes.isNotEmpty()) {
             Text(if (s.reviewing) "Submit independent review" else "Submit immutable labels")
         }
     }
@@ -641,7 +647,7 @@ private fun PlaceEditor(
     s: PilotState,
     editable: Boolean,
     enabled: Boolean,
-    submit: (Int) -> Unit,
+    submit: (Int, SecondarySelection) -> Unit,
 ) {
     val bitmap = s.image ?: return
     val selected = s.selected ?: return
@@ -669,8 +675,10 @@ private fun PlaceEditor(
             enabled = enabled && editable,
         )
     }
+    var secondary by remember(selected, s.reviewing) { mutableStateOf(SecondarySelection()) }
     if (editable) {
-        Button(onClick = { submit(category) }, enabled = enabled) {
+        SecondaryPicker(s.taxonomy, secondary, enabled) { secondary = it }
+        Button(onClick = { submit(category, secondary) }, enabled = enabled) {
             Text(if (s.reviewing) "Submit independent review" else "Submit immutable label")
         }
     }
@@ -681,7 +689,7 @@ private fun ActionEditor(
     s: PilotState,
     editable: Boolean,
     enabled: Boolean,
-    submit: (Int, TrimRange) -> Unit,
+    submit: (Int, TrimRange, SecondarySelection) -> Unit,
 ) {
     val selected = s.selected ?: return
     val durationMs = s.videoDurationMs ?: return
@@ -760,9 +768,11 @@ private fun ActionEditor(
     val trim = trimRange(startMs, endMs, durationMs)
     if (trim != null) Text("Trim ${trim.startMs}–${trim.endMs} ms")
     else Text("Trim must be start < end", color = MaterialTheme.colorScheme.error)
+    var secondary by remember(selected, s.reviewing) { mutableStateOf(SecondarySelection()) }
     if (editable) {
+        SecondaryPicker(s.taxonomy, secondary, enabled) { secondary = it }
         Button(
-            onClick = { trim?.let { submit(category, it) } },
+            onClick = { trim?.let { submit(category, it, secondary) } },
             enabled = enabled && trim != null,
         ) {
             Text(if (s.reviewing) "Submit independent review" else "Submit immutable labels")
@@ -921,5 +931,92 @@ private fun CaptureVideo(enabled: Boolean, onVideo: (ByteArray, Int) -> Unit) {
         enabled = enabled && videoCapture != null && (recording == null || recordingActive),
     ) {
         Text(if (recording == null) "Start recording" else "Stop recording")
+    }
+}
+
+/**
+ * Optional secondary-label section shown inside each editable editor: three
+ * multi-select FilterChip groups — Expressions, Body language, Environment —
+ * pulled from the registry. Environment chips are grouped by `group` with the
+ * group name as a subheading and enforce at most one selection per group. All
+ * three default empty; nothing is rendered when the registry has no secondary
+ * categories of any kind.
+ */
+@Composable
+private fun SecondaryPicker(
+    taxonomy: List<TaxonomyCategory>,
+    selection: SecondarySelection,
+    enabled: Boolean,
+    onChange: (SecondarySelection) -> Unit,
+) {
+    val expressions = categoriesOfKind(taxonomy, KIND_EXPRESSION)
+    val postures = categoriesOfKind(taxonomy, KIND_POSTURE)
+    val environments = environmentGroups(taxonomy)
+    if (expressions.isEmpty() && postures.isEmpty() && environments.isEmpty()) return
+
+    Text("Optional secondary labels", style = MaterialTheme.typography.titleMedium)
+
+    if (expressions.isNotEmpty()) {
+        Text("Expressions", style = MaterialTheme.typography.labelLarge)
+        expressions.forEach { c ->
+            FilterChip(
+                selected = c.id in selection.expressions,
+                onClick = {
+                    onChange(
+                        selection.copy(
+                            expressions =
+                                if (c.id in selection.expressions) selection.expressions - c.id
+                                else selection.expressions + c.id
+                        )
+                    )
+                },
+                label = { Text(c.name) },
+                enabled = enabled,
+            )
+        }
+    }
+
+    if (postures.isNotEmpty()) {
+        Text("Body language", style = MaterialTheme.typography.labelLarge)
+        postures.forEach { c ->
+            FilterChip(
+                selected = c.id in selection.postures,
+                onClick = {
+                    onChange(
+                        selection.copy(
+                            postures =
+                                if (c.id in selection.postures) selection.postures - c.id
+                                else selection.postures + c.id
+                        )
+                    )
+                },
+                label = { Text(c.name) },
+                enabled = enabled,
+            )
+        }
+    }
+
+    if (environments.isNotEmpty()) {
+        Text("Environment", style = MaterialTheme.typography.labelLarge)
+        environments.forEach { group ->
+            Text(group.name, style = MaterialTheme.typography.labelMedium)
+            group.categories.forEach { c ->
+                FilterChip(
+                    selected = c.id in selection.environment,
+                    onClick = {
+                        onChange(
+                            selection.copy(
+                                environment =
+                                    toggleEnvironmentSelection(
+                                        taxonomy, selection.environment, c.id
+                                    )
+                            )
+                        )
+                    },
+                    label = { Text(c.name) },
+                    enabled = enabled,
+                )
+            }
+        }
     }
 }

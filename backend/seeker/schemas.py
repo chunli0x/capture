@@ -84,16 +84,25 @@ class ActionSpan(Strict):
 class Labels(Strict):
     media_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     boxes: list[Box] = Field(min_length=1, max_length=100)
+    expressions: list[int] = Field(default_factory=list, max_length=20)
+    postures: list[int] = Field(default_factory=list, max_length=21)
+    environment: list[int] = Field(default_factory=list, max_length=5)
 
 
 class PlaceLabels(Strict):
     media_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     scene: Scene
+    expressions: list[int] = Field(default_factory=list, max_length=20)
+    postures: list[int] = Field(default_factory=list, max_length=21)
+    environment: list[int] = Field(default_factory=list, max_length=5)
 
 
 class ActionLabels(Strict):
     media_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     action: ActionSpan
+    expressions: list[int] = Field(default_factory=list, max_length=20)
+    postures: list[int] = Field(default_factory=list, max_length=21)
+    environment: list[int] = Field(default_factory=list, max_length=5)
 
 
 class Confirm(Strict):

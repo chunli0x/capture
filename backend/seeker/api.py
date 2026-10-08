@@ -124,6 +124,7 @@ def submission_view(s, b, actor):
     }
     if actor.wallet in {s.worker, b.requester}:
         result["boxes"] = s.labels
+        result["secondary"] = s.secondary or {}
     return result
 
 
@@ -196,13 +197,25 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
     def validate_labels(body, s, b):
         if body.media_hash != s.media_hash or not s.encrypted_media:
             fail(409, "Labels must reference the approved immutable media")
+        secondary = {}
+        for dim, ids in (
+            ("expressions", body.expressions),
+            ("postures", body.postures),
+            ("environment", body.environment),
+        ):
+            if not ids:
+                continue
+            try:
+                secondary[dim] = taxonomy.resolve_secondary(dim, ids)
+            except ValueError as exc:
+                fail(422, str(exc))
         if isinstance(body, PlaceLabels):
             if b.kind != "place":
                 fail(422, "This bounty expects object boxes, not a scene label")
             cat = body.scene.category_id
             if cat not in {c["id"] for c in b.taxonomy}:
                 fail(422, "Unknown category for this taxonomy")
-            return {"scene": {"category_id": cat}}
+            return {"scene": {"category_id": cat}}, secondary
         if isinstance(body, ActionLabels):
             if b.kind != "action":
                 fail(422, "This bounty expects object boxes, not an action label")
@@ -219,7 +232,7 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
                     "start_ms": span.start_ms,
                     "end_ms": span.end_ms,
                 }
-            }
+            }, secondary
         if b.kind != "object":
             fail(422, "This bounty expects a single scene or action label, not boxes")
         boxes = [box.model_dump() for box in body.boxes]
@@ -229,7 +242,7 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
             fail(422, "Unknown category for this taxonomy")
         if len({canonical(box) for box in boxes}) != len(boxes):
             fail(422, "Duplicate boxes are not allowed")
-        return boxes
+        return boxes, secondary
 
     @app.get("/health")
     def health():
@@ -541,12 +554,17 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
     def labels(sid: str, body: Union[Labels, PlaceLabels, ActionLabels], actor: Auth):
         with database.transaction() as db:
             s, b = own_active(db, sid, actor)
-            boxes = validate_labels(body, s, b)
+            boxes, secondary = validate_labels(body, s, b)
             if s.labels is not None:
-                if canonical(s.labels) != canonical(boxes):
+                if canonical(s.labels) != canonical(boxes) or canonical(s.secondary) != canonical(secondary):
                     fail(409, "Submitted labels are immutable")
                 return submission_view(s, b, actor)
-            s.labels, s.label_hash, s.status = boxes, digest(canonical(boxes)), "review"
+            s.labels, s.secondary, s.label_hash, s.status = (
+                boxes,
+                secondary,
+                digest(canonical(boxes)),
+                "review",
+            )
             s.expires = b.deadline
             return submission_view(s, b, actor)
 
@@ -557,19 +575,26 @@ def create_app(settings: Settings, *, chain=None, moderator=None):
             s, b = authorized_submission(db, sid, actor)
             if not actor.reviewer or actor.wallet in {s.worker, b.requester}:
                 fail(403, "Independent enrolled reviewer required")
-            boxes = validate_labels(body, s, b)
+            boxes, secondary = validate_labels(body, s, b)
             existing = db.scalar(
                 select(Review).where(
                     Review.submission_id == sid, Review.reviewer == actor.wallet
                 )
             )
             if existing:
-                if canonical(existing.labels) != canonical(boxes):
+                if canonical(existing.labels) != canonical(boxes) or canonical(existing.secondary) != canonical(secondary):
                     fail(409, "A review cannot be replaced")
                 return {"status": s.status}
             if s.status != "review" or b.deadline <= now():
                 fail(409, "Review round is closed")
-            db.add(Review(submission_id=sid, reviewer=actor.wallet, labels=boxes))
+            db.add(
+                Review(
+                    submission_id=sid,
+                    reviewer=actor.wallet,
+                    labels=boxes,
+                    secondary=secondary,
+                )
+            )
             db.flush()
             reviews = db.scalars(
                 select(Review).where(Review.submission_id == sid)

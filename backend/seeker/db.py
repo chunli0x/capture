@@ -98,6 +98,9 @@ class Submission(Base):
     encrypted_media: Mapped[bytes | None] = mapped_column(LargeBinary)
     moderation: Mapped[dict | None] = mapped_column(JSON)
     labels: Mapped[list | None] = mapped_column(JSON)
+    # Optional secondary labels (expressions / postures / environment) resolved
+    # server-side against the registry; collected metadata, never a payout gate.
+    secondary: Mapped[dict | None] = mapped_column(JSON)
     label_hash: Mapped[str | None] = mapped_column(String(64))
     # Server-write-only COCO-17 pose; written by the offline keypoint job, never
     # by a seeker (no request schema accepts it).
@@ -111,6 +114,7 @@ class Review(Base):
     submission_id: Mapped[str] = mapped_column(ForeignKey(Submission.id), index=True)
     reviewer: Mapped[str] = mapped_column(ForeignKey(Actor.wallet))
     labels: Mapped[list] = mapped_column(JSON)
+    secondary: Mapped[dict | None] = mapped_column(JSON)
 
 
 class Prepared(Base):

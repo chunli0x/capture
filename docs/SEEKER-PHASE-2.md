@@ -17,6 +17,13 @@ is unchanged. The new kinds are:
 | `place` | JPEG/PNG | single scene category_id | scene class |
 | `action` | MP4 (bounded) | one action category_id + `[start_ms, end_ms]` trim | action class, time-bounded |
 
+Three secondary label dimensions accompany any submission regardless of its
+primary kind: `expressions` (facial expressions), `postures` (body language),
+and `environment` (indoor/outdoor, time, weather, surface, light). They are
+optional multi-select metadata resolved server-side against the registry. They
+are **collected metadata, not payout or agreement gates** — reviewer consensus
+still keys off the primary label only.
+
 Keypoints are **server-generated, never seeker-drawn** (see below).
 
 ## Non-negotiable invariants (carried over + new)
@@ -43,9 +50,13 @@ one kind, matching its bounty.
 as an optional list, written only by the keypoint job, rejected on any seeker
 input (extra field → 400). Seekers never see or draw it.
 
-Taxonomy: extend the per-bounty immutable taxonomy to three namespaces
-(`objects`, `scenes`, `actions`). The global category registry gains a `kind`
-field. `category_id` is resolved server-side; a seeker can never mint a label.
+Taxonomy: extend the per-bounty immutable taxonomy to three primary namespaces
+(`objects`, `scenes`, `actions`) plus three secondary namespaces
+(`expressions`, `postures`, `environment`). The global category registry gains a
+`kind` field; environment entries also carry a mutually-exclusive `group`
+(`indoor_outdoor`, `time`, `weather`, `surface`, `light`) with at most one
+selection per group. `category_id` is resolved server-side; a seeker can never
+mint a label.
 
 ## Media pipeline (extend `backend/seeker/media.py`)
 

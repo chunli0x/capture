@@ -36,6 +36,10 @@ def apply_migrations(engine):
     for migration_id, columns in _numbered_migrations():
         for table, column, ddl in columns:
             inspector = inspect(engine)
+            if not inspector.has_table(table):
+                # Fresh DBs get the column via create_all; a table absent here
+                # means there is nothing to upgrade for this column.
+                continue
             if column in {c["name"] for c in inspector.get_columns(table)}:
                 continue
             with engine.begin() as conn:

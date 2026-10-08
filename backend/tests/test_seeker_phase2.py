@@ -300,12 +300,16 @@ def test_taxonomy_endpoint_returns_registry(pilot):
     assert r.status_code == 200, r.text
     categories = r.json()["categories"]
     by = {(c["id"], c["kind"]): c for c in categories}
-    # Every entry carries exactly id/name/kind.
-    assert all(set(c) == {"id", "name", "kind"} for c in categories)
+    # Every entry carries id/name/kind; environment also carries group.
+    assert all({"id", "name", "kind"} <= set(c) for c in categories)
     # Spot-check the names the label pipeline relies on across namespaces.
-    assert by[(1, "object")]["name"] == "cup"
-    assert by[(1, "place")]["name"] == "beach"
-    assert by[(1, "action")]["name"] == "jump"
+    assert by[(1, "object")]["name"] == "phone"
+    assert by[(1, "place")]["name"] == "bed"
+    assert by[(1, "action")]["name"] == "sniff"
+    # Secondary dimensions are present and environment carries a group.
+    assert by[(1, "expression")]["name"] == "neutral"
+    assert by[(1, "posture")]["name"] == "standing"
+    assert by[(1, "environment")]["group"] == "indoor_outdoor"
 
 
 def test_create_bounty_rejects_unknown_category_id(pilot):
@@ -341,9 +345,87 @@ def test_create_bounty_builds_taxonomy_from_registry(pilot):
     )
     assert r.status_code == 200, r.text
     assert r.json()["categories"] == [
-        {"id": 1, "name": "cup", "kind": "object"},
-        {"id": 2, "name": "bottle", "kind": "object"},
+        {"id": 1, "name": "phone", "kind": "object"},
+        {"id": 2, "name": "computer", "kind": "object"},
     ]
+
+
+def test_secondary_labels_accepted_and_stored(pilot):
+    c, _, h, *_ = pilot
+    bid = bounty(pilot, kind="object")
+    sid = fund_and_claim(pilot, bid)
+    r = c.post(f"/submissions/{sid}/media", headers=h[1], content=png())
+    assert r.status_code == 200, r.text
+    media_hash = r.json()["media_hash"]
+    r = c.post(
+        f"/submissions/{sid}/labels",
+        headers=h[1],
+        json={
+            "media_hash": media_hash,
+            "boxes": [{"category_id": 1, "x": 0.1, "y": 0.1, "w": 0.5, "h": 0.5}],
+            "expressions": [1, 2],
+            "postures": [1, 7],
+            "environment": [1, 3, 7, 12, 21],
+        },
+    )
+    assert r.status_code == 200, r.text
+    secondary = r.json()["secondary"]
+    assert [e["id"] for e in secondary["expressions"]] == [1, 2]
+    assert [p["id"] for p in secondary["postures"]] == [1, 7]
+    assert [e["id"] for e in secondary["environment"]] == [1, 3, 7, 12, 21]
+    # Primary label is unchanged by the secondary tags.
+    assert r.json()["boxes"] == [
+        {"category_id": 1, "x": 0.1, "y": 0.1, "w": 0.5, "h": 0.5}
+    ]
+
+
+def test_secondary_unknown_id_rejected(pilot):
+    c, _, h, *_ = pilot
+    bid = bounty(pilot, kind="object")
+    sid = fund_and_claim(pilot, bid)
+    r = c.post(f"/submissions/{sid}/media", headers=h[1], content=png())
+    media_hash = r.json()["media_hash"]
+    base = {
+        "media_hash": media_hash,
+        "boxes": [{"category_id": 1, "x": 0.1, "y": 0.1, "w": 0.5, "h": 0.5}],
+    }
+    assert (
+        c.post(
+            f"/submissions/{sid}/labels",
+            headers=h[1],
+            json={**base, "expressions": [999]},
+        ).status_code
+        == 422
+    )
+    assert (
+        c.post(
+            f"/submissions/{sid}/labels",
+            headers=h[1],
+            json={**base, "postures": [999]},
+        ).status_code
+        == 422
+    )
+
+
+def test_environment_one_per_group(pilot):
+    c, _, h, *_ = pilot
+    bid = bounty(pilot, kind="object")
+    sid = fund_and_claim(pilot, bid)
+    r = c.post(f"/submissions/{sid}/media", headers=h[1], content=png())
+    media_hash = r.json()["media_hash"]
+    # Two ids in the same group (indoor + outdoor) are rejected.
+    assert (
+        c.post(
+            f"/submissions/{sid}/labels",
+            headers=h[1],
+            json={
+                "media_hash": media_hash,
+                "boxes": [{"category_id": 1, "x": 0.1, "y": 0.1, "w": 0.5, "h": 0.5}],
+                "environment": [1, 2],
+            },
+        ).status_code
+        == 422
+    )
 
 
 def test_over_18_stored_and_returned_by_me(pilot):
@@ -756,17 +838,25 @@ def test_migration_0002_adds_phase2_columns(tmp_path):
             "status VARCHAR(24), media_hash VARCHAR(64), perceptual VARCHAR(16), "
             "encrypted_media BLOB, moderation JSON, labels JSON, label_hash VARCHAR(64))"
         )
+        conn.exec_driver_sql(
+            "CREATE TABLE seeker_reviews (id VARCHAR(32) PRIMARY KEY, "
+            "submission_id VARCHAR(32), reviewer VARCHAR(44), labels JSON)"
+        )
     bounty_cols = {c["name"] for c in inspect(engine).get_columns("seeker_bounties")}
     sub_cols = {c["name"] for c in inspect(engine).get_columns("seeker_submissions")}
+    rev_cols = {c["name"] for c in inspect(engine).get_columns("seeker_reviews")}
     assert "kind" not in bounty_cols
     assert "duration_ms" not in sub_cols and "keypoints" not in sub_cols
+    assert "secondary" not in sub_cols and "secondary" not in rev_cols
 
-    # Migration adds the three columns idempotently.
-    assert apply_migrations(engine) == 3
+    # 0002 adds 3 columns; 0003 adds 2 (submissions.secondary + reviews.secondary).
+    assert apply_migrations(engine) == 5
     assert apply_migrations(engine) == 0  # re-run is a no-op
 
     bounty_cols = {c["name"] for c in inspect(engine).get_columns("seeker_bounties")}
     sub_cols = {c["name"] for c in inspect(engine).get_columns("seeker_submissions")}
+    rev_cols = {c["name"] for c in inspect(engine).get_columns("seeker_reviews")}
     assert "kind" in bounty_cols
     assert "duration_ms" in sub_cols and "keypoints" in sub_cols
+    assert "secondary" in sub_cols and "secondary" in rev_cols
     engine.dispose()

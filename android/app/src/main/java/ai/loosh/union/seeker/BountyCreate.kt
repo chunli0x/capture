@@ -5,8 +5,17 @@ const val KIND_OBJECT = "object"
 const val KIND_PLACE = "place"
 const val KIND_ACTION = "action"
 
-/** A single category in the global registry served by `GET /taxonomy`. */
-data class TaxonomyCategory(val id: Int, val name: String, val kind: String)
+/** Secondary (optional) metadata namespaces also served by `GET /taxonomy`. */
+const val KIND_EXPRESSION = "expression"
+const val KIND_POSTURE = "posture"
+const val KIND_ENVIRONMENT = "environment"
+
+/**
+ * A single category in the global registry served by `GET /taxonomy`.
+ * [group] is only present for `environment` entries (indoor_outdoor, time,
+ * weather, surface, light) and is null for every other kind.
+ */
+data class TaxonomyCategory(val id: Int, val name: String, val kind: String, val group: String? = null)
 
 /**
  * Resolves a form kind to one of the three wire values. An unknown or blank
