@@ -34,7 +34,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -65,7 +64,7 @@ class MainActivity : ComponentActivity() {
         sender = ActivityResultSender(this)
 
         setContent {
-            MaterialTheme(colorScheme = UnionColors) {
+            CaptureTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
@@ -77,19 +76,10 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private val Accent = Color(0xFF4ADE80)
+// Legacy accent references retained for the dormant Union flow; repointed at
+// the Capture palette so nothing renders green.
+private val Accent = AccentOrange
 private val Warn = Color(0xFFFBBF24)
-
-private val UnionColors = darkColorScheme(
-    primary = Accent,
-    onPrimary = Color(0xFF04120A),
-    background = Color(0xFF0B0F14),
-    onBackground = Color(0xFFE6EDF3),
-    surface = Color(0xFF141A21),
-    onSurface = Color(0xFFE6EDF3),
-    surfaceVariant = Color(0xFF1C242D),
-    error = Color(0xFFFF6B6B),
-)
 
 @Composable
 fun UnionApp(sender: ActivityResultSender, vm: UnionViewModel = viewModel()) {

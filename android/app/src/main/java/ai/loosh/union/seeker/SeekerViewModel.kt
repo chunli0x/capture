@@ -72,6 +72,18 @@ sealed class RecoveryAction {
     }
 }
 
+/**
+ * The phase of the most recent async call. Distinct from [PilotState.busy] so a
+ * completed call can be told apart from idle: [Success] carries a transient
+ * confirmation line for the snackbar, [Failure] pairs with [PilotState.error].
+ */
+sealed class AsyncStatus {
+    object Idle : AsyncStatus()
+    object Working : AsyncStatus()
+    object Success : AsyncStatus()
+    object Failure : AsyncStatus()
+}
+
 data class PilotState(
     val server: String = "",
     val wallet: String = "",
@@ -80,6 +92,8 @@ data class PilotState(
     val busy: Boolean = false,
     val message: String = "",
     val error: String? = null,
+    val status: AsyncStatus = AsyncStatus.Idle,
+    val transient: String? = null,
     val bounties: List<JSONObject> = emptyList(),
     val submissions: List<JSONObject> = emptyList(),
     val reviews: List<JSONObject> = emptyList(),
@@ -128,28 +142,58 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         MobileWalletAdapter(
                 connectionIdentity =
                     ConnectionIdentity(
-                        identityUri = Uri.parse("https://union.loosh.ai"),
+                        identityUri = Uri.parse("https://capture.magnumopus.ai"),
                         iconUri = Uri.parse("favicon.ico"),
-                        identityName = "Seeker test pilot",
+                        identityName = "Capture",
                     )
             )
             .apply { blockchain = Solana.Devnet }
 
-    private fun run(label: String, block: suspend () -> Unit) {
+    private fun run(label: String, success: String? = null, block: suspend () -> Unit) {
         if (mutable.value.busy) return
-        mutable.update { it.copy(busy = true, error = null, message = label) }
+        mutable.update {
+            it.copy(busy = true, error = null, message = label, status = AsyncStatus.Working, transient = null)
+        }
         viewModelScope.launch {
             try {
                 block()
-                mutable.update { it.copy(message = "Ready") }
+                mutable.update {
+                    it.copy(message = "", status = AsyncStatus.Success, transient = success)
+                }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 if (e is ApiFailure && e.status == 401) clearSession()
-                mutable.update { it.copy(error = e.message ?: "Request failed") }
+                mutable.update {
+                    it.copy(error = e.message ?: "Request failed", status = AsyncStatus.Failure)
+                }
             } finally {
                 mutable.update { it.copy(busy = false) }
             }
         }
+    }
+
+    /** Clears the success phase + transient message once the snackbar times out. */
+    fun dismissTransient() {
+        if (!mutable.value.busy)
+            mutable.update { it.copy(status = AsyncStatus.Idle, transient = null) }
+    }
+
+    /** Dismisses the error card; also resets the Failure phase back to Idle. */
+    fun dismissError() {
+        if (!mutable.value.busy)
+            mutable.update {
+                it.copy(
+                    error = null,
+                    status = if (it.status == AsyncStatus.Failure) AsyncStatus.Idle else it.status,
+                )
+            }
+    }
+
+    /** Whether the first-run onboarding pager has been completed (persisted). */
+    fun onboarded(): Boolean = prefs.getBoolean("onboarded", false)
+
+    fun setOnboarded() {
+        prefs.edit().putBoolean("onboarded", true).apply()
     }
 
     private fun clearSession() {
@@ -226,7 +270,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
     private suspend fun list(path: String) = JSONArray(String(bytes(path))).objects()
 
     fun connect(sender: ActivityResultSender, over18: Boolean) =
-        run("Sign in with your devnet wallet") {
+        run("Connecting to your wallet…", "Wallet connected") {
             val connection = adapter.connect(sender)
             check(connection is TransactionResult.Success) { "Wallet connection was not approved." }
             val wallet = Base58.encode(connection.authResult.accounts.first().publicKey)
@@ -265,7 +309,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         }
 
     fun logout() =
-        run("Signing out") {
+        run("Signing out", "Signed out") {
             try {
                 post("/auth/logout")
             } finally {
@@ -308,7 +352,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun refresh() = run("Refreshing") { refreshData() }
+    fun refresh() = run("Refreshing", "Bounties refreshed") { refreshData() }
 
     fun close() {
         if (!mutable.value.busy)
@@ -324,7 +368,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         slots: String,
         hours: String,
         kind: String = KIND_OBJECT,
-    ) = run("Creating bounty draft") {
+    ) = run("Creating bounty draft", "Bounty draft saved") {
             val amount = reward.toBigDecimal().movePointRight(6).longValueExact()
             val duration = hours.toLong()
             require(duration in 1..720) { "Choose 1–720 hours." }
@@ -352,7 +396,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         }
 
     fun claim(bid: String) =
-        run("Reserving a capture slot") {
+        run("Reserving a capture slot", "Slot claimed") {
             val s = post("/bounties/$bid/claim")
             mutable.update {
                 it.copy(selected = s, image = null, videoDurationMs = null, videoUri = null, reviewing = false)
@@ -362,7 +406,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         }
 
     fun open(s: JSONObject, review: Boolean) =
-        run("Opening approved media") {
+        run("Opening approved media", "Opened") {
             mutable.update {
                 it.copy(selected = s, image = null, videoDurationMs = null, videoUri = null, reviewing = review)
             }
@@ -414,7 +458,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun capture(claimId: String, data: ByteArray, videoDurationMs: Int? = null) =
-        run("Checking your capture before upload approval") {
+        run("Uploading capture…", "Capture uploaded") {
             val s = mutable.value.selected ?: error("Select a claim first")
             val id = s.getString("id")
             require(id == claimId) { "Capture belongs to another claim; open it again." }
@@ -447,7 +491,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         }
 
     private fun submitLabels(payload: JSONObject) =
-        run("Submitting manual labels") {
+        run("Submitting labels…", "Labels submitted") {
             val s = mutable.value.selected ?: error("No selected capture")
             val action = if (mutable.value.reviewing) "reviews" else "labels"
             post("/submissions/${s.getString("id")}/$action", payload)
@@ -500,7 +544,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         )
 
     fun transact(path: String, sender: ActivityResultSender) =
-        run("Review this test-token transaction in your wallet") {
+        run("Review this transaction in your wallet", "Transaction confirmed") {
             val prepared = post("$path/prepare")
             val tx = Base64.decode(prepared.getString("transaction_base64"), Base64.DEFAULT)
             val result =
@@ -550,7 +594,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun recover(id: String) =
-        run("Checking finalized chain history") {
+        run("Checking finalized chain history", "Transaction recovered") {
             when (val action = RecoveryAction.forTransaction(id, storedSignature(id))) {
                 is RecoveryAction.Confirm -> {
                     confirm(action.id, action.signature)

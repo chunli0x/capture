@@ -1,6 +1,6 @@
 <resources>
     <style name="Theme.Union" parent="android:Theme.Material.NoActionBar">
-        <item name="android:statusBarColor">#0B0F14</item>
-        <item name="android:navigationBarColor">#0B0F14</item>
+        <item name="android:statusBarColor">#0A0A10</item>
+        <item name="android:navigationBarColor">#0A0A10</item>
     </style>
 </resources>
