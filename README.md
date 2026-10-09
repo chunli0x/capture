@@ -32,17 +32,17 @@ Three optional secondary tags:
 
 Two assets, two jobs. The split decides what we are allowed to destroy.
 
-- **USDC** bounties are paid in USDC.
-- **SKR** a worker stakes SKR against the quality of their labels.
+- **USDC** - all bounties are paid in USDC.
+- **SKR** - a worker stakes SKR against the quality of their labels.
 
 
 ## Status
 
-True as of October 8 2026:
+October 8 2026:
 
 - Deployed to **Solana devnet**; backend live.
 - **556 backend tests** and **98 Android tests** pass.
-- Everything here runs on **devnet test tokens** — disposable, no real value.
+- Everything here runs on **devnet test tokens** 
 
 What is **not** done:
 
