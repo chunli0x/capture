@@ -640,8 +640,19 @@ def test_video_moderation_fail_closed(pilot, monkeypatch):
 def test_video_pass_helpers_fail_closed():
     # sightengine: no frames analyzed -> never pass.
     assert not sightengine_video_pass({"status": "success", "faces": []})
+    # A documented sync video response nests frames under data.frames, each
+    # frame carrying its own faces list. A clean response (frames analyzed,
+    # no faces in any frame) passes.
     assert sightengine_video_pass(
-        {"status": "success", "faces": [], "frames": [{}]}
+        {"status": "success", "data": {"frames": [{"faces": []}, {"faces": []}]}}
+    )
+    # A face detected in any single frame must block, even if others are clean.
+    assert not sightengine_video_pass(
+        {"status": "success", "data": {"frames": [{"faces": []}, {"faces": [{"x1": 0.1}]}]}}
+    )
+    # A frame that lacks a faces list is not a clean verdict -> fail closed.
+    assert not sightengine_video_pass(
+        {"status": "success", "data": {"frames": [{}]}}
     )
     # hive: a non-video verdict never passes.
     assert not hive_video_pass({})

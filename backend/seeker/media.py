@@ -167,14 +167,39 @@ def _trak_video_info(buf, start, end):
 def _strip_metadata_atoms(buf, start, end):
     """Zero the payload of every udta/meta box under container [start, end).
 
+    Recurses into known container boxes so a metadata atom is destroyed no
+    matter where it sits (top-level, under moov, under trak, or nested inside
+    another container). The media-data box (mdat) is never descended into.
+
     Zeroing (rather than removing) keeps every byte offset identical, so
     chunk-offset tables (stco) stay valid and the clip remains playable while
-    GPS / device / copyright metadata (udta → ©xyz, ©nam, ©day, ©mak, ©mod, …)
-    is destroyed.
+    GPS / device / copyright metadata (udta → ©xyz, ©nam, ©day, ©mak, …) is
+    destroyed.
     """
     for btype, s, e in _boxes(buf, start, end):
         if btype in ("udta", "meta"):
             buf[s:e] = b"\x00" * (e - s)
+        elif btype in _CONTAINER_BOXES:
+            _strip_metadata_atoms(buf, s, e)
+
+
+_CONTAINER_BOXES = {
+    "moov",
+    "trak",
+    "mdia",
+    "minf",
+    "stbl",
+    "edts",
+    "dinf",
+    "iprp",
+    "ipco",
+    "schm",
+    "sinf",
+    "meco",
+    "mfra",
+    "moof",
+    "traf",
+}
 
 
 def video_dhash(raw):
@@ -247,10 +272,8 @@ def canonicalize_video(raw, max_bytes=MAX_VIDEO_BYTES, max_seconds=MAX_VIDEO_SEC
     if duration_ms > max_seconds * 1000:
         raise MediaRejected("Video exceeds duration limit")
     # Strip GPS/device/copyright metadata before the approved bytes are stored.
-    _strip_metadata_atoms(buf, ms, me)
-    for btype, start, stop in _boxes(buf, ms, me):
-        if btype == "trak":
-            _strip_metadata_atoms(buf, start, stop)
+    # Recursion covers moov/trak/mdia/... and top-level atoms; mdat is skipped.
+    _strip_metadata_atoms(buf, 0, end)
     canonical = bytes(buf)
     return (
         canonical,
@@ -297,13 +320,27 @@ def hive_pass(data):
 
 
 def sightengine_video_pass(data):
-    """Fail-closed: a provider that did not analyze video frames never passes."""
+    """Fail-closed for the Sightengine face-age video contract.
+
+    The sync video endpoint nests per-frame results under ``data.frames``;
+    each frame carries its own ``faces`` list (real faces, each with an
+    ``attributes.age.minor`` probability). A provider that did not analyze
+    frames (missing/empty ``data.frames``), any frame lacking a well-formed
+    ``faces`` list, or any real face detected in any frame, all fail closed —
+    mirroring the image path, which admits no faces.
+    """
     if data.get("status") != "success":
         return False
-    frames = data.get("frames")
+    frames = (data.get("data") or {}).get("frames")
     if not isinstance(frames, list) or len(frames) == 0:
         return False
-    return len(data.get("faces", [])) == 0
+    for frame in frames:
+        if not isinstance(frame, dict):
+            return False
+        faces = frame.get("faces")
+        if not isinstance(faces, list) or len(faces) != 0:
+            return False
+    return True
 
 
 def hive_video_pass(data):
@@ -389,7 +426,7 @@ class Moderation:
             async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
                 sight, hive = await asyncio.gather(
                     client.post(
-                        "https://api.sightengine.com/1.0/check.json",
+                        "https://api.sightengine.com/1.0/video/check-sync.json",
                         files={"media": ("video.mp4", data, "video/mp4")},
                         data={
                             "models": "face-age",
