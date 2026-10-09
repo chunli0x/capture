@@ -1,7 +1,7 @@
 # Seeker phase 1 — approved contract
 
-Status: accepted by Lisa on 2026-10-05 following the captcha review.
-Baseline: captcha eec099a59f9790f65bfef7280df8fe3bd16e6c43.
+Status: accepted by Lisa on 2026-10-05 following the capture review.
+Baseline: capture eec099a59f9790f65bfef7280df8fe3bd16e6c43.
 
 This document supersedes conflicting examples in the uploaded v1 brief for
 the object-photo slice. It does not assert that implementation is deployed.

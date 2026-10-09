@@ -50,7 +50,7 @@ exact prepared messages and partial verifier signatures. LiteSVM tests execute
 token transfers entirely locally with disposable balances.
 
 Provider CI evidence at the program/API checkpoint:
-https://github.com/chunli0x/captcha/actions/runs/37356790219
+https://github.com/chunli0x/capture/actions/runs/37356790219
 
 The 13 original skipped tests require their own live-service/validator setup;
 they were not silently relabeled as passing. The local APK does not establish

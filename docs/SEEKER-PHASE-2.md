@@ -4,7 +4,7 @@ Status: approved by Lisa on 2026-10-06 ("build those"). Extends the object-photo
 pilot (phase 1) to the full bounty set. This is the contract the implementers
 build against; it supersedes the phase-1 schema where they differ.
 
-Baseline: captcha main `4f27958`.
+Baseline: capture main `4f27958`.
 
 ## What phase 2 adds
 
