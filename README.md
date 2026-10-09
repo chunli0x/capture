@@ -8,7 +8,7 @@ Capture is a mobile data-labeling bounty network. Anyone with a phone can prove 
 
 The loop has five steps:
 
-1. **Prove human.** A worker proves they are a human operator using a Solana Attestation Service credential, an on-device liveness check, and explicit operator enrollment. Over-18 is a self-attested signed claim — a declaration, not cryptographic proof of age.
+1. **Prove human.** A worker proves they are a human operator using a Solana Attestation Service credential, an on-device liveness check, and explicit operator enrollment. 
 2. **Capture.** The worker records ground-level egocentric capture: the camera held 6–12 inches off the ground, angled forward or up, as a photo (an object or place) or a short video (an action).
 3. **Label.** The worker applies the six label dimensions described below.
 4. **Review.** Two independent reviewers label the same media blind. Agreement (object IoU ≥ 0.7) unlocks eligibility; disagreement is "disputed" and pays nobody.
