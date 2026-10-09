@@ -62,7 +62,6 @@ What is **not** done:
 │   └── tests/          backend test suite
 ├── programs/           Anchor workspaces
 │   └── seeker-bounty/  on-chain bounty settlement + SKR bond program
-├── docs/               phase docs, runbook, verification notes
 ├── scripts/            devnet bootstrap, deploy, and demo helpers
 └── .github/            CI workflows
 ```
@@ -80,9 +79,3 @@ Android (unit tests):
 ```bash
 ANDROID_HOME=/home/hermes/android-sdk ./gradlew testDebugUnitTest
 ```
-
-## Docs
-
-- [SEEKER-PHASE-1.md](docs/SEEKER-PHASE-1.md)
-- [SEEKER-PHASE-2.md](docs/SEEKER-PHASE-2.md)
-- [SEEKER-RUNBOOK.md](docs/SEEKER-RUNBOOK.md)
