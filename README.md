@@ -30,7 +30,7 @@ Three optional secondary tags:
 
 ## Tokens
 
-Two assets, two jobs. The split decides what we are allowed to destroy.
+Two assets, two jobs. 
 
 - **USDC** - all bounties are paid in USDC.
 - **SKR** - a worker stakes SKR against the quality of their labels.
