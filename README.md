@@ -32,10 +32,9 @@ Three optional secondary tags:
 
 Two assets, two jobs. The split decides what we are allowed to destroy.
 
-- **USDC** is payroll. It is the stablecoin workers are paid in, and it is never a project token.
-- **SKR** is the slashable bond — the one asset a slash may touch. A worker stakes SKR against the quality of their labels.
+- **USDC** bounties are paid in USDC.
+- **SKR** a worker stakes SKR against the quality of their labels.
 
-A slash can only ever reach SKR. USDC payouts are never project tokens, and SKR is never used as payment.
 
 ## Status
 
