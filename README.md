@@ -66,6 +66,50 @@ What is **not** done:
 └── .github/            CI workflows
 ```
 
+## Quick start
+
+Four commands from a fresh clone to a running backend (devnet, throwaway
+dev-only keys — never the real operator/media/verifier secrets):
+
+```bash
+git clone https://github.com/chunli0x/capture.git && cd capture
+
+# 1. PostgreSQL (Docker)
+docker compose up -d
+
+# 2. venv + dependencies + dev-only keys + DB schema
+./scripts/dev_bootstrap.sh
+
+# 3. run the API
+cd backend && .venv/bin/uvicorn seeker.api:production_app --factory --env-file .env
+
+# 4. verify
+curl -s http://localhost:8000/health
+```
+
+Expected output from `/health`:
+
+```json
+{"service":"seeker","network":"devnet","production_ready":false}
+```
+
+Notes:
+
+- `dev_bootstrap.sh` generates a throwaway operator key, a throwaway media
+  encryption key, and a freshly generated dev-only verifier keypair
+  (`backend/verifier.dev.json`). These are intentionally **not** the real
+  verifier — the real key authorizes every attestation and is never committed.
+  Anything that needs the real verifier on-chain will fail until you point
+  `SEEKER_VERIFIER_KEY_FILE` at your own keypair.
+- No Docker? Use SQLite instead — uncomment the `SEEKER_DATABASE_URL=sqlite:///./seeker.db`
+  and `SEEKER_LOCAL_SQLITE=true` lines in `backend/.env` (or run
+  `SEEKER_LOCAL_SQLITE=true SEEKER_DATABASE_URL=sqlite:///./seeker.db ./scripts/dev_bootstrap.sh`).
+- The dependency set is tested on Python 3.11. If `python3` is a newer minor,
+  pass `PYTHON=python3.11 ./scripts/dev_bootstrap.sh`.
+- Media moderation (Sightengine/Hive) is unconfigured by default, so uploads
+  reject — that is expected and safe. The API still starts and `/health` still
+  responds.
+
 ## Build & run
 
 Backend:
