@@ -46,6 +46,7 @@ from .schemas import (
     Enrollment,
     Labels,
     LivenessComplete,
+    LivenessSession,
     OpenSubmission,
     PlaceLabels,
     Verify,
@@ -539,13 +540,13 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
         }
 
     @app.post("/liveness/session")
-    def liveness_session(body: Wallet):
+    def liveness_session(body: LivenessSession):
         # Capture v2: a fresh, single-use motion challenge before the first
         # upload. `contributor` is the wallet; the challenge is server-chosen so
         # one recorded run cannot be replayed.
-        Pubkey.from_string(body.wallet)
+        Pubkey.from_string(body.contributor)
         store = liveness_sessions()
-        session = store.issue(body.wallet, "capture-session")
+        session = store.issue(body.contributor, body.task_id)
         return {
             "session_id": session.session_id,
             "challenge": session.challenge.value,

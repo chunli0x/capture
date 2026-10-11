@@ -47,7 +47,37 @@ def apply_migrations(engine):
                     f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"
                 )
             applied += 1
+    applied += apply_nullability_migrations(engine)
     return applied
+
+
+def apply_nullability_migrations(engine):
+    """Drop NOT NULL constraints the v2 open-upload pivot made obsolete.
+
+    The numbered ADD COLUMN framework cannot express a nullability change
+    cross-dialect, so these live here. ``bounty_id`` must become nullable so an
+    open (no-bounty) upload can insert NULL. PostgreSQL: a plain
+    ``ALTER COLUMN … DROP NOT NULL``, idempotent. SQLite: a fresh DB already
+    gets the nullable column from ``create_all`` (the model declares
+    ``Mapped[str | None]``), and the deployed DB is PostgreSQL, so SQLite is a
+    no-op here.
+    """
+    if engine.dialect.name != "postgresql":
+        return 0
+    inspector = inspect(engine)
+    if not inspector.has_table("seeker_submissions"):
+        return 0
+    col = next(
+        (c for c in inspector.get_columns("seeker_submissions") if c["name"] == "bounty_id"),
+        None,
+    )
+    if col is None or col.get("nullable"):
+        return 0
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "ALTER TABLE seeker_submissions ALTER COLUMN bounty_id DROP NOT NULL"
+        )
+    return 1
 
 
 def main():

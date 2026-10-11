@@ -314,9 +314,9 @@ fun VerdictCard(result: SubmissionResult, onDismiss: () -> Unit, onGallery: () -
                 Text(if (accepted) "ACCEPTED" else "REJECTED", style = MaterialTheme.typography.displayMedium, color = tint)
             }
             if (accepted) {
-                Text(if (result.paid) "PAID TO YOU" else "PAYOUT PENDING", style = MaterialTheme.typography.labelMedium, color = MutedGray)
+                Text("RECORDED", style = MaterialTheme.typography.labelMedium, color = MutedGray)
                 Text("+$${decimal(result.payoutUsdc / 1_000_000.0)}", style = CaptureNumeric.copy(fontSize = 40.sp, lineHeight = 44.sp), color = CaptureAccent)
-                Text("TEST-USDC", style = MaterialTheme.typography.labelMedium, color = CaptureAccentBright)
+                Text("TEST-USDC · DEMO", style = MaterialTheme.typography.labelMedium, color = CaptureAccentBright)
                 s?.let {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         listOf("+1" to "ACCEPTED", "—" to "STREAK", "${acceptancePercent(it.acceptanceRate)}%" to "RATE").forEach { (value, label) ->
@@ -334,7 +334,7 @@ fun VerdictCard(result: SubmissionResult, onDismiss: () -> Unit, onGallery: () -
                     Box(Modifier.width(3.dp).height(56.dp).captureCardMotion(0).background(ErrorRed, CaptureRadii.pill))
                     Text(result.verdict.reason.ifBlank { "This capture did not meet the quality bar. Check the examples and try again." }, style = MaterialTheme.typography.bodySmall, color = MutedGray)
                 }
-                Text("BOND SLASHED · FIX & RESHOOT", style = MaterialTheme.typography.labelMedium, color = MutedGray)
+                Text("FLAGGED · FIX & RESHOOT", style = MaterialTheme.typography.labelMedium, color = MutedGray)
                 Button(onClick = onGallery, colors = ButtonDefaults.buttonColors(containerColor = CaptureAccent, contentColor = CaptureInk), modifier = Modifier.fillMaxWidth()) { Text("SEE EXAMPLE") }
                 OutlinedButton(onClick = onCaptureAgain, enabled = s?.busy != true, modifier = Modifier.fillMaxWidth()) { Text("RESHOOT") }
             }

@@ -124,6 +124,21 @@ class OpenSubmission(Strict):
     kind: Kind = "object"
 
 
+class LivenessSession(Strict):
+    """Start a liveness session: a fresh motion challenge before the first
+    upload. ``contributor`` is the wallet; ``task_id`` binds the proof to a task
+    (the app uses a fixed ``capture-session`` label)."""
+
+    contributor: str
+    task_id: str = Field(min_length=1, max_length=64)
+
+    @field_validator("contributor")
+    @classmethod
+    def valid_wallet(cls, v):
+        Pubkey.from_string(v)
+        return v
+
+
 class LivenessComplete(Strict):
     """Finish a liveness session: the on-device check's opaque result digest.
 
