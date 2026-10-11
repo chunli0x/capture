@@ -81,6 +81,7 @@ import ai.loosh.union.AccentCyan
 import ai.loosh.union.AccentMagenta
 import ai.loosh.union.AccentOrange
 import ai.loosh.union.AccentViolet
+import ai.loosh.union.LivenessScreen
 import ai.loosh.union.MutedGray
 import ai.loosh.union.WarnAmber
 
@@ -90,11 +91,22 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
     var server by remember(s.server) { mutableStateOf(s.server) }
     var creating by remember { mutableStateOf(false) }
     var onboarded by remember { mutableStateOf(vm.onboarded()) }
+    var tutorialDone by remember { mutableStateOf(vm.tutorialDone()) }
+    var showGallery by remember { mutableStateOf(false) }
+    var showLiveness by remember { mutableStateOf(false) }
+    var pendingKind by remember { mutableStateOf<String?>(null) }
 
     if (!onboarded) {
         OnboardingScreen(onDone = {
             vm.setOnboarded()
             onboarded = true
+        })
+        return
+    }
+    if (!tutorialDone) {
+        CaptureTutorialScreen(onDone = {
+            vm.setTutorialDone()
+            tutorialDone = true
         })
         return
     }
@@ -105,6 +117,47 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
             snackbar.showSnackbar(s.transient!!, duration = SnackbarDuration.Short)
             vm.dismissTransient()
         }
+    }
+
+    // Capture v2 liveness gate: prove human once per session before the first upload.
+    if (showLiveness) {
+        val challenge = s.livenessChallenge
+        if (challenge == null) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    CircularProgressIndicator()
+                    Text(s.message, style = MaterialTheme.typography.bodySmall, color = MutedGray)
+                }
+            }
+        } else {
+            LivenessScreen(
+                challengeWire = challenge,
+                busy = s.message.takeIf { s.busy },
+                onPassed = { vm.completeLiveness(it) },
+                onCancel = {
+                    vm.cancelLiveness()
+                    showLiveness = false
+                    pendingKind = null
+                },
+            )
+        }
+        LaunchedEffect(s.livenessVerified, s.busy) {
+            if (s.livenessVerified && !s.busy) {
+                showLiveness = false
+                val kind = pendingKind
+                pendingKind = null
+                if (kind != null) vm.startOpenCapture(kind)
+            }
+        }
+        return
+    }
+
+    if (showGallery) {
+        ExampleGalleryScreen(onBack = { showGallery = false })
+        return
     }
 
     Scaffold(
@@ -147,10 +200,28 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
                 } else {
                     WalletActions(s, vm)
 
+                    s.lastResult?.let { VerdictCard(it, vm::dismissVerdict) }
+
                     if (s.selected != null) {
                         SelectedEditor(s, vm, sender)
                     } else {
-                        Dashboard(s, creating, { creating = it }, vm, sender)
+                        CaptureHome(
+                            s = s,
+                            creating = creating,
+                            onCreatingChange = { creating = it },
+                            vm = vm,
+                            sender = sender,
+                            onCapture = { kind ->
+                                if (s.livenessVerified) {
+                                    vm.startOpenCapture(kind)
+                                } else {
+                                    pendingKind = kind
+                                    showLiveness = true
+                                    vm.startLiveness()
+                                }
+                            },
+                            onGallery = { showGallery = true },
+                        )
                     }
                 }
             }
@@ -369,6 +440,48 @@ private fun SelectedEditor(s: PilotState, vm: SeekerViewModel, sender: ActivityR
                 PhotoEditor(s, editable, !s.busy, vm::submit)
             }
     }
+}
+
+@Composable
+private fun CaptureHome(
+    s: PilotState,
+    creating: Boolean,
+    onCreatingChange: (Boolean) -> Unit,
+    vm: SeekerViewModel,
+    sender: ActivityResultSender,
+    onCapture: (String) -> Unit,
+    onGallery: () -> Unit,
+) {
+    LevelCard(s)
+
+    var kind by remember { mutableStateOf(KIND_OBJECT) }
+    Text(
+        "Capture now",
+        style = MaterialTheme.typography.titleLarge,
+        color = MaterialTheme.colorScheme.onBackground,
+    )
+    Text(
+        "No bounty wait — capture, label, and submit. Earn the base rate times your level multiplier.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+    )
+    LabelChipFlow {
+        LabelChip("Object photo", kind == KIND_OBJECT, AccentOrange, enabled = !s.busy, glyph = ChipGlyph.CHECK) { kind = KIND_OBJECT }
+        LabelChip("Place photo", kind == KIND_PLACE, AccentOrange, enabled = !s.busy, glyph = ChipGlyph.CHECK) { kind = KIND_PLACE }
+        LabelChip("Action clip", kind == KIND_ACTION, AccentOrange, enabled = !s.busy, glyph = ChipGlyph.CHECK) { kind = KIND_ACTION }
+    }
+    Button(
+        onClick = { onCapture(kind) },
+        enabled = !s.busy,
+        modifier = Modifier.fillMaxWidth().height(56.dp),
+    ) {
+        Text(if (s.livenessVerified) "Capture now" else "Prove human & capture")
+    }
+    OutlinedButton(onClick = onGallery, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) {
+        Text("Good vs bad capture examples")
+    }
+
+    Dashboard(s, creating, onCreatingChange, vm, sender)
 }
 
 @Composable
@@ -870,7 +983,7 @@ private fun PhotoEditor(
         }
         Button(
             onClick = { submit(boxes, secondary) },
-            enabled = enabled && boxes.isNotEmpty(),
+            enabled = enabled && boxes.isNotEmpty() && secondary.postures.isNotEmpty(),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(if (s.reviewing) "Submit independent review" else "Submit immutable labels")
@@ -1078,7 +1191,7 @@ private fun PlaceEditor(
     var secondary by remember(selected, s.reviewing) { mutableStateOf(SecondarySelection()) }
     if (editable) {
         SecondaryPicker(s.taxonomy, secondary, enabled) { secondary = it }
-        Button(onClick = { submit(category, secondary) }, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
+        Button(onClick = { submit(category, secondary) }, enabled = enabled && secondary.postures.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
             Text(if (s.reviewing) "Submit independent review" else "Submit immutable label")
         }
     }
@@ -1208,7 +1321,7 @@ private fun ActionEditor(
         SecondaryPicker(s.taxonomy, secondary, enabled) { secondary = it }
         Button(
             onClick = { trim?.let { submit(category, it, secondary) } },
-            enabled = enabled && trim != null,
+            enabled = enabled && trim != null && secondary.postures.isNotEmpty(),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(if (s.reviewing) "Submit independent review" else "Submit immutable labels")
@@ -1608,10 +1721,10 @@ private fun formatClock(ms: Int): String {
 }
 
 /**
- * Optional secondary-label section shown inside each editable editor: three
- * multi-select chip groups — Expressions, Body language, Environment — pulled
- * from the registry. Collapsed by default so the primary flow stays focused;
- * the whole section is a disclosure the user opens on purpose.
+ * Secondary + capture-metadata section shown inside each editable editor.
+ * Posture is required in v2; expression, environment, surface, lighting,
+ * weather, and ego-motion are optional. Collapsed by default; the whole section
+ * is a disclosure the user opens on purpose.
  */
 @Composable
 private fun SecondaryPicker(
@@ -1623,10 +1736,19 @@ private fun SecondaryPicker(
     val expressions = categoriesOfKind(taxonomy, KIND_EXPRESSION)
     val postures = categoriesOfKind(taxonomy, KIND_POSTURE)
     val environments = environmentGroups(taxonomy)
-    if (expressions.isEmpty() && postures.isEmpty() && environments.isEmpty()) return
+    val surfaces = categoriesOfKind(taxonomy, KIND_SURFACE_TYPE)
+    val lightings = categoriesOfKind(taxonomy, KIND_LIGHTING)
+    val weathers = categoriesOfKind(taxonomy, KIND_WEATHER)
+    if (
+        expressions.isEmpty() && postures.isEmpty() && environments.isEmpty() &&
+            surfaces.isEmpty() && lightings.isEmpty() && weathers.isEmpty()
+    ) return
 
     var expanded by remember { mutableStateOf(false) }
-    val totalSelected = selection.expressions.size + selection.postures.size + selection.environment.size
+    val totalSelected =
+        selection.expressions.size + selection.postures.size + selection.environment.size +
+            listOf(selection.surfaceType, selection.lighting, selection.weather).count { it != null } +
+            (if (selection.egoMotion) 1 else 0)
 
     Card(Modifier.fillMaxWidth()) {
         Column(
@@ -1644,13 +1766,13 @@ private fun SecondaryPicker(
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "Optional context (helps reviewers)",
+                        "Context & metadata",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     if (!expanded && totalSelected == 0) {
                         Text(
-                            "Nothing selected — optional",
+                            "Posture required — the rest is optional",
                             style = MaterialTheme.typography.labelSmall,
                             color = MutedGray,
                         )
@@ -1669,7 +1791,7 @@ private fun SecondaryPicker(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     if (expressions.isNotEmpty()) {
-                        SecondaryGroupHeader("Expressions", selection.expressions.size)
+                        SecondaryGroupHeader("Expression (optional)", selection.expressions.size)
                         LabelChipFlow {
                             expressions.forEach { c ->
                                 LabelChip(
@@ -1692,7 +1814,7 @@ private fun SecondaryPicker(
                     }
 
                     if (postures.isNotEmpty()) {
-                        SecondaryGroupHeader("Body language", selection.postures.size)
+                        SecondaryGroupHeader("Posture (required)", selection.postures.size)
                         LabelChipFlow {
                             postures.forEach { c ->
                                 LabelChip(
@@ -1760,7 +1882,71 @@ private fun SecondaryPicker(
                             }
                         }
                     }
+                    if (surfaces.isNotEmpty()) {
+                        SingleSelectMetaGroup("Surface", surfaces, selection.surfaceType, enabled) { wire ->
+                            onChange(selection.copy(surfaceType = wire))
+                        }
+                    }
+                    if (lightings.isNotEmpty()) {
+                        SingleSelectMetaGroup("Lighting", lightings, selection.lighting, enabled) { wire ->
+                            onChange(selection.copy(lighting = wire))
+                        }
+                    }
+                    if (weathers.isNotEmpty()) {
+                        SingleSelectMetaGroup("Weather", weathers, selection.weather, enabled) { wire ->
+                            onChange(selection.copy(weather = wire))
+                        }
+                    }
+
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Moving camera",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                "True if this capture was shot while moving (ego motion).",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MutedGray,
+                            )
+                        }
+                        Switch(
+                            checked = selection.egoMotion,
+                            onCheckedChange = { onChange(selection.copy(egoMotion = it)) },
+                            enabled = enabled,
+                        )
+                    }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SingleSelectMetaGroup(
+    label: String,
+    categories: List<TaxonomyCategory>,
+    selectedWire: String?,
+    enabled: Boolean,
+    onSelect: (String?) -> Unit,
+) {
+    SecondaryGroupHeader(label, if (selectedWire != null) 1 else 0)
+    LabelChipFlow {
+        categories.forEach { c ->
+            val wire = categoryWireId(c)
+            LabelChip(
+                c.name,
+                wire == selectedWire,
+                AccentViolet,
+                enabled = enabled,
+                glyph = ChipGlyph.CHECK,
+            ) {
+                onSelect(if (wire == selectedWire) null else wire)
             }
         }
     }

@@ -40,6 +40,9 @@ class Actor(Base):
     # cryptographic proof — never treated as one.
     over_18: Mapped[bool] = mapped_column(Boolean, default=False)
     # Enrollment is an operator decision, never a claimed proof of humanity.
+    # Capture v2: cumulative accepted open-uploads, denormalized for fast /me.
+    # The rolling acceptance rate is computed from Submission rows (see api.py).
+    accepted_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Challenge(Base):
@@ -88,10 +91,14 @@ class Submission(Base):
         UniqueConstraint("bounty_id", "media_hash"),
     )
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
-    bounty_id: Mapped[str] = mapped_column(ForeignKey(Bounty.id), index=True)
+    # Nullable: an open (no-bounty) upload has no bounty (Capture v2 pivot).
+    bounty_id: Mapped[str | None] = mapped_column(ForeignKey(Bounty.id), index=True)
     worker: Mapped[str] = mapped_column(ForeignKey(Actor.wallet))
     expires: Mapped[int] = mapped_column(BigInteger)
     status: Mapped[str] = mapped_column(String(24), default="claimed")
+    # The upload's primary kind for open submissions (object|place|action);
+    # for bounty submissions this mirrors Bounty.kind and is informational.
+    kind: Mapped[str] = mapped_column(String(16), default="object")
     media_hash: Mapped[str | None] = mapped_column(String(64))
     perceptual: Mapped[str | None] = mapped_column(String(16))
     duration_ms: Mapped[int | None] = mapped_column(BigInteger)
@@ -101,10 +108,21 @@ class Submission(Base):
     # Optional secondary labels (expressions / postures / environment) resolved
     # server-side against the registry; collected metadata, never a payout gate.
     secondary: Mapped[dict | None] = mapped_column(JSON)
+    # Capture v2 optional capture metadata (surface_type/lighting/weather/
+    # ego_motion), resolved server-side against the string-keyed registries.
+    # Named capture_metadata because `metadata` collides with DeclarativeBase.
+    capture_metadata: Mapped[dict | None] = mapped_column(JSON)
     label_hash: Mapped[str | None] = mapped_column(String(64))
     # Server-write-only COCO-17 pose; written by the offline keypoint job, never
     # by a seeker (no request schema accepts it).
     keypoints: Mapped[list | None] = mapped_column(JSON)
+    # Capture v2 judge outcome: accepted (bool), the reason string, and when it
+    # was judged. None/absent until the judge has run.
+    accepted: Mapped[bool | None] = mapped_column(Boolean)
+    judged_at: Mapped[int | None] = mapped_column(BigInteger)
+    verdict_reason: Mapped[str | None] = mapped_column(String(512))
+    payout_usdc: Mapped[int | None] = mapped_column(BigInteger)
+    level_after: Mapped[int | None] = mapped_column(Integer)
 
 
 class Review(Base):

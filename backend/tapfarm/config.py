@@ -56,7 +56,9 @@ SKR_MAINNET_MINT = "SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="TAPFARM_", env_file=".env")
+    model_config = SettingsConfigDict(
+        env_prefix="TAPFARM_", env_file=".env", extra="ignore"
+    )
 
     rpc_url: str = "https://api.devnet.solana.com"
     cluster: str = "devnet"

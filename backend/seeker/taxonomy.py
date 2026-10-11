@@ -1,42 +1,50 @@
-"""Canonical, server-owned category registry (closed vocabulary).
+"""Canonical, server-owned category registry (closed vocabulary), Capture v2.
 
 The single source of truth for every category id a bounty or label may
 reference. Ids are resolved server-side in ``create_bounty`` and in label
 validation; nothing client-supplied — and in particular no free-text category
-name — ever reaches a bounty's stored taxonomy or a submission's labels. Each
-entry is a fixed ``{id, name, kind}`` triple (environment entries also carry a
-``group``).
+name — ever reaches a bounty's stored taxonomy or a submission's labels.
 
-Three namespaces map to the primary bounty kinds (``objects`` -> ``object``,
-``scenes`` -> ``place``, ``actions`` -> ``action``). Three further namespaces
-are secondary label dimensions — facial expressions, body language, and
-environment — that may optionally accompany any submission regardless of the
-bounty's primary kind.
+v2 changes (pinned by ``/home/hermes/clock-in/CAPTURE-V2-CONTRACT.md`` and
+``/home/hermes/egocentric-data-spec.md`` §1.2):
+
+- objects: drop phone/computer/car/tree/flower; add stairs, person,
+  obstacles-clutter, curb-step.
+- places: add staircase, under-furniture, bathroom, doorway, garage.
+- actions: drop ``observe`` (spec §1.2 "DROP/merge"); add ``eat`` (missing from
+  the spec's canonical agent vocabulary) and the human-action labels.
+- posture is REQUIRED; expression is OPTIONAL (schema-level change in
+  ``schemas.py``; here only the ``required`` flag changes).
+- four new string-keyed metadata namespaces — ``surface_type``, ``lighting``,
+  ``weather``, ``ego_motion`` — all optional, exposed as string ``id`` (slug).
+
+Numeric namespaces keep the ``{int: (name, kind)}`` shape; the metadata
+namespaces are ``{slug: name}``. ``all_categories()`` flattens both and marks
+each entry ``required``.
 """
 
 from typing import Final
 
-# namespace -> {category_id: (name, kind)}
+# numeric namespace -> {category_id: (name, kind)}
 _NAMESPACES: Final[dict[str, dict[int, tuple[str, str]]]] = {
     "objects": {
-        1: ("phone", "object"),
-        2: ("computer", "object"),
-        3: ("bowls", "object"),
-        4: ("toys", "object"),
-        5: ("shoes", "object"),
-        6: ("tree", "object"),
-        7: ("flower", "object"),
-        8: ("food", "object"),
-        9: ("water", "object"),
-        10: ("furniture", "object"),
-        11: ("bush", "object"),
-        12: ("car", "object"),
-        13: ("pillow", "object"),
-        14: ("ball", "object"),
-        15: ("door", "object"),
-        16: ("bag", "object"),
-        17: ("bone", "object"),
-        18: ("doorstop", "object"),
+        1: ("bowls", "object"),
+        2: ("toys", "object"),
+        3: ("shoes", "object"),
+        4: ("food", "object"),
+        5: ("water", "object"),
+        6: ("furniture", "object"),
+        7: ("bush", "object"),
+        8: ("pillow", "object"),
+        9: ("ball", "object"),
+        10: ("door", "object"),
+        11: ("bag", "object"),
+        12: ("bone", "object"),
+        13: ("doorstop", "object"),
+        14: ("stairs", "object"),
+        15: ("person", "object"),
+        16: ("obstacles-clutter", "object"),
+        17: ("curb-step", "object"),
     },
     "scenes": {
         1: ("bed", "place"),
@@ -51,28 +59,40 @@ _NAMESPACES: Final[dict[str, dict[int, tuple[str, str]]]] = {
         10: ("road", "place"),
         11: ("park", "place"),
         12: ("foyer", "place"),
+        13: ("staircase", "place"),
+        14: ("under-furniture", "place"),
+        15: ("bathroom", "place"),
+        16: ("doorway", "place"),
+        17: ("garage", "place"),
     },
     "actions": {
         1: ("sniff", "action"),
-        2: ("observe", "action"),
-        3: ("think", "action"),
-        4: ("sleep", "action"),
-        5: ("lie in the sun", "action"),
-        6: ("avoid the rain", "action"),
-        7: ("chase", "action"),
-        8: ("fetch", "action"),
-        9: ("walk", "action"),
-        10: ("sit", "action"),
-        11: ("lie down", "action"),
-        12: ("tail wag", "action"),
-        13: ("dig", "action"),
-        14: ("jump", "action"),
-        15: ("run", "action"),
-        16: ("trot", "action"),
-        17: ("waiting", "action"),
-        18: ("eager sitting", "action"),
-        19: ("begging", "action"),
-        20: ("scratching", "action"),
+        2: ("think", "action"),
+        3: ("sleep", "action"),
+        4: ("lie in the sun", "action"),
+        5: ("avoid the rain", "action"),
+        6: ("chase", "action"),
+        7: ("fetch", "action"),
+        8: ("walk", "action"),
+        9: ("sit", "action"),
+        10: ("lie down", "action"),
+        11: ("tail wag", "action"),
+        12: ("dig", "action"),
+        13: ("jump", "action"),
+        14: ("run", "action"),
+        15: ("trot", "action"),
+        16: ("waiting", "action"),
+        17: ("eager sitting", "action"),
+        18: ("begging", "action"),
+        19: ("scratching", "action"),
+        20: ("eat", "action"),
+        21: ("person walking", "action"),
+        22: ("person standing", "action"),
+        23: ("person sitting", "action"),
+        24: ("person throwing", "action"),
+        25: ("person opening door", "action"),
+        26: ("person feeding", "action"),
+        27: ("person petting", "action"),
     },
     "expressions": {
         1: ("neutral", "expression"),
@@ -147,6 +167,41 @@ _NAMESPACES: Final[dict[str, dict[int, tuple[str, str]]]] = {
     },
 }
 
+# string-keyed metadata namespaces -> {slug: name}. All optional in v2.
+_METADATA: Final[dict[str, dict[str, str]]] = {
+    "surface_type": {
+        "hardwood": "Hardwood",
+        "carpet": "Carpet",
+        "tile": "Tile",
+        "concrete": "Concrete",
+        "grass": "Grass",
+        "gravel": "Gravel",
+        "mud": "Mud",
+        "snow": "Snow",
+    },
+    "lighting": {
+        "day": "Day",
+        "golden-hour": "Golden hour",
+        "dusk": "Dusk",
+        "night": "Night",
+        "artificial": "Artificial",
+        "backlit": "Backlit",
+    },
+    "weather": {
+        "sun": "Sun",
+        "overcast": "Overcast",
+        "rain": "Rain",
+        "wet-ground": "Wet ground",
+        "snow": "Snow",
+    },
+    "ego_motion": {
+        "stationary": "Stationary",
+        "forward": "Forward",
+        "turn": "Turn",
+        "pitch-sweep": "Pitch sweep",
+    },
+}
+
 # environment category id -> mutually-exclusive sub-attribute group.
 _ENV_GROUPS: Final[dict[int, str]] = {
     1: "indoor_outdoor",
@@ -182,12 +237,16 @@ _KIND_NAMESPACE: Final = {
     "action": "actions",
 }
 
-# secondary label dimension -> namespace (optional, multi-select, non-gating)
+# secondary label dimension -> namespace (multi-select, non-gating)
 _SECONDARY: Final = {
     "expressions": "expressions",
     "postures": "postures",
     "environment": "environment",
 }
+
+# namespaces whose labels are required in v2. posture was promoted from
+# optional to required; expression was demoted to optional.
+_REQUIRED: Final = {"objects", "scenes", "actions", "postures"}
 
 
 def all_categories() -> list[dict]:
@@ -195,10 +254,25 @@ def all_categories() -> list[dict]:
     out = []
     for namespace, entries in _NAMESPACES.items():
         for cid, (name, kind) in entries.items():
-            item = {"id": cid, "name": name, "kind": kind}
+            item = {
+                "id": cid,
+                "name": name,
+                "kind": kind,
+                "required": namespace in _REQUIRED,
+            }
             if namespace == "environment":
                 item["group"] = _ENV_GROUPS[cid]
             out.append(item)
+    for namespace, entries in _METADATA.items():
+        for slug, name in entries.items():
+            out.append(
+                {
+                    "id": slug,
+                    "name": name,
+                    "kind": namespace,
+                    "required": False,
+                }
+            )
     return out
 
 
@@ -255,3 +329,21 @@ def resolve_secondary(dimension: str, category_ids: list[int]) -> list[dict]:
             item["group"] = _ENV_GROUPS[cid]
         resolved.append(item)
     return resolved
+
+
+def resolve_metadata(namespace: str, slug: str) -> dict:
+    """Resolve one string-keyed metadata slug (surface_type/lighting/weather).
+
+    Raises ``ValueError`` for an unknown namespace or slug. Returns
+    ``{id, name, kind}``.
+    """
+    if namespace not in _METADATA:
+        raise ValueError(f"Unknown metadata namespace {namespace!r}")
+    name = _METADATA[namespace].get(slug)
+    if name is None:
+        raise ValueError(f"Unknown {namespace} id {slug!r}")
+    return {"id": slug, "name": name, "kind": namespace}
+
+
+def is_metadata_namespace(namespace: str) -> bool:
+    return namespace in _METADATA

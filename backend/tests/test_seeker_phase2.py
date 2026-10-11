@@ -303,13 +303,27 @@ def test_taxonomy_endpoint_returns_registry(pilot):
     # Every entry carries id/name/kind; environment also carries group.
     assert all({"id", "name", "kind"} <= set(c) for c in categories)
     # Spot-check the names the label pipeline relies on across namespaces.
-    assert by[(1, "object")]["name"] == "phone"
+    assert by[(1, "object")]["name"] == "bowls"
     assert by[(1, "place")]["name"] == "bed"
     assert by[(1, "action")]["name"] == "sniff"
+    # v2 object/action additions are present.
+    assert by[(14, "object")]["name"] == "stairs"
+    assert by[(15, "object")]["name"] == "person"
+    assert by[(16, "object")]["name"] == "obstacles-clutter"
+    assert by[(17, "object")]["name"] == "curb-step"
+    assert by[(21, "action")]["name"] == "person walking"
     # Secondary dimensions are present and environment carries a group.
     assert by[(1, "expression")]["name"] == "neutral"
     assert by[(1, "posture")]["name"] == "standing"
     assert by[(1, "environment")]["group"] == "indoor_outdoor"
+    # posture is required, expression is optional, per the v2 contract.
+    assert by[(1, "posture")]["required"] is True
+    assert by[(1, "expression")]["required"] is False
+    # String-keyed metadata registries are present with a string id.
+    assert by[("hardwood", "surface_type")]["name"] == "Hardwood"
+    assert by[("day", "lighting")]["name"] == "Day"
+    assert by[("sun", "weather")]["name"] == "Sun"
+    assert by[("forward", "ego_motion")]["name"] == "Forward"
 
 
 def test_create_bounty_rejects_unknown_category_id(pilot):
@@ -345,8 +359,8 @@ def test_create_bounty_builds_taxonomy_from_registry(pilot):
     )
     assert r.status_code == 200, r.text
     assert r.json()["categories"] == [
-        {"id": 1, "name": "phone", "kind": "object"},
-        {"id": 2, "name": "computer", "kind": "object"},
+        {"id": 1, "name": "bowls", "kind": "object"},
+        {"id": 2, "name": "toys", "kind": "object"},
     ]
 
 
@@ -853,21 +867,35 @@ def test_migration_0002_adds_phase2_columns(tmp_path):
             "CREATE TABLE seeker_reviews (id VARCHAR(32) PRIMARY KEY, "
             "submission_id VARCHAR(32), reviewer VARCHAR(44), labels JSON)"
         )
+        conn.exec_driver_sql(
+            "CREATE TABLE seeker_actors (wallet VARCHAR(44) PRIMARY KEY, "
+            "worker BOOLEAN, reviewer BOOLEAN, over_18 BOOLEAN)"
+        )
     bounty_cols = {c["name"] for c in inspect(engine).get_columns("seeker_bounties")}
     sub_cols = {c["name"] for c in inspect(engine).get_columns("seeker_submissions")}
     rev_cols = {c["name"] for c in inspect(engine).get_columns("seeker_reviews")}
+    actor_cols = {c["name"] for c in inspect(engine).get_columns("seeker_actors")}
     assert "kind" not in bounty_cols
     assert "duration_ms" not in sub_cols and "keypoints" not in sub_cols
     assert "secondary" not in sub_cols and "secondary" not in rev_cols
+    assert "accepted_count" not in actor_cols
+    assert "capture_metadata" not in sub_cols and "accepted" not in sub_cols
 
-    # 0002 adds 3 columns; 0003 adds 2 (submissions.secondary + reviews.secondary).
-    assert apply_migrations(engine) == 5
+    # 0002 adds 3 columns; 0003 adds 2; 0004 adds 8 (actors.accepted_count +
+    # 7 submission columns).
+    assert apply_migrations(engine) == 13
     assert apply_migrations(engine) == 0  # re-run is a no-op
 
     bounty_cols = {c["name"] for c in inspect(engine).get_columns("seeker_bounties")}
     sub_cols = {c["name"] for c in inspect(engine).get_columns("seeker_submissions")}
     rev_cols = {c["name"] for c in inspect(engine).get_columns("seeker_reviews")}
+    actor_cols = {c["name"] for c in inspect(engine).get_columns("seeker_actors")}
     assert "kind" in bounty_cols
     assert "duration_ms" in sub_cols and "keypoints" in sub_cols
     assert "secondary" in sub_cols and "secondary" in rev_cols
+    assert "accepted_count" in actor_cols
+    assert "capture_metadata" in sub_cols and "accepted" in sub_cols
+    assert "judged_at" in sub_cols and "payout_usdc" in sub_cols
+    assert "verdict_reason" in sub_cols and "level_after" in sub_cols
+    assert "kind" in sub_cols  # v2 open-upload kind column
     engine.dispose()

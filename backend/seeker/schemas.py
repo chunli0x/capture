@@ -87,6 +87,11 @@ class Labels(Strict):
     expressions: list[int] = Field(default_factory=list, max_length=20)
     postures: list[int] = Field(default_factory=list, max_length=21)
     environment: list[int] = Field(default_factory=list, max_length=5)
+    # Capture v2 optional metadata (all optional; defaults empty/false).
+    surface_type: str | None = None
+    lighting: str | None = None
+    weather: str | None = None
+    ego_motion: bool = False
 
 
 class PlaceLabels(Strict):
@@ -95,6 +100,10 @@ class PlaceLabels(Strict):
     expressions: list[int] = Field(default_factory=list, max_length=20)
     postures: list[int] = Field(default_factory=list, max_length=21)
     environment: list[int] = Field(default_factory=list, max_length=5)
+    surface_type: str | None = None
+    lighting: str | None = None
+    weather: str | None = None
+    ego_motion: bool = False
 
 
 class ActionLabels(Strict):
@@ -103,6 +112,34 @@ class ActionLabels(Strict):
     expressions: list[int] = Field(default_factory=list, max_length=20)
     postures: list[int] = Field(default_factory=list, max_length=21)
     environment: list[int] = Field(default_factory=list, max_length=5)
+    surface_type: str | None = None
+    lighting: str | None = None
+    weather: str | None = None
+    ego_motion: bool = False
+
+
+class OpenSubmission(Strict):
+    """Create an open (no-bounty) upload; the Capture v2 entry point."""
+
+    kind: Kind = "object"
+
+
+class LivenessComplete(Strict):
+    """Finish a liveness session: the on-device check's opaque result digest.
+
+    ``contributor`` is the wallet; ``session_id``/``result_digest`` come from
+    the challenge issued by /liveness/session. No biometric material arrives.
+    """
+
+    contributor: str
+    session_id: str = Field(min_length=1, max_length=64)
+    result_digest: str = Field(min_length=2, max_length=256)
+
+    @field_validator("contributor")
+    @classmethod
+    def valid_wallet(cls, v):
+        Pubkey.from_string(v)
+        return v
 
 
 class Confirm(Strict):

@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     max_video_bytes: int = 100 * 1024 * 1024
     session_seconds: int = 3600
     min_bond: int = Field(default=1_000_000, gt=0, le=1_000_000_000_000)
+    # Capture v2 VLM judge (ChatGPT Astra gpt-6-astra). Empty -> deterministic
+    # StubJudge (tests run free). Set SEEKER_JUDGE_URL + SEEKER_JUDGE_KEY to
+    # target the real Astra endpoint once it is pinned.
+    judge_url: str = ""
+    judge_key: str = ""
 
     @model_validator(mode="after")
     def safe_environment(self):

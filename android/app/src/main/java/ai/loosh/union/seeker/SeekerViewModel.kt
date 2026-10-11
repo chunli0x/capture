@@ -105,6 +105,18 @@ data class PilotState(
     val taxonomy: List<TaxonomyCategory> = emptyList(),
     val reviewing: Boolean = false,
     val bond: Long = 0,
+    // --- Capture v2: leveling ---
+    val level: Int = 0,
+    val levelName: String = "Scout",
+    val acceptedCount: Int = 0,
+    val acceptanceRate: Double = 0.0,
+    val rateMultiplier: Double = 1.0,
+    val bondMultiplier: Double = 2.0,
+    // --- Capture v2: liveness gate ---
+    val livenessChallenge: String? = null,
+    val livenessVerified: Boolean = false,
+    // --- Capture v2: judge verdict + payout ---
+    val lastResult: SubmissionResult? = null,
 )
 
 class SeekerViewModel(application: Application) : AndroidViewModel(application) {
@@ -132,6 +144,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
     private var draftInput: List<Any>? = null
     private var draftBody: JSONObject? = null
     private var draftKey: String? = null
+    private var livenessSessionId: String? = null
     private val http =
         OkHttpClient.Builder()
             .followRedirects(false)
@@ -196,12 +209,20 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         prefs.edit().putBoolean("onboarded", true).apply()
     }
 
+    /** Whether the first-run ground-level capture tutorial has been completed (persisted). */
+    fun tutorialDone(): Boolean = prefs.getBoolean("tutorial_done", false)
+
+    fun setTutorialDone() {
+        prefs.edit().putBoolean("tutorial_done", true).apply()
+    }
+
     private fun clearSession() {
         token = null
         adapter.authToken = null
         draftInput = null
         draftBody = null
         draftKey = null
+        livenessSessionId = null
         mutable.value = PilotState(server = mutable.value.server, busy = mutable.value.busy)
     }
 
@@ -324,6 +345,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         val r = if (me.getBoolean("reviewer")) list("/review-queue") else emptyList()
         val tx = list("/transactions")
         val taxonomy = parseTaxonomy(get("/taxonomy"))
+        val parsedLevel = me.optInt("level", 0).coerceIn(0, MAX_LEVEL)
         mutable.update {
             it.copy(
                 worker = me.getBoolean("worker"),
@@ -334,6 +356,12 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
                 reviews = r,
                 transactions = tx,
                 taxonomy = taxonomy,
+                level = parsedLevel,
+                levelName = me.optString("level_name", levelName(parsedLevel)),
+                acceptedCount = me.optInt("accepted_count", 0),
+                acceptanceRate = me.optDouble("acceptance_rate", 0.0),
+                rateMultiplier = me.optDouble("rate_multiplier", levelTier(parsedLevel).rateMultiplier),
+                bondMultiplier = me.optDouble("bond_multiplier", levelTier(parsedLevel).bondMultiplier),
             )
         }
     }
@@ -343,16 +371,111 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         val categories = data.optJSONArray("categories") ?: return emptyList()
         return (0 until categories.length()).map { i ->
             val c = categories.getJSONObject(i)
+            val rawId: Any = if (c.has("id")) c.get("id") else 0
+            val (id, slug) =
+                when (rawId) {
+                    is Int -> rawId to null
+                    is String -> (rawId.toIntOrNull() ?: 0) to rawId
+                    else -> 0 to null
+                }
             TaxonomyCategory(
-                id = c.getInt("id"),
+                id = id,
                 name = c.getString("name"),
                 kind = c.optString("kind", KIND_OBJECT),
                 group = c.optString("group").takeIf { it.isNotBlank() },
+                slug = slug,
             )
         }
     }
 
     fun refresh() = run("Refreshing", "Bounties refreshed") { refreshData() }
+
+    // --- Capture v2: liveness gate (once per session, before first upload) ---
+
+    fun startLiveness() =
+        run("Starting liveness check") {
+            require(mutable.value.wallet.isNotEmpty()) { "Sign in first." }
+            val session =
+                post(
+                    "/liveness/session",
+                    JSONObject().put("contributor", mutable.value.wallet).put("task_id", "capture-session"),
+                )
+            livenessSessionId = session.getString("session_id")
+            mutable.update {
+                it.copy(livenessChallenge = session.getString("challenge"), livenessVerified = false)
+            }
+        }
+
+    fun completeLiveness(resultDigestHex: String) =
+        run("Verifying") {
+            val sid = livenessSessionId ?: error("No liveness session in progress.")
+            post(
+                "/liveness/complete",
+                JSONObject()
+                    .put("contributor", mutable.value.wallet)
+                    .put("session_id", sid)
+                    .put("result_digest", resultDigestHex),
+            )
+            livenessSessionId = null
+            mutable.update { it.copy(livenessVerified = true, livenessChallenge = null) }
+        }
+
+    fun cancelLiveness() {
+        if (!mutable.value.busy) {
+            livenessSessionId = null
+            mutable.update { it.copy(livenessChallenge = null) }
+        }
+    }
+
+    // --- Capture v2: instant open upload (no bounty wait) ---
+
+    fun startOpenCapture(kind: String) =
+        run("Opening a capture", "Ready to capture") {
+            val created = post("/submissions", JSONObject().put("kind", kind))
+            val id = created.getString("id")
+            val categories =
+                categoriesForKind(mutable.value.taxonomy, kind).map { c ->
+                    JSONObject()
+                        .put("id", c.id)
+                        .put("name", c.name)
+                        .put("kind", c.kind)
+                        .also { obj -> c.slug?.let { obj.put("slug", it) } }
+                }
+            val selected =
+                JSONObject()
+                    .put("id", id)
+                    .put("worker", mutable.value.wallet)
+                    .put("status", "claimed")
+                    .put(
+                        "bounty",
+                        JSONObject()
+                            .put("kind", kind)
+                            .put("title", openCaptureTitle(kind))
+                            .put("categories", JSONArray(categories)),
+                    )
+            mutable.update {
+                it.copy(
+                    selected = selected,
+                    image = null,
+                    videoDurationMs = null,
+                    videoUri = null,
+                    reviewing = false,
+                    lastResult = null,
+                )
+            }
+        }
+
+    fun dismissVerdict() {
+        if (!mutable.value.busy)
+            mutable.update { it.copy(lastResult = null) }
+    }
+
+    private fun openCaptureTitle(kind: String): String =
+        when (kind) {
+            KIND_PLACE -> "Place capture"
+            KIND_ACTION -> "Action capture"
+            else -> "Object capture"
+        }
 
     fun close() {
         if (!mutable.value.busy)
@@ -477,7 +600,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         mutable.value.selected?.getString("media_hash")
             ?: error("No approved media to label")
 
-    /** Appends the three optional secondary arrays, omitting any that are empty. */
+    /** Appends the three optional secondary arrays, omitting any that are empty, plus the v2 metadata fields. */
     private fun JSONObject.withSecondary(secondary: SecondarySelection): JSONObject =
         apply {
             secondaryLabelFields(
@@ -488,60 +611,99 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
                 .forEach { (key, ids) ->
                     put(key, JSONArray().apply { ids.forEach { put(it) } })
                 }
+            captureMetadataFields(secondary).forEach { (key, value) -> put(key, value) }
         }
 
     private fun submitLabels(payload: JSONObject) =
         run("Submitting labels…", "Labels submitted") {
             val s = mutable.value.selected ?: error("No selected capture")
             val action = if (mutable.value.reviewing) "reviews" else "labels"
-            post("/submissions/${s.getString("id")}/$action", payload)
-            mutable.update { it.copy(selected = null, image = null, videoDurationMs = null) }
+            val result = post("/submissions/${s.getString("id")}/$action", payload)
+            val outcome = parseSubmissionResult(result)
+            mutable.update {
+                it.copy(
+                    selected = null,
+                    image = null,
+                    videoDurationMs = null,
+                    videoUri = null,
+                    lastResult = outcome,
+                    level = outcome.levelAfter ?: it.level,
+                    levelName = outcome.levelAfter?.let(::levelName) ?: it.levelName,
+                )
+            }
             refreshData()
         }
 
-    fun submit(boxes: List<LabelBox>, secondary: SecondarySelection) =
-        submitLabels(
-            JSONObject()
-                .put("media_hash", mediaHash())
-                .put(
-                    "boxes",
-                    JSONArray().apply {
-                        boxes.forEach {
-                            put(
-                                JSONObject()
-                                    .put("category_id", it.categoryId)
-                                    .put("x", it.x.toDouble())
-                                    .put("y", it.y.toDouble())
-                                    .put("w", it.w.toDouble())
-                                    .put("h", it.h.toDouble())
-                            )
-                        }
-                    },
-                )
-                .withSecondary(secondary)
-        )
+    /**
+     * Maps a submit response to [SubmissionResult]. Absent or malformed verdict
+     * fields fall back safely: no `accepted` key means "no verdict yet", never
+     * a fabricated rejection.
+     */
+    private fun parseSubmissionResult(result: JSONObject): SubmissionResult {
+        val verdict = result.optJSONObject("verdict")
+        val accepted =
+            if (verdict != null && verdict.has("accepted")) verdict.optBoolean("accepted") else null
+        val reason = verdict?.optString("reason").orEmpty()
+        val payoutUsdc = result.optInt("payout_usdc", 0)
+        val levelAfter =
+            if (result.has("level_after")) result.optInt("level_after", -1).takeIf { it >= 0 } else null
+        return buildSubmissionResult(accepted, reason, payoutUsdc, levelAfter)
+    }
 
-    fun submitPlace(categoryId: Int, secondary: SecondarySelection) =
-        submitLabels(
-            JSONObject()
-                .put("media_hash", mediaHash())
-                .put("scene", JSONObject().put("category_id", categoryId))
-                .withSecondary(secondary)
-        )
+    /** Posture is the one required secondary dimension in v2; refuse to mint a label without it. */
+    private fun requirePosture(secondary: SecondarySelection) {
+        require(secondary.postures.isNotEmpty()) { "Choose a posture (required)." }
+    }
 
-    fun submitAction(categoryId: Int, trim: TrimRange, secondary: SecondarySelection) =
-        submitLabels(
-            JSONObject()
-                .put("media_hash", mediaHash())
-                .put(
-                    "action",
-                    JSONObject()
-                        .put("category_id", categoryId)
-                        .put("start_ms", trim.startMs)
-                        .put("end_ms", trim.endMs),
-                )
-                .withSecondary(secondary)
-        )
+    fun submit(boxes: List<LabelBox>, secondary: SecondarySelection): Unit =
+        requirePosture(secondary).let {
+            submitLabels(
+                JSONObject()
+                    .put("media_hash", mediaHash())
+                    .put(
+                        "boxes",
+                        JSONArray().apply {
+                            boxes.forEach {
+                                put(
+                                    JSONObject()
+                                        .put("category_id", it.categoryId)
+                                        .put("x", it.x.toDouble())
+                                        .put("y", it.y.toDouble())
+                                        .put("w", it.w.toDouble())
+                                        .put("h", it.h.toDouble())
+                                )
+                            }
+                        },
+                    )
+                    .withSecondary(secondary)
+            )
+        }
+
+    fun submitPlace(categoryId: Int, secondary: SecondarySelection): Unit =
+        requirePosture(secondary).let {
+            submitLabels(
+                JSONObject()
+                    .put("media_hash", mediaHash())
+                    .put("scene", JSONObject().put("category_id", categoryId))
+                    .withSecondary(secondary)
+            )
+        }
+
+    fun submitAction(categoryId: Int, trim: TrimRange, secondary: SecondarySelection): Unit =
+        requirePosture(secondary).let {
+            submitLabels(
+                JSONObject()
+                    .put("media_hash", mediaHash())
+                    .put(
+                        "action",
+                        JSONObject()
+                            .put("category_id", categoryId)
+                            .put("start_ms", trim.startMs)
+                            .put("end_ms", trim.endMs),
+                    )
+                    .withSecondary(secondary)
+            )
+        }
 
     fun transact(path: String, sender: ActivityResultSender) =
         run("Review this transaction in your wallet", "Transaction confirmed") {

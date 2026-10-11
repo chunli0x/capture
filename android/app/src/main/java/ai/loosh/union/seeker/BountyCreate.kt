@@ -15,7 +15,14 @@ const val KIND_ENVIRONMENT = "environment"
  * [group] is only present for `environment` entries (indoor_outdoor, time,
  * weather, surface, light) and is null for every other kind.
  */
-data class TaxonomyCategory(val id: Int, val name: String, val kind: String, val group: String? = null)
+data class TaxonomyCategory(
+    val id: Int,
+    val name: String,
+    val kind: String,
+    val group: String? = null,
+    /** String id for the v2 string-keyed registries (`surface_type`, `lighting`, `weather`); null for numeric-id namespaces. */
+    val slug: String? = null,
+)
 
 /**
  * Resolves a form kind to one of the three wire values. An unknown or blank

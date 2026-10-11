@@ -11,6 +11,11 @@ data class SecondarySelection(
     val expressions: List<Int> = emptyList(),
     val postures: List<Int> = emptyList(),
     val environment: List<Int> = emptyList(),
+    /** Optional capture metadata (Capture v2): single string ids + a motion flag. */
+    val surfaceType: String? = null,
+    val lighting: String? = null,
+    val weather: String? = null,
+    val egoMotion: Boolean = false,
 )
 
 /**
