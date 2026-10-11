@@ -233,13 +233,21 @@ def canonicalize_video(raw, max_bytes=MAX_VIDEO_BYTES, max_seconds=MAX_VIDEO_SEC
     buf = bytearray(raw)
     end = len(buf)
     has_ftyp = False
+    has_mdat = False
     moov = None
     for btype, start, stop in _boxes(buf, 0, end):
         if btype == "ftyp":
             has_ftyp = True
         elif btype == "moov" and moov is None:
             moov = (start, stop)
-    if not has_ftyp or moov is None:
+        elif btype == "mdat":
+            # A real clip carries its sample payload in an mdat box. Requiring
+            # one (with non-empty payload) rejects header-only synthetics that
+            # declare a video track in moov but contain no media data — the
+            # class of file that used to pass on headers alone.
+            if stop - start > 0:
+                has_mdat = True
+    if not has_ftyp or moov is None or not has_mdat:
         raise MediaRejected("Not an MP4 file")
     mvhd_duration_ms = None
     video_tracks = 0

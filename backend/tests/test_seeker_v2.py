@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from seeker.api import create_app
 from seeker.config import Settings
-from seeker.db import Base, Submission, now
+from seeker.db import Actor, Base, Submission, now
 from seeker.judge import StubJudge, Verdict, build_judge
 from seeker.leveling import (
     bond_multiplier,
@@ -92,6 +92,11 @@ def pilot(tmp_path):
             ).status_code
             == 200
         )
+    # Capture v2 requires a completed server-side liveness proof before an open
+    # upload. Enroll every worker and complete liveness so the open-upload tests
+    # exercise the real (post-gate) flow.
+    for k, hd in zip(keys, h):
+        do_liveness(c, hd, str(k.pubkey()))
     yield c, app, h, keys, settings
     app.state.database.engine.dispose()
 
@@ -152,7 +157,7 @@ def mp4(duration_ms=2000):
     children = [_mvhd(duration_ms), _trak(b"vide", duration_ms), _trak(b"soun", duration_ms)]
     moov = _box(b"moov", b"".join(children))
     ftyp = _box(b"ftyp", b"isom" + struct.pack(">I", 512) + b"isom")
-    return ftyp + moov + b"\x00" * 16
+    return ftyp + moov + _box(b"mdat", b"\x00" * 16)
 
 
 # ---- helpers ----
@@ -162,6 +167,24 @@ def open_submission(c, h, kind="object"):
     r = c.post("/submissions", headers=h, json={"kind": kind})
     assert r.status_code == 200, r.text
     return r.json()["id"]
+
+
+def do_liveness(c, h, wallet, task_id="capture-session"):
+    """Run the /liveness/session -> /liveness/complete flow for a wallet."""
+    r = c.post(
+        "/liveness/session",
+        headers=h,
+        json={"contributor": wallet, "task_id": task_id},
+    )
+    assert r.status_code == 200, r.text
+    session_id = r.json()["session_id"]
+    r = c.post(
+        "/liveness/complete",
+        headers=h,
+        json={"contributor": wallet, "session_id": session_id, "result_digest": "0" * 64},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["liveness_proof_hash"]
 
 
 def upload_media(c, h, sid, content=None):
@@ -441,3 +464,135 @@ def test_acceptance_rate_rolls_over_rejects(pilot):
     me = c.get("/me", headers=h[1]).json()
     assert me["accepted_count"] == 1
     assert me["acceptance_rate"] == 0.5
+
+
+# ---- audit fixes: idempotent retry, open-upload recovery, liveness gate ----
+
+
+def test_open_labels_idempotent_retry_returns_stored_verdict(pilot):
+    """Retrying a committed label must return the stored verdict (200), never a
+    409, and must never double-increment the worker's accepted_count."""
+    c, app, h, keys, *_ = pilot
+    sid = open_submission(c, h[1])
+    media_hash = upload_media(c, h[1], sid)
+    body = object_labels(media_hash, postures=[1], environment=[1])
+
+    first = c.post(f"/submissions/{sid}/labels", headers=h[1], json=body)
+    assert first.status_code == 200, first.text
+    assert first.json()["status"] == "accepted"
+
+    retry = c.post(f"/submissions/{sid}/labels", headers=h[1], json=body)
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["status"] == "accepted"
+    assert retry.json()["verdict"] == first.json()["verdict"]
+    assert retry.json()["payout_usdc"] == first.json()["payout_usdc"]
+
+    with app.state.database.transaction() as db:
+        assert db.get(Actor, str(keys[1].pubkey())).accepted_count == 1
+
+
+def test_submissions_lists_open_upload_with_stored_verdict(pilot):
+    """GET /submissions must expose open (no-bounty) uploads with their stored
+    judge verdict, not hide them behind an inner join."""
+    c, _app, h, *_ = pilot
+    sid = open_submission(c, h[1])
+    media_hash = upload_media(c, h[1], sid)
+    r = c.post(
+        f"/submissions/{sid}/labels",
+        headers=h[1],
+        json=object_labels(media_hash, postures=[1], environment=[1]),
+    )
+    assert r.status_code == 200, r.text
+
+    entry = next(s for s in c.get("/submissions", headers=h[1]).json() if s["id"] == sid)
+    assert entry["bounty_id"] is None
+    assert entry["status"] == "accepted"
+    assert entry["accepted"] is True
+    assert entry["verdict_reason"] == "accepted by deterministic stub judge"
+    assert entry["payout_usdc"] == 100_000
+
+
+def test_open_submission_expiry_blocks_late_label(pilot):
+    """An open upload past its expiration must refuse a new label."""
+    c, app, h, *_ = pilot
+    sid = open_submission(c, h[1])
+    media_hash = upload_media(c, h[1], sid)
+    with app.state.database.transaction() as db:
+        db.get(Submission, sid).expires = now() - 1
+    r = c.post(
+        f"/submissions/{sid}/labels",
+        headers=h[1],
+        json=object_labels(media_hash, postures=[1], environment=[1]),
+    )
+    assert r.status_code == 409
+    assert "expired" in r.json()["detail"].lower()
+
+
+def test_open_submit_requires_liveness(pilot):
+    """POST /submissions must refuse a worker without a completed liveness proof."""
+    c, _app, _h, _keys, *_ = pilot
+    k = Keypair()
+    ch = c.post("/auth/challenge", json={"wallet": str(k.pubkey())}).json()
+    token = c.post(
+        "/auth/verify",
+        json={
+            "challenge_id": ch["challenge_id"],
+            "signature": str(k.sign_message(ch["message"].encode())),
+        },
+    ).json()["token"]
+    hd = {"Authorization": "Bearer " + token}
+    assert (
+        c.post(
+            "/operator/enroll",
+            json={"wallet": str(k.pubkey()), "worker": True, "reviewer": False},
+            headers={"x-operator-key": "o" * 32},
+        ).status_code
+        == 200
+    )
+    r = c.post("/submissions", headers=hd, json={"kind": "object"})
+    assert r.status_code == 403
+    assert "liveness" in r.json()["detail"].lower()
+    do_liveness(c, hd, str(k.pubkey()))
+    assert c.post("/submissions", headers=hd, json={"kind": "object"}).status_code == 200
+
+
+def test_liveness_requires_matching_wallet(pilot):
+    """Liveness endpoints must bind to the authenticated wallet: a session or
+    completion for a different contributor is refused."""
+    c, _app, h, keys, *_ = pilot
+    r = c.post(
+        "/liveness/session",
+        headers=h[0],
+        json={"contributor": str(keys[1].pubkey()), "task_id": "capture-session"},
+    )
+    assert r.status_code == 403
+    r = c.post(
+        "/liveness/session",
+        headers=h[0],
+        json={"contributor": str(keys[0].pubkey()), "task_id": "capture-session"},
+    )
+    session_id = r.json()["session_id"]
+    r = c.post(
+        "/liveness/complete",
+        headers=h[1],
+        json={
+            "contributor": str(keys[0].pubkey()),
+            "session_id": session_id,
+            "result_digest": "0" * 64,
+        },
+    )
+    assert r.status_code == 403
+
+
+def test_health_reports_real_readiness(pilot):
+    """/health reflects readiness: an unreachable chain yields 503 + a per-check
+    breakdown, while DB/schema/judge are reported as ready."""
+    c, _app, _h, *_ = pilot
+    r = c.get("/health")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["production_ready"] is False
+    assert body["checks"]["database"] == "ok"
+    assert body["checks"]["schema"] == "applied"
+    assert body["checks"]["judge"] == "stubbed"
+    assert body["checks"]["chain"] == "unreachable"

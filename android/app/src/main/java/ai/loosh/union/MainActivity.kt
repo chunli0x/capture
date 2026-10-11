@@ -355,8 +355,8 @@ private fun CampaignsScreen(
  *
  * Named "image-plane pose" here and everywhere else it is user-visible. A flat
  * sprite records x, y, roll and an apparent scale - it cannot express pitch,
- * yaw or depth, so calling it 6D would be an overclaim a robotics buyer spots
- * immediately.
+ * yaw or depth, so calling it 6D would be an overclaim an egocentric-capture
+ * data buyer spots immediately.
  */
 @Composable
 private fun PosePrimerScreen(

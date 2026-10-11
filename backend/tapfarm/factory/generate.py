@@ -3,8 +3,8 @@
 Generates the 12 demo clips for the factory inspection campaign: realistic
 factory/warehouse footage showing a box in one of four states (damaged,
 missing shipping label, unsealed, or clean), under three lighting conditions,
-shot in two styles (a fixed overhead security camera, and a third-person view
-with a humanoid robot sorting packages).
+shot in two styles (a fixed overhead security camera, and a ground-level
+egocentric view).
 
 The prompt is the ground truth: each clip is generated from a spec whose defect
 slot is known, so the manifest can record the label exactly without any
@@ -55,9 +55,9 @@ SCAFFOLD = {
         "concrete floor and palettes in the background."
     ),
     "robot": (
-        "Third-person view of a humanoid robot sorting {box} on a factory "
-        "floor, a conveyor line with boxes in frame, realistic industrial "
-        "warehouse, natural motion."
+        "Ground-level egocentric view of {box} on a factory floor, a "
+        "conveyor line with boxes in frame, realistic industrial warehouse, "
+        "natural motion."
     ),
 }
 
@@ -68,7 +68,7 @@ LIGHTING = {
 }
 
 # Six box shapes/sizes, cycled across the CCTV clips so each inspection target
-# differs. Robot clips keep the generic "cardboard packages" scaffold.
+# differs. Ground-level clips keep the generic "cardboard packages" scaffold.
 BOXES = [
     "a tall, narrow cardboard box",
     "a wide, flat cardboard box",

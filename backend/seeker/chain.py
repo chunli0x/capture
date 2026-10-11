@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import struct
+import time
 from urllib.parse import urlparse
 
 import httpx
@@ -279,8 +280,16 @@ class Chain:
             address = self.pda(b"bond", bytes(Pubkey.from_string(prepared.wallet)))
         page_size = 100
         max_pages = 20  # sane cap: walk at most 2000 signatures
+        # Overall wall-clock bound on the whole walk, on top of the per-call
+        # RPC timeout, so a slow RPC endpoint cannot stall reconciliation
+        # indefinitely (20 pages x 15s would otherwise be 300s).
+        deadline = time.monotonic() + 30
         before = None
         for _ in range(max_pages):
+            if time.monotonic() > deadline:
+                raise ChainUnavailable(
+                    "Confirmation scan deadline exceeded; supply its signature"
+                )
             params = {"commitment": "finalized", "limit": page_size}
             if before is not None:
                 params["before"] = before

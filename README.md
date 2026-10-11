@@ -2,66 +2,115 @@
 
 **Ground truth, from the ground up.**
 
-Capture is a mobile data-labeling bounty network. Anyone with a phone can prove they are human, capture ground-level egocentric footage of the physical world — a photo or short video shot six to twelve inches off the ground, angled forward or up — and label it against a structured taxonomy in exchange for USDC. Requesters post bounties for labeled ground-truth media; two independent reviewers must agree on the label before anyone is paid, and settlement happens exactly once on-chain. It is built for the CLOCK IN hackathon (Solana Mobile × RadiantsDAO, September 8 – October 8 2026).
+Capture is an open-upload data-labeling network for **ground-level egocentric
+capture** — a photo or short video shot six to twelve inches off the ground,
+angled forward or up. Anyone with a phone can prove they are human, capture
+physical-world media, and label it against a structured taxonomy in exchange
+for devnet **TEST-USDC**, backed by a slashable **TEST-SKR** quality bond. It
+is built for the CLOCK IN hackathon (Solana Mobile × RadiantsDAO, September 8
+– October 8 2026).
 
 ## How it works
 
-The loop has five steps:
-
-1. **Prove human.** A worker proves they are a human operator using a Solana Attestation Service credential, an on-device liveness check, and explicit operator enrollment. 
-2. **Capture.** The worker records ground-level egocentric capture: the camera held 6–12 inches off the ground, angled forward or up, as a photo (an object or place) or a short video (an action).
+1. **Prove human (liveness gate).** Before a first upload, the backend issues
+   a fresh, single-use motion challenge (blink, turn left, turn right, smile).
+   The check runs on-device; no biometric material leaves the phone. This is a
+   liveness gate, not bank-grade anti-spoofing.
+2. **Capture.** The worker records ground-level egocentric capture — the
+   camera held 6–12 inches off the ground, angled forward or up — as a photo
+   (an object or place) or a short video (an action).
 3. **Label.** The worker applies the six label dimensions described below.
-4. **Review.** Two independent reviewers label the same media blind. Agreement (object IoU ≥ 0.7) unlocks eligibility; disagreement is "disputed" and pays nobody.
-5. **Settle.** The requester accepts, and the bounty settles exactly once on-chain. The worker is paid in USDC, backed by a slashable SKR bond.
+4. **Judge.** A vision-language-model quality judge accepts or rejects each
+   submission. This build ships a deterministic rule-based stub; the real VLM
+   judge is the roadmap (see "The judge").
+5. **Record.** An accepted submission records a TEST-USDC payout (base rate ×
+   level multiplier × label premium) and advances the worker's level; a
+   rejected submission records a bond slash (payout 0). Settlement is recorded
+   on devnet, not a real transfer.
 
 ## Label dimensions
 
-Three primary dimensions:
+Six dimensions, drawn from a server-owned closed vocabulary (`GET /taxonomy`):
 
-- **OBJECT** — draw a bounding box around the object.
-- **PLACE** — a single scene class.
-- **ACTION** — a video trim plus one tag.
+| Dimension   | Required | What it captures |
+|-------------|----------|------------------|
+| OBJECT      | yes      | bounding box(es) around the object |
+| PLACE       | yes      | a single scene class |
+| ACTION      | yes      | a video trim plus one tag |
+| POSTURE     | yes      | the subject's pose (required in v2) |
+| EXPRESSION  | no       | facial expression |
+| ENVIRONMENT | no       | indoor/outdoor, time, weather, surface, light |
 
-Three optional secondary tags:
+Four optional metadata tags round out a capture: **surface type**, **lighting**,
+**weather**, and **ego-motion** (a static action shot is rejected outright — an
+image would do).
 
-- **FACIAL EXPRESSION**
-- **BODY LANGUAGE**
-- **ENVIRONMENT** — indoor/outdoor, time, weather, surface, light.
+## Progression
 
-## Tokens
+Five levels, gated by both a cumulative accepted-count and a rolling
+acceptance rate over the last 50 judged submissions:
 
-Two assets, two jobs. 
+```
+Scout → Regular → Veteran → Expert → Pathfinder
+```
 
-- **USDC** - all bounties are paid in USDC.
-- **SKR** - a worker stakes SKR against the quality of their labels.
+Every contributor is at least a Scout. The TEST-SKR bond requirement scales
+down with level and is waived at Pathfinder.
 
+## Tokens & settlement
+
+- **TEST-USDC** — payroll. A devnet test token, never real USDC.
+- **TEST-SKR** — the slashable quality bond. A devnet fixture mint.
+
+Honest caveat: settlement in this build is **recorded, not transferred**. The
+on-chain TEST-USDC payout and TEST-SKR bond slash are the seams behind a devnet
+ledger record; no real tokens move.
+
+## The judge
+
+The quality judge is a vision-language model behind a clean abstraction
+(`backend/seeker/judge.py`). The default is a **deterministic rule-based stub**
+that checks only what is machine-readable from labels + metadata + media
+properties (missing media, missing primary label, missing posture, static
+action footage, indoor weather tags). Pixel-level reject rules — blur,
+exposure, ground-level horizon, screen content, watermark — are the real
+judge's job and are **not** enforced by the stub.
+
+The real judge (a hosted VLM) is gated behind `SEEKER_JUDGE_URL` +
+`SEEKER_JUDGE_KEY` and is the roadmap item. Until those are set, the stub runs
+and the test suite needs no network.
 
 ## Status
 
 October 8 2026:
 
 - Deployed to **Solana devnet**; backend live.
-- **556 backend tests** and **98 Android tests** pass.
-- Everything here runs on **devnet test tokens** 
+- **585 backend tests** and **114 Android tests** pass.
+- Everything here runs on **devnet test tokens**.
 
-What is **not** done:
+Not done / honest caveats:
 
-- **Slashing is implemented but not enforced** — there is no backend trigger that burns a bond yet.
-- **Moderation is a live-validated pilot, not a compliance claim.** CSAM and minor-face screening (Hive + Sightengine) is fail-closed in code, but it has not been validated as compliance.
-- **On-device MWA signing is unverified on physical Solana Seeker Mobile hardware.** It passes in CI, but the hardware-backed wallet handshake is the one open item.
+- The VLM quality judge is a deterministic stub; the real vision-language judge
+  is not wired.
+- Settlement is recorded on devnet, not a real transfer.
+- Liveness is an on-device motion challenge, not bank-grade anti-spoofing
+  (device attestation is a roadmap item).
+- Moderation (Hive / Sightengine) is fail-closed in code, not validated as a
+  compliance claim.
 
 ## Repository layout
 
 ```
 .
 ├── android/            Solana Seeker Mobile app (Kotlin / Gradle)
-│   └── app/            capture, label, review UI; unit tests under src/test
+│   └── app/            capture, label, judge UI; unit tests under src/test
 ├── backend/            FastAPI service
-│   ├── seeker/         API, taxonomy, media, chain, DB, migrations
+│   ├── seeker/         Capture v2 API, taxonomy, judge, leveling, chain, DB
+│   ├── tapfarm/        legacy demo backend (tap-grid, pose, claim)
 │   ├── migrations/     database migrations
 │   └── tests/          backend test suite
 ├── programs/           Anchor workspaces
-│   └── seeker-bounty/  on-chain bounty settlement + SKR bond program
+│   └── seeker-bounty/  on-chain settlement + SKR bond program
 ├── scripts/            devnet bootstrap, deploy, and demo helpers
 └── .github/            CI workflows
 ```
@@ -74,13 +123,13 @@ dev-only keys — never the real operator/media/verifier secrets):
 ```bash
 git clone https://github.com/chunli0x/capture.git && cd capture
 
-# 1. PostgreSQL (Docker)
+# 1. PostgreSQL (Docker) — loopback-only by default
 docker compose up -d
 
-# 2. venv + dependencies + dev-only keys + DB schema
+# 2. venv + dependencies + dev-only keys + DB schema; writes backend/.env
 ./scripts/dev_bootstrap.sh
 
-# 3. run the API
+# 3. run the API (loads the generated backend/.env)
 cd backend && .venv/bin/uvicorn seeker.api:production_app --factory --env-file .env
 
 # 4. verify
@@ -95,14 +144,21 @@ Expected output from `/health`:
 
 Notes:
 
+- The backend listens on **port 8000**. The Android Capture v2 client defaults
+  to `SEEKER_API_BASE=http://10.0.2.2:8001` (see `android/app/build.gradle.kts`),
+  and the emulator reaches your machine via `10.0.2.2`, not `localhost`. To
+  connect the app, either run the backend with `--port 8001`, or rebuild the
+  app with `-PseekerApiBase=http://10.0.2.2:8000`.
 - `dev_bootstrap.sh` generates a throwaway operator key, a throwaway media
   encryption key, and a freshly generated dev-only verifier keypair
-  (`backend/verifier.dev.json`). These are intentionally **not** the real
-  verifier — the real key authorizes every attestation and is never committed.
-  Anything that needs the real verifier on-chain will fail until you point
-  `SEEKER_VERIFIER_KEY_FILE` at your own keypair.
-- No Docker? Use SQLite instead — uncomment the `SEEKER_DATABASE_URL=sqlite:///./seeker.db`
-  and `SEEKER_LOCAL_SQLITE=true` lines in `backend/.env` (or run
+  (`backend/verifier.dev.json`) and writes them to `backend/.env`. These are
+  intentionally **not** the real verifier — the real key authorizes every
+  attestation and is never committed. Anything that needs the real verifier
+  on-chain will fail until you point `SEEKER_VERIFIER_KEY_FILE` at your own
+  keypair.
+- No Docker? Use SQLite instead — uncomment the
+  `SEEKER_DATABASE_URL=sqlite:///./seeker.db` and `SEEKER_LOCAL_SQLITE=true`
+  lines in `backend/.env` (or run
   `SEEKER_LOCAL_SQLITE=true SEEKER_DATABASE_URL=sqlite:///./seeker.db ./scripts/dev_bootstrap.sh`).
 - The dependency set is tested on Python 3.11. If `python3` is a newer minor,
   pass `PYTHON=python3.11 ./scripts/dev_bootstrap.sh`.
@@ -115,11 +171,27 @@ Notes:
 Backend:
 
 ```bash
-cd backend && pip install -r requirements-seeker.txt && python -m seeker.migrate && uvicorn seeker.api:production_app --factory
+cd backend
+.venv/bin/pip install -r requirements-seeker.txt
+.venv/bin/python -m seeker.migrate
+.venv/bin/uvicorn seeker.api:production_app --factory --env-file .env
 ```
+
+(Or just run `./scripts/dev_bootstrap.sh`, which does all of the above and
+writes `backend/.env`.)
 
 Android (unit tests):
 
 ```bash
-ANDROID_HOME=/home/hermes/android-sdk ./gradlew testDebugUnitTest
+cd android && ./gradlew testDebugUnitTest
 ```
+
+Gradle locates the SDK via `ANDROID_HOME` (or `android/local.properties`, which
+is gitignored — never commit a machine path). To build an APK for the emulator:
+
+```bash
+cd android && ./gradlew assembleDebug
+```
+
+Remember the port note above: the app's Capture v2 client points at
+`10.0.2.2:8001` by default while the backend serves on `8000`.

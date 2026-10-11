@@ -186,7 +186,7 @@ def mp4(
         children.append(_udta(marker))
     moov = _box(b"moov", b"".join(children))
     ftyp = _box(b"ftyp", b"isom" + struct.pack(">I", 512) + b"isom")
-    return ftyp + moov + b"\x00" * 16
+    return ftyp + moov + _box(b"mdat", b"\x00" * 16)
 
 
 def bounty(p, kind="object", category_ids=None, slots=2):
@@ -597,6 +597,17 @@ def test_mp4_ingestion_bounds():
         canonicalize_video(png())  # not an MP4
 
 
+def test_mp4_without_mdat_rejected():
+    # A header-only synthetic that declares a video track but carries no mdat
+    # (media data) must be rejected rather than trusted on its headers alone.
+    children = [_mvhd(2000), _trak(b"vide", 2000), _trak(b"soun", 2000)]
+    moov = _box(b"moov", b"".join(children))
+    ftyp = _box(b"ftyp", b"isom" + struct.pack(">I", 512) + b"isom")
+    no_mdat = ftyp + moov + b"\x00" * 16
+    with pytest.raises(MediaRejected):
+        canonicalize_video(no_mdat)
+
+
 def test_video_duration_authoritative_from_track():
     # mvhd lies (2000ms) while the video track's mdhd/stts runs 60000ms: the
     # authoritative duration must exceed 30s and be rejected, not silently
@@ -879,11 +890,12 @@ def test_migration_0002_adds_phase2_columns(tmp_path):
     assert "duration_ms" not in sub_cols and "keypoints" not in sub_cols
     assert "secondary" not in sub_cols and "secondary" not in rev_cols
     assert "accepted_count" not in actor_cols
+    assert "liveness_completed" not in actor_cols
     assert "capture_metadata" not in sub_cols and "accepted" not in sub_cols
 
     # 0002 adds 3 columns; 0003 adds 2; 0004 adds 8 (actors.accepted_count +
-    # 7 submission columns).
-    assert apply_migrations(engine) == 13
+    # 7 submission columns); 0005 adds 1 (actors.liveness_completed).
+    assert apply_migrations(engine) == 14
     assert apply_migrations(engine) == 0  # re-run is a no-op
 
     bounty_cols = {c["name"] for c in inspect(engine).get_columns("seeker_bounties")}
@@ -894,6 +906,7 @@ def test_migration_0002_adds_phase2_columns(tmp_path):
     assert "duration_ms" in sub_cols and "keypoints" in sub_cols
     assert "secondary" in sub_cols and "secondary" in rev_cols
     assert "accepted_count" in actor_cols
+    assert "liveness_completed" in actor_cols
     assert "capture_metadata" in sub_cols and "accepted" in sub_cols
     assert "judged_at" in sub_cols and "payout_usdc" in sub_cols
     assert "verdict_reason" in sub_cols and "level_after" in sub_cols

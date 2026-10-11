@@ -13,7 +13,7 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import JSONResponse
 from solders.pubkey import Pubkey
 from solders.signature import Signature
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
@@ -54,7 +54,7 @@ from .schemas import (
     labels_agree,
 )
 from .leveling import ROLLING_WINDOW, level_info
-from .judge import build_judge
+from .judge import StubJudge, build_judge
 from .payout import payout_units
 from . import taxonomy
 
@@ -91,10 +91,17 @@ def canonical(data):
 
 
 def lock(db, cls, key):
+    # ``populate_existing`` forces the ORM to re-read the row from the freshly
+    # acquired SELECT ... FOR UPDATE instead of returning an identity-map cache
+    # hit. Without it, a handler that loaded a row before taking the lock (e.g.
+    # ``labels()`` reading the submission to pick the open/bounty branch, then
+    # ``own_open``/``authorized_submission`` locking it) would observe stale
+    # state and let two concurrent requests both pass an immutable-state guard.
     row = db.scalar(
         select(cls)
         .where(getattr(cls, next(iter(cls.__table__.primary_key.columns)).name) == key)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if row is None:
         fail(404, "Resource not found")
@@ -122,14 +129,14 @@ def rolling_acceptance(db, wallet):
     """Rolling acceptance rate (fraction) over the last ROLLING_WINDOW judged
     submissions. 0.0 when there are none."""
     rows = db.scalars(
-        select(Submission)
+        select(Submission.accepted)
         .where(Submission.worker == wallet, Submission.accepted.is_not(None))
         .order_by(Submission.judged_at.desc())
         .limit(ROLLING_WINDOW)
     ).all()
     if not rows:
         return 0.0
-    return sum(1 for s in rows if s.accepted) / len(rows)
+    return sum(1 for a in rows if a) / len(rows)
 
 
 def contributor_level(db, wallet):
@@ -158,14 +165,27 @@ def bounty_view(b):
 def submission_view(s, b, actor):
     result = {
         "id": s.id,
-        "bounty_id": b.id,
+        "bounty_id": b.id if b else None,
         "worker": s.worker,
         "status": s.status,
         "expires": s.expires,
         "media_hash": s.media_hash,
         "keypoints": s.keypoints,
-        "bounty": bounty_view(b),
     }
+    if b is None:
+        # Capture v2 open upload: no bounty to join. Expose the stored judge
+        # verdict so a retrying client can recover its outcome instead of a 409.
+        result["kind"] = s.kind
+        result["accepted"] = s.accepted
+        result["verdict_reason"] = s.verdict_reason
+        result["payout_usdc"] = s.payout_usdc
+        result["level_after"] = s.level_after
+        result["judged_at"] = s.judged_at
+        if actor.wallet == s.worker:
+            result["boxes"] = s.labels
+            result["secondary"] = s.secondary or {}
+        return result
+    result["bounty"] = bounty_view(b)
     if actor.wallet in {s.worker, b.requester}:
         result["boxes"] = s.labels
         result["secondary"] = s.secondary or {}
@@ -270,14 +290,23 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
         actor = lock(db, Actor, actor.wallet)
         if not actor.worker:
             fail(403, "Worker enrollment required")
-        s = db.get(Submission, sid)
-        if not s:
+        # bounty_id is immutable; read it (unlocked) only to pick the branch so
+        # the bounty path can keep the global Bounty-before-Submission lock
+        # order. The locked loads below re-read fresh state.
+        branch = db.execute(
+            select(Submission.id, Submission.bounty_id).where(Submission.id == sid)
+        ).first()
+        if branch is None:
             fail(404, "Submission not found")
-        if s.bounty_id is None:
+        _, bounty_id = branch
+        if bounty_id is None:
+            s = lock(db, Submission, sid)
             if s.worker != actor.wallet:
                 fail(403, "Only this upload's worker may edit it")
+            if s.expires <= now():
+                fail(409, "Upload expired")
             return s, s.kind == "action"
-        b = lock(db, Bounty, s.bounty_id)
+        b = lock(db, Bounty, bounty_id)
         s = lock(db, Submission, sid)
         if s.worker != actor.wallet:
             fail(403, "Only this claim's worker may upload or label")
@@ -370,6 +399,19 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
         seams behind this ledger record, matching the judge's env-gated design.
         """
         s = own_open(db, sid, actor)
+        if s.status in {"accepted", "rejected"}:
+            # Idempotent retry: the label was already committed and judged.
+            # Return the stored verdict instead of a 409 so a client whose
+            # response was lost can recover its outcome without a double pay.
+            return {
+                "id": s.id,
+                "status": s.status,
+                "verdict": {"accepted": s.accepted, "reason": s.verdict_reason},
+                "payout_usdc": s.payout_usdc,
+                "level_after": s.level_after,
+            }
+        if s.expires <= now():
+            fail(409, "Upload expired")
         if s.status != "claimed" or s.labels is not None:
             fail(409, "Submission is immutable")
         boxes, secondary, metadata = validate_open_labels(body, s)
@@ -463,11 +505,64 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
 
     @app.get("/health")
     def health():
-        return {
-            "service": "seeker",
-            "network": settings.cluster,
-            "production_ready": False,
-        }
+        """Real readiness probe: database connect, schema applied, judge
+        configured-or-stubbed, chain reachable. 200 when all pass, 503
+        otherwise, with a per-check breakdown."""
+        status = 200
+        checks = {}
+
+        # 1. Database connection.
+        try:
+            with database.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            checks["database"] = "ok"
+        except Exception:
+            checks["database"] = "down"
+            status = 503
+
+        # 2. Schema applied (core tables present).
+        try:
+            from sqlalchemy import inspect
+
+            tables = set(inspect(database.engine).get_table_names())
+            required = {
+                "seeker_actors",
+                "seeker_submissions",
+                "seeker_bounties",
+                "seeker_prepared",
+            }
+            missing = required - tables
+            checks["schema"] = "applied" if not missing else "missing " + ",".join(sorted(missing))
+            if missing:
+                status = 503
+        except Exception:
+            checks["schema"] = "unavailable"
+            status = 503
+
+        # 3. Judge configured (real) or stubbed.
+        if judge is None:
+            checks["judge"] = "missing"
+            status = 503
+        else:
+            checks["judge"] = "stubbed" if isinstance(judge, StubJudge) else "configured"
+
+        # 4. Chain reachable (program initialized and config matches).
+        try:
+            chain.check_environment()
+            checks["chain"] = "reachable"
+        except Exception:
+            checks["chain"] = "unreachable"
+            status = 503
+
+        return JSONResponse(
+            status_code=status,
+            content={
+                "service": "seeker",
+                "network": settings.cluster,
+                "production_ready": status == 200,
+                "checks": checks,
+            },
+        )
 
     @app.get("/taxonomy")
     def get_taxonomy():
@@ -540,13 +635,19 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
         }
 
     @app.post("/liveness/session")
-    def liveness_session(body: LivenessSession):
+    def liveness_session(body: LivenessSession, actor: Auth):
         # Capture v2: a fresh, single-use motion challenge before the first
         # upload. `contributor` is the wallet; the challenge is server-chosen so
-        # one recorded run cannot be replayed.
+        # one recorded run cannot be replayed. The contributor must match the
+        # authenticated caller so a proof can never be issued for someone
+        # else's wallet.
         Pubkey.from_string(body.contributor)
+        if body.contributor != actor.wallet:
+            fail(403, "Liveness contributor must match the authenticated wallet")
+        with database.transaction() as db:
+            rate(db, "liveness-session:" + actor.wallet, 10, 3600)
         store = liveness_sessions()
-        session = store.issue(body.contributor, body.task_id)
+        session = store.issue(actor.wallet, body.task_id)
         return {
             "session_id": session.session_id,
             "challenge": session.challenge.value,
@@ -556,15 +657,16 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
         }
 
     @app.post("/liveness/complete")
-    def liveness_complete(body: LivenessComplete):
-        Pubkey.from_string(body.contributor)
+    def liveness_complete(body: LivenessComplete, actor: Auth):
+        if body.contributor != actor.wallet:
+            fail(403, "Liveness contributor must match the authenticated wallet")
         try:
             result_digest = bytes.fromhex(body.result_digest)
         except ValueError:
             fail(400, "result_digest must be hex")
         store = liveness_sessions()
         try:
-            digest_ = store.complete(body.contributor, body.session_id, result_digest)
+            digest_ = store.complete(actor.wallet, body.session_id, result_digest)
         except UnknownSession as exc:
             fail(404, str(exc))
         except SessionExpired as exc:
@@ -573,6 +675,13 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             fail(409, str(exc))
         except LivenessError as exc:
             fail(400, str(exc))
+        # Server-side record that this wallet completed a valid, server-issued
+        # liveness proof. The open-upload submit path enforces this flag, so
+        # liveness is no longer a client-only claim.
+        with database.transaction() as db:
+            rate(db, "liveness-complete:" + actor.wallet, 10, 3600)
+            worker = lock(db, Actor, actor.wallet)
+            worker.liveness_completed = True
         return {
             "liveness_proof_hash": digest_.hex(),
             "task_id": "capture-session",
@@ -701,6 +810,12 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             actor = lock(db, Actor, actor.wallet)
             if not actor.worker:
                 fail(403, "Worker enrollment required")
+            if not actor.liveness_completed:
+                fail(
+                    403,
+                    "Liveness proof required; complete /liveness/session then "
+                    "/liveness/complete first",
+                )
             rate(db, "open-upload:" + actor.wallet, 60, 3600)
             s = Submission(
                 bounty_id=None,
@@ -720,9 +835,12 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
     @app.get("/submissions")
     def submissions(actor: Auth):
         with database.transaction() as db:
+            # Outer join (not inner) so open uploads — whose bounty_id is NULL —
+            # still appear in the worker's history; submission_view handles the
+            # b=None case by exposing the stored judge verdict.
             rows = db.execute(
                 select(Submission, Bounty)
-                .join(Bounty)
+                .outerjoin(Bounty)
                 .where(
                     or_(
                         Submission.worker == actor.wallet,
@@ -755,17 +873,27 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
 
     @app.post("/submissions/{sid}/media")
     async def upload(sid: str, request: Request, actor: Auth):
-        with database.transaction() as db:
-            s, is_video = own_media(db, sid, actor)
-            if s.status != "claimed":
-                fail(409, "Submission is immutable")
-            rate(db, "upload:" + actor.wallet, 12, 3600)
-            limit = settings.max_video_bytes if is_video else settings.max_upload_bytes
+        def authorize():
+            # Synchronous lock + rate-limit; runs in a worker thread so the
+            # event loop is never blocked by a DB transaction or row lock.
+            with database.transaction() as db:
+                s, is_video = own_media(db, sid, actor)
+                if s.status != "claimed":
+                    fail(409, "Submission is immutable")
+                rate(db, "upload:" + actor.wallet, 12, 3600)
+                return (
+                    settings.max_video_bytes if is_video else settings.max_upload_bytes,
+                    is_video,
+                )
+
+        limit, is_video = await run_in_threadpool(authorize)
+
         raw = bytearray()
         async for chunk in request.stream():
             raw.extend(chunk)
             if len(raw) > limit:
                 fail(413, "Video exceeds 100 MiB" if is_video else "Image exceeds 15 MiB")
+
         try:
             if is_video:
                 data, media_hash, perceptual, duration_ms = await run_in_threadpool(
@@ -773,55 +901,69 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
                 )
                 if len(data) > limit:
                     fail(413, "Canonical video exceeds 100 MiB")
-                with database.transaction() as db:
-                    s, _ = own_media(db, sid, actor)
-                    if s.media_hash:
-                        if s.media_hash != media_hash:
-                            fail(409, "Approved media cannot be replaced")
-                        return {"media_hash": s.media_hash}
-                verdict = await moderator.scan_video(data)
             else:
                 data, media_hash, perceptual = await run_in_threadpool(
                     canonicalize, bytes(raw)
                 )
+                duration_ms = None
                 if len(data) > settings.max_upload_bytes:
                     fail(413, "Canonical image exceeds 15 MiB")
+
+            def recheck_idempotent():
                 with database.transaction() as db:
                     s, _ = own_media(db, sid, actor)
                     if s.media_hash:
                         if s.media_hash != media_hash:
                             fail(409, "Approved media cannot be replaced")
-                        return {"media_hash": s.media_hash}
-                verdict = await moderator.scan(data)
+                        return s.media_hash
+                    return None
+
+            existing = await run_in_threadpool(recheck_idempotent)
+            if existing:
+                return {"media_hash": existing}
+
+            # Moderation is network I/O: no DB transaction is held across it.
+            verdict = (
+                await moderator.scan_video(data)
+                if is_video
+                else await moderator.scan(data)
+            )
         except MediaRejected as exc:
             fail(422, str(exc))
-        with database.transaction() as db:
-            s, is_video = own_media(db, sid, actor)
-            if s.status != "claimed" or (s.media_hash and s.media_hash != media_hash):
-                fail(409, "Submission changed during scan")
-            dup = select(Submission).where(
-                Submission.id != s.id,
-                Submission.media_hash.is_not(None),
-            )
-            # Bounty submissions gate duplicates within the bounty; open
-            # uploads gate duplicates across the worker's own submissions.
-            dup = dup.where(
-                Submission.bounty_id == s.bounty_id
-                if s.bounty_id is not None
-                else Submission.worker == actor.wallet
-            )
-            others = db.scalars(dup).all()
-            # Exact and conservative near-duplicate gate; no SKR penalty.
-            if any(
-                o.media_hash == media_hash
-                or (int(o.perceptual, 16) ^ int(perceptual, 16)).bit_count() <= 3
-                for o in others
-            ):
-                fail(409, "Duplicate or near-duplicate media")
-            s.media_hash, s.perceptual = media_hash, perceptual
-            if is_video:
-                s.duration_ms = duration_ms
-            s.encrypted_media, s.moderation = cipher.encrypt(data, media_hash), verdict
+
+        def finalize():
+            with database.transaction() as db:
+                s, is_video = own_media(db, sid, actor)
+                if s.status != "claimed" or (s.media_hash and s.media_hash != media_hash):
+                    fail(409, "Submission changed during scan")
+                # Duplicate gate projects only the hash columns (the encrypted
+                # media blob is also deferred at the model level).
+                dup = select(Submission.media_hash, Submission.perceptual).where(
+                    Submission.id != s.id,
+                    Submission.media_hash.is_not(None),
+                    Submission.perceptual.is_not(None),
+                )
+                # Bounty submissions gate duplicates within the bounty; open
+                # uploads gate duplicates across ALL open uploads, so a worker
+                # cannot dodge dedupe by switching wallets.
+                dup = dup.where(
+                    Submission.bounty_id == s.bounty_id
+                    if s.bounty_id is not None
+                    else Submission.bounty_id.is_(None)
+                )
+                others = db.execute(dup).all()
+                if any(
+                    o_media == media_hash
+                    or (int(o_perc, 16) ^ int(perceptual, 16)).bit_count() <= 3
+                    for o_media, o_perc in others
+                ):
+                    fail(409, "Duplicate or near-duplicate media")
+                s.media_hash, s.perceptual = media_hash, perceptual
+                if is_video:
+                    s.duration_ms = duration_ms
+                s.encrypted_media, s.moderation = cipher.encrypt(data, media_hash), verdict
+
+        await run_in_threadpool(finalize)
         return {"media_hash": media_hash}
 
     @app.get("/submissions/{sid}/media")
@@ -1013,6 +1155,9 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             return [tx_view(p) for p in rows]
 
     def record_confirmation(pid, actor, signature=None):
+        # Phase 1: read + authorize under a short transaction, capture the
+        # inputs the RPC calls need, then release every row lock. Network work
+        # (signature walk + verification) must never hold a DB lock.
         with database.transaction() as db:
             lock(db, Actor, actor.wallet)
             p = db.get(Prepared, pid)
@@ -1028,19 +1173,35 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
                 if signature and signature != p.signature:
                     fail(409, "Already confirmed with another signature")
                 return tx_view(p)
-            signature = signature or chain.find_signature(p, b, s)
-            chain.confirm(p, signature)
-            p.signature, p.confirmed = signature, True
+            prepared, bounty, submission = p, b, s
+
+        # Phase 2: network I/O with no DB locks held.
+        resolved = signature or chain.find_signature(prepared, bounty, submission)
+        chain.confirm(prepared, resolved)
+
+        # Phase 3: re-acquire the lock and write atomically, tolerating a
+        # concurrent confirmation that landed between phases.
+        with database.transaction() as db:
+            p = lock(db, Prepared, pid)
+            if p.confirmed:
+                if signature and signature != p.signature:
+                    fail(409, "Already confirmed with another signature")
+                return tx_view(p)
+            p.signature, p.confirmed = resolved, True
             if p.action == "fund":
+                b = lock(db, Bounty, p.target)
                 if b.status == "draft":
                     b.status = "open"
             elif p.action == "refund":
+                b = lock(db, Bounty, p.target)
                 b.status = "refunded"
             elif p.action == "fulfill":
+                s, _ = authorized_submission(db, p.target, actor)
                 # Late callback must never regress a settled submission.
                 if s.status == "eligible":
                     s.status = "registered"
             elif p.action in {"accept", "reject", "expire"}:
+                s, _ = authorized_submission(db, p.target, actor)
                 s.status = {
                     "accept": "paid",
                     "reject": "rejected",

@@ -536,11 +536,11 @@ CAMPAIGNS = [
     ),
     CampaignOut(
         id="robotics-bbox-v1",
-        title="Robotics grasp annotation",
+        title="Object bounding-box annotation",
         task_type="bounding_box",
         reward_per_task=4000,
         status="queued",
-        description="Draw boxes around graspable objects in bin-picking frames.",
+        description="Draw boxes around objects in ground-level egocentric frames.",
     ),
 ]
 

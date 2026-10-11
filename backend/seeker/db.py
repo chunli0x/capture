@@ -16,7 +16,12 @@ from sqlalchemy import (
     create_engine,
     event,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    mapped_column,
+    sessionmaker,
+)
 
 
 def uid():
@@ -43,6 +48,11 @@ class Actor(Base):
     # Capture v2: cumulative accepted open-uploads, denormalized for fast /me.
     # The rolling acceptance rate is computed from Submission rows (see api.py).
     accepted_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Capture v2: server-side liveness gate. Set once a wallet completes a
+    # server-issued liveness session (see /liveness/complete). Open uploads are
+    # refused until this is true, so liveness is enforced server-side rather
+    # than being a client-only claim.
+    liveness_completed: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class Challenge(Base):
@@ -102,7 +112,11 @@ class Submission(Base):
     media_hash: Mapped[str | None] = mapped_column(String(64))
     perceptual: Mapped[str | None] = mapped_column(String(16))
     duration_ms: Mapped[int | None] = mapped_column(BigInteger)
-    encrypted_media: Mapped[bytes | None] = mapped_column(LargeBinary)
+    # Deferred: the encrypted blob is the largest column on the table and is
+    # only needed by the media GET endpoint and the offline keypoint job.
+    # Duplicate checks, rolling-acceptance and history queries therefore never
+    # pull megabytes of ciphertext they do not read.
+    encrypted_media: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
     moderation: Mapped[dict | None] = mapped_column(JSON)
     labels: Mapped[list | None] = mapped_column(JSON)
     # Optional secondary labels (expressions / postures / environment) resolved
