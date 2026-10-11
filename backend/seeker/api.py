@@ -174,6 +174,15 @@ def submission_view(s, b, actor):
 def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
     app = FastAPI(title="Seeker object pilot", version="0.1.0")
     database = Database(settings.database_url)
+    # Apply schema on boot so a restart against a pre-v2 DB can never serve a
+    # stale schema (the 500 we hit when a restart loaded new code over an old
+    # database). Idempotent: create_all + numbered ALTER TABLEs are no-ops on a
+    # current DB.
+    from .db import Base
+    from .migrate import apply_migrations
+
+    Base.metadata.create_all(database.engine)
+    apply_migrations(database.engine)
     chain = chain or Chain(settings)
     moderator = moderator or Moderation(settings)
     judge = judge or build_judge(settings)
