@@ -23,7 +23,9 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import ai.loosh.union.AccentMagenta
+import ai.loosh.union.CaptureAccent
+import ai.loosh.union.CaptureAccentBright
+import ai.loosh.union.CaptureRadii
 import ai.loosh.union.ErrorRed
 import ai.loosh.union.MutedGray
 
@@ -31,12 +33,11 @@ import ai.loosh.union.MutedGray
  * Shared chip primitives for every picker in the label editor. All three
  * primary pickers (object/place/action) render the *same* component so the
  * empty / selected / error vocabulary is identical across the app; secondary
- * pickers reuse it with the magenta accent and a dismiss glyph.
+ * pickers reuse the same blue accent and a dismiss glyph.
  *
  * States:
  *  - Empty      : muted outline, gray label (chip not in the selection set)
- *  - Selected   : filled with [accent] (violet = primary label, magenta =
- *                 secondary/context), white label, trailing glyph
+ *  - Selected   : filled with [accent], white label, trailing glyph
  *  - Error      : red outline + a short inline message rendered by the caller
  *                 next to the field
  */
@@ -54,7 +55,7 @@ fun LabelChip(
     isError: Boolean = false,
     onClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(8.dp)
+    val shape = CaptureRadii.pill
     val fill by animateColorAsState(
         targetValue = if (selected) accent else Color.Transparent,
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
@@ -139,13 +140,13 @@ fun PickerHelper(text: String, required: Boolean = false) {
 @Composable
 fun CountBadge(text: String) {
     Surface(
-        shape = RoundedCornerShape(6.dp),
-        color = AccentMagenta.copy(alpha = 0.18f),
+        shape = CaptureRadii.pill,
+        color = CaptureAccent.copy(alpha = 0.18f),
     ) {
         Text(
             text,
             style = MaterialTheme.typography.labelSmall,
-            color = AccentMagenta,
+            color = CaptureAccentBright,
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
         )
     }

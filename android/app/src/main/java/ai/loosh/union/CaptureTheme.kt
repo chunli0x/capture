@@ -1,117 +1,108 @@
 package ai.loosh.union
 
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Typography
-import androidx.compose.material3.darkColorScheme
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.TextUnit
-import androidx.compose.ui.unit.TextUnitType
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 
-/**
- * Capture brand palette (BRAND-v1.md, exact hex) and typography (Sora + Archivo
- * Black). Replaces the old green `UnionColors` scheme; the four vivid hues map
- * to the 2x2 grid — orange / cyan / violet / magenta — and are applied either
- * through this scheme (primary/secondary/tertiary) or explicitly in the
- * composables where a specific accent has a specific meaning (cyan = bounding
- * boxes, violet = primary label chips, magenta = secondary chips / selection).
- */
+val CaptureBaseDeep = Color(0xFF0A0B10)
+val CaptureBase = Color(0xFF0F1219)
+val CaptureSurface = Color(0xFF141824)
+val CaptureSurface2 = Color(0xFF1B2030)
+val CaptureSurface3 = Color(0xFF232A3D)
+val CaptureOutline = Color(0xFF262C3D)
+val CaptureOutlineVariant = CaptureSurface2
+val CaptureInk = Color(0xFFFFFFFF)
+val CaptureOnBase = CaptureInk
+val MutedGray = Color(0xFF9CA3AF)
+val CaptureInkFaint = Color(0xFF6B7280)
+val CaptureAccent = Color(0xFF3B82F6)
+val CaptureAccentBright = Color(0xFF60A5FA)
+val CaptureAccentDeep = Color(0xFF2563EB)
+val CaptureAccentTint = CaptureAccent.copy(alpha = .12f)
+val CaptureAccentBorder = CaptureAccent.copy(alpha = .35f)
+val SuccessGreen = Color(0xFF34D399)
+val ErrorRed = Color(0xFFF87171)
+val WarnAmber = Color(0xFFF59E0B)
 
-val CaptureBase = Color(0xFF0A0A10)
-val CaptureOnBase = Color(0xFFFFFFFF)
-val AccentOrange = Color(0xFFFF6A00)
-val AccentCyan = Color(0xFF00D9FF)
-val AccentViolet = Color(0xFF6C2BD9)
-val AccentMagenta = Color(0xFFFF2D95)
-val MutedGray = Color(0xFF9A9AA6)
-val ErrorRed = Color(0xFFFF6B6B)
-val WarnAmber = Color(0xFFFBBF24)
-
+object CaptureGradients {
+    val navy = Brush.verticalGradient(listOf(CaptureBaseDeep, CaptureBase))
+    val action = Brush.verticalGradient(listOf(CaptureAccent, CaptureAccentDeep))
+    val actionGlow = Brush.radialGradient(listOf(CaptureAccentBright.copy(alpha = .22f), CaptureAccent.copy(alpha = .02f)))
+    val ring = Brush.sweepGradient(listOf(CaptureAccentBright, CaptureAccent, CaptureAccentDeep, CaptureAccentBright))
+    val glass = Brush.verticalGradient(listOf(CaptureInk.copy(alpha = .10f), CaptureInk.copy(alpha = .04f)))
+}
+object CaptureMotion {
+    const val fast = 120
+    const val base = 220
+    const val slow = 360
+    const val celebrate = 700
+    val easing = FastOutSlowInEasing
+    val progressEasing = CubicBezierEasing(0.2f, 0f, 1f, 1f)
+}
+object CaptureRadii {
+    val sm = RoundedCornerShape(12.dp)
+    val md = RoundedCornerShape(16.dp)
+    val lg = RoundedCornerShape(20.dp)
+    val xl = RoundedCornerShape(24.dp)
+    val pill = RoundedCornerShape(50)
+}
 val CaptureColors = darkColorScheme(
-    primary = AccentOrange,
-    onPrimary = Color(0xFF2A0E00),
-    primaryContainer = AccentOrange,
-    onPrimaryContainer = Color(0xFF2A0E00),
-    secondary = AccentViolet,
-    onSecondary = Color(0xFFFFFFFF),
-    secondaryContainer = AccentViolet,
-    onSecondaryContainer = Color(0xFFFFFFFF),
-    tertiary = AccentMagenta,
-    onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = AccentMagenta,
-    onTertiaryContainer = Color(0xFFFFFFFF),
-    background = CaptureBase,
-    onBackground = Color(0xFFF2F2F7),
-    surface = Color(0xFF14121E),
-    onSurface = Color(0xFFF2F2F7),
-    surfaceVariant = Color(0xFF1E1B2C),
-    onSurfaceVariant = MutedGray,
-    outline = Color(0xFF2A2736),
-    outlineVariant = Color(0xFF1E1B2C),
-    error = ErrorRed,
-    onError = Color(0xFF2A0505),
+    primary = CaptureAccent, onPrimary = CaptureInk,
+    primaryContainer = CaptureAccentTint, onPrimaryContainer = CaptureInk,
+    secondary = CaptureAccentBright, onSecondary = CaptureBase,
+    secondaryContainer = CaptureSurface2, onSecondaryContainer = CaptureInk,
+    tertiary = CaptureAccent, onTertiary = CaptureInk,
+    tertiaryContainer = CaptureSurface3, onTertiaryContainer = CaptureInk,
+    background = CaptureBase, onBackground = CaptureInk,
+    surface = CaptureSurface, onSurface = CaptureInk,
+    surfaceVariant = CaptureSurface2, onSurfaceVariant = MutedGray,
+    surfaceDim = CaptureBaseDeep, surfaceBright = CaptureSurface3,
+    surfaceContainerLowest = CaptureBaseDeep, surfaceContainerLow = CaptureSurface,
+    surfaceContainer = CaptureSurface, surfaceContainerHigh = CaptureSurface2,
+    surfaceContainerHighest = CaptureSurface3,
+    outline = CaptureOutline, outlineVariant = CaptureOutlineVariant,
+    error = ErrorRed, onError = CaptureBase,
 )
-
-private val Sora = FontFamily(
-    Font(
-        resId = R.font.sora,
-        weight = FontWeight.W400,
-        variationSettings = FontVariation.Settings(FontVariation.weight(400)),
-    ),
-    Font(
-        resId = R.font.sora,
-        weight = FontWeight.W500,
-        variationSettings = FontVariation.Settings(FontVariation.weight(500)),
-    ),
-    Font(
-        resId = R.font.sora,
-        weight = FontWeight.W600,
-        variationSettings = FontVariation.Settings(FontVariation.weight(600)),
-    ),
+val Inter = FontFamily(
+    Font(R.font.inter_400, FontWeight.Normal),
+    Font(R.font.inter_500, FontWeight.Medium),
+    Font(R.font.inter_600, FontWeight.SemiBold),
+    Font(R.font.inter_700, FontWeight.Bold),
+    Font(R.font.inter_800, FontWeight.ExtraBold),
 )
-
-private val ArchivoBlack = FontFamily(
-    Font(resId = R.font.archivo_black, weight = FontWeight.W900)
+private fun inter(size: Int, line: Float, weight: FontWeight = FontWeight.Normal, tracking: Float = 0f) = TextStyle(
+    fontFamily = Inter, fontWeight = weight, fontSize = size.sp,
+    lineHeight = (size * line).sp, letterSpacing = tracking.em,
 )
-
-/** All-caps display face with the brand's +8% letter-spacing. */
-private fun display(size: Int) =
-    TextStyle(
-        fontFamily = ArchivoBlack,
-        fontWeight = FontWeight.Black,
-        fontSize = size.sp,
-        letterSpacing = TextUnit(0.08f, TextUnitType.Em),
-    )
-
+val CaptureNumeric = inter(28, 1f, FontWeight.Bold).copy(fontFeatureSettings = "tnum")
 val CaptureTypography = Typography(
-    displayLarge = display(57),
-    displayMedium = display(45),
-    displaySmall = display(36),
-    headlineLarge = display(32),
-    headlineMedium = display(28),
-    headlineSmall = display(24),
-    titleLarge = display(22),
-    titleMedium = TextStyle(fontFamily = Sora, fontWeight = FontWeight.SemiBold, fontSize = 16.sp),
-    titleSmall = TextStyle(fontFamily = Sora, fontWeight = FontWeight.Medium, fontSize = 14.sp),
-    bodyLarge = TextStyle(fontFamily = Sora, fontWeight = FontWeight.Normal, fontSize = 16.sp),
-    bodyMedium = TextStyle(fontFamily = Sora, fontWeight = FontWeight.Normal, fontSize = 14.sp),
-    bodySmall = TextStyle(fontFamily = Sora, fontWeight = FontWeight.Normal, fontSize = 12.sp),
-    labelLarge = TextStyle(fontFamily = Sora, fontWeight = FontWeight.Medium, fontSize = 14.sp),
-    labelMedium = TextStyle(fontFamily = Sora, fontWeight = FontWeight.Medium, fontSize = 12.sp),
-    labelSmall = TextStyle(fontFamily = Sora, fontWeight = FontWeight.Medium, fontSize = 11.sp),
+    displayLarge = inter(40, 1f, FontWeight.ExtraBold, -.01f),
+    displayMedium = inter(34, 1.05f, FontWeight.ExtraBold, -.01f),
+    displaySmall = inter(28, 1.1f, FontWeight.ExtraBold, -.005f),
+    headlineLarge = inter(28, 1.1f, FontWeight.ExtraBold, -.005f),
+    headlineMedium = inter(22, 1.15f, FontWeight.Bold),
+    headlineSmall = inter(17, 1.25f, FontWeight.Bold),
+    titleLarge = inter(16, 1.3f, FontWeight.SemiBold),
+    titleMedium = inter(15, 1.35f, FontWeight.SemiBold),
+    titleSmall = inter(15, 1.35f, FontWeight.SemiBold),
+    bodyLarge = inter(15, 1.5f), bodyMedium = inter(13, 1.5f), bodySmall = inter(13, 1.5f),
+    labelLarge = inter(11, 1.2f, FontWeight.SemiBold, .08f),
+    labelMedium = inter(11, 1.2f, FontWeight.SemiBold, .08f),
+    labelSmall = inter(11, 1.3f, FontWeight.Medium, .02f),
 )
-
 @Composable
 fun CaptureTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = CaptureColors,
-        typography = CaptureTypography,
-        content = content,
-    )
+    MaterialTheme(colorScheme = CaptureColors, typography = CaptureTypography,
+        shapes = Shapes(CaptureRadii.sm, CaptureRadii.md, CaptureRadii.lg, CaptureRadii.xl, CaptureRadii.xl), content = content)
 }

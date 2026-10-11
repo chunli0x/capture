@@ -49,7 +49,7 @@ const val SPRITE_CANVAS_RATIO = 1.8f
 /** Glow ring radius as a fraction of the sprite canvas: hugs the object. */
 const val GLOW_RADIUS_FACTOR = 0.55f / SPRITE_CANVAS_RATIO
 
-private val GhostGreen = Color(0xFF4ADE80)
+private val GhostGreen = SuccessGreen
 
 /**
  * Smallest angular difference between two rolls, in [0, 180].
@@ -131,7 +131,7 @@ fun GhostOverlay(
             .fillMaxWidth()
             .aspectRatio(1f)
             .clip(RoundedCornerShape(14.dp))
-            .background(Color(0xFF141A21))
+            .background(CaptureSurface)
             .onSizeChanged { boxSize = Size(it.width.toFloat(), it.height.toFloat()) }
             .pointerInput(enabled, canvasPx, boxSize) {
                 if (!enabled || boxSize.width <= 0f) return@pointerInput

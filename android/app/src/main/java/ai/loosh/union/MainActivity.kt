@@ -2,6 +2,9 @@ package ai.loosh.union
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.ui.graphics.toArgb
 import androidx.activity.compose.setContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
@@ -61,6 +64,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(CaptureBaseDeep.toArgb()),
+            navigationBarStyle = SystemBarStyle.dark(CaptureBase.toArgb()),
+        )
         sender = ActivityResultSender(this)
 
         setContent {
@@ -78,8 +85,8 @@ class MainActivity : ComponentActivity() {
 
 // Legacy accent references retained for the dormant Union flow; repointed at
 // the Capture palette so nothing renders green.
-private val Accent = AccentOrange
-private val Warn = Color(0xFFFBBF24)
+private val Accent = CaptureAccent
+private val Warn = WarnAmber
 
 @Composable
 fun UnionApp(sender: ActivityResultSender, vm: UnionViewModel = viewModel()) {

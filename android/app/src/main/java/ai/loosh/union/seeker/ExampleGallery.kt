@@ -1,167 +1,102 @@
 package ai.loosh.union.seeker
 
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Card
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
+import ai.loosh.union.*
+import ai.loosh.union.R
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
-import ai.loosh.union.AccentCyan
-import ai.loosh.union.ErrorRed
-import ai.loosh.union.MutedGray
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 
-/**
- * Good-vs-bad capture examples, shown as a gallery. Illustrates the ground-level
- * rule (camera angle) and the quality bar (light, focus) with simple side-view
- * diagrams and short explanations — no animal, pet, or robot imagery or copy.
- */
+private data class CaptureExample(val image: Int, val good: Boolean, val title: String, val reason: String)
+private val examples = listOf(
+    CaptureExample(R.drawable.gallery_good_01_doorway, true, "Doorway", "Floor visible · horizon upper third."),
+    CaptureExample(R.drawable.gallery_good_02_stairs, true, "Stairs", "Safety-critical · continuous motion."),
+    CaptureExample(R.drawable.gallery_good_03_livingroom, true, "Living room", "Legs-only is the normal view."),
+    CaptureExample(R.drawable.gallery_bad_01_eyelevel, false, "Eye-level", "Eye-level → get lower."),
+    CaptureExample(R.drawable.gallery_bad_02_topdown, false, "Top-down", "Top-down → aim 0–45° up."),
+    CaptureExample(R.drawable.gallery_bad_03_dark, false, "Dark / blurry", "Too dark / blurry."),
+)
+
 @Composable
-fun ExampleGalleryScreen(onBack: () -> Unit) {
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) { Text("← Back") }
-            Text(
-                "Capture examples",
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
+fun ExampleGalleryScreen(onBack: () -> Unit, reason: String? = null) {
+    var selected by rememberSaveable { mutableStateOf<Int?>(null) }
+    BackHandler(onBack = onBack)
+    val grid = rememberLazyGridState()
+    LaunchedEffect(reason) {
+        val index = when {
+            reason?.contains("eye", ignoreCase = true) == true -> 3
+            reason?.contains("top", ignoreCase = true) == true || reason?.contains("pitch", ignoreCase = true) == true -> 4
+            reason?.contains("dark", ignoreCase = true) == true || reason?.contains("blur", ignoreCase = true) == true || reason?.contains("exposure", ignoreCase = true) == true -> 5
+            else -> null
         }
-
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            ExampleCard(
-                good = true,
-                title = "Low camera, floor in the bottom",
-                body = "Hold the lens 6–12 in off the ground and tilt it slightly up. The horizon rides high in the frame.",
-                mode = AngleMode.LOW,
-            )
-            ExampleCard(
-                good = true,
-                title = "Even lighting, sharp subject",
-                body = "Natural or indoor light, subject in focus, no motion blur, natural color.",
-                mode = null,
-            )
-            ExampleCard(
-                good = false,
-                title = "Eye-level shot",
-                body = "Camera at chest height, with the horizon at mid-frame. Rejected — this is not the ground-level view.",
-                mode = AngleMode.EYE,
-            )
-            ExampleCard(
-                good = false,
-                title = "Pointed straight down",
-                body = "Looking straight at the floor. Rejected — Capture needs the forward, low view, not a top-down one.",
-                mode = AngleMode.DOWN,
-            )
-            ExampleCard(
-                good = false,
-                title = "Dark or blown out",
-                body = "Underexposed or clipped highlights erase the detail the model learns from.",
-                mode = null,
-            )
-            ExampleCard(
-                good = false,
-                title = "Blurry",
-                body = "Motion blur or soft focus across the whole frame. Keep the subject sharp.",
-                mode = null,
-            )
-            Spacer(Modifier.height(12.dp))
+        index?.let { grid.animateScrollToItem(it + 1); selected = it }
+    }
+    NavyBackground(Modifier.fillMaxSize().captureScreenMotion()) {
+        Column(Modifier.fillMaxSize().safeDrawingPadding()) {
+            Row(Modifier.fillMaxWidth().captureGlass().padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(onClick = onBack) { Text("← Back") }
+                CaptureMark(Modifier.size(28.dp))
+            }
+            LazyVerticalGrid(columns = GridCells.Fixed(2), state = grid, contentPadding = PaddingValues(20.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Find your frame", style = MaterialTheme.typography.displaySmall)
+                        Text("Ground-level egocentric capture", style = MaterialTheme.typography.labelSmall, color = MutedGray)
+                    }
+                }
+                itemsIndexed(examples, key = { _, example -> example.image }) { index, example ->
+                    GalleryCard(example, Modifier.clickable { selected = index })
+                }
+            }
+        }
+    }
+    selected?.let { index ->
+        val example = examples[index]
+        Dialog(onDismissRequest = { selected = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            NavyBackground(Modifier.fillMaxSize()) {
+                // Fit preserves the horizon and low-angle framing of the teaching image.
+                Image(painterResource(example.image), example.title, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, CaptureBase)))
+                    .safeDrawingPadding().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    VerdictBadge(example.good)
+                    Text(example.reason, style = MaterialTheme.typography.bodySmall, color = MutedGray)
+                }
+                TextButton(onClick = { selected = null }, modifier = Modifier.align(Alignment.TopStart).safeDrawingPadding().padding(12.dp)
+                    .background(CaptureBase.copy(alpha = .8f), CaptureRadii.pill)) { Text("← Gallery", color = CaptureInk) }
+            }
         }
     }
 }
 
-private enum class AngleMode(val good: Boolean) {
-    LOW(true),
-    EYE(false),
-    DOWN(false),
-}
-
 @Composable
-private fun ExampleCard(good: Boolean, title: String, body: String, mode: AngleMode?) {
-    val tint = if (good) AccentCyan else ErrorRed
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-                Text(
-                    if (good) "GOOD" else "BAD",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = tint,
-                )
-            }
-            if (mode != null) {
-                AngleDiagram(mode, Modifier.fillMaxWidth().height(90.dp))
-            }
-            Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f))
-        }
-    }
-}
-
-/**
- * Side-view diagram: a ground line, a camera box at the appropriate height, and
- * a view-direction arrow. LOW shows the camera near the ground pitched slightly
- * up; EYE shows it at mid-height level; DOWN shows a steep downward pitch.
- */
-@Composable
-private fun AngleDiagram(mode: AngleMode, modifier: Modifier = Modifier) {
-    val color = if (mode.good) AccentCyan else ErrorRed
-    Canvas(modifier) {
-        val w = size.width
-        val h = size.height
-        val groundY = h * 0.85f
-        drawLine(
-            MutedGray.copy(alpha = 0.5f),
-            Offset(0f, groundY),
-            Offset(w, groundY),
-            2.dp.toPx(),
-        )
-        val camY =
-            when (mode) {
-                AngleMode.LOW -> groundY - h * 0.20f
-                AngleMode.EYE -> groundY - h * 0.45f
-                AngleMode.DOWN -> groundY - h * 0.45f
-            }
-        val camX = w * 0.15f
-        drawRoundRect(
-            color = color,
-            topLeft = Offset(camX, camY - h * 0.07f),
-            size = Size(w * 0.16f, h * 0.14f),
-            cornerRadius = CornerRadius(6f, 6f),
-        )
-        val pitch =
-            when (mode) {
-                AngleMode.LOW -> -0.45f
-                AngleMode.EYE -> 0f
-                AngleMode.DOWN -> 0.95f
-            }
-        val start = Offset(camX + w * 0.16f, camY)
-        val end = Offset(camX + w * 0.62f, camY + pitch * h * 0.45f)
-        drawLine(color.copy(alpha = 0.75f), start, end, 3.dp.toPx(), StrokeCap.Round)
-        drawCircle(color.copy(alpha = 0.75f), radius = 3.dp.toPx(), center = end, style = Stroke(1.5.dp.toPx()))
+private fun GalleryCard(example: CaptureExample, modifier: Modifier = Modifier) {
+    val tint = if (example.good) SuccessGreen else ErrorRed
+    Box(modifier.fillMaxWidth().aspectRatio(9f / 16f).clip(CaptureRadii.lg)
+        .border(1.dp, tint.copy(alpha = .6f), CaptureRadii.lg)) {
+        Image(painterResource(example.image), example.title, Modifier.matchParentSize(), contentScale = ContentScale.Crop)
+        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().fillMaxHeight(.4f)
+            .background(Brush.verticalGradient(listOf(Color.Transparent, CaptureBase.copy(alpha = .95f)))))
+        Box(Modifier.align(Alignment.TopStart).padding(8.dp)) { VerdictBadge(example.good) }
+        Text(example.reason, modifier = Modifier.align(Alignment.BottomStart).padding(12.dp),
+            style = MaterialTheme.typography.labelSmall, color = MutedGray)
     }
 }

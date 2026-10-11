@@ -1,124 +1,190 @@
 package ai.loosh.union.seeker
 
+import ai.loosh.union.*
+import ai.loosh.union.R
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import ai.loosh.union.AccentCyan
-import ai.loosh.union.AccentMagenta
-import ai.loosh.union.AccentOrange
-import ai.loosh.union.MutedGray
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 
-/**
- * First-run ground-level capture tutorial, shown once after onboarding and
- * before the main UI (persisted via `tutorial_done`). It teaches the two skills
- * the judge grades on — *how* to hold the camera and *how* to label — without
- * any animal, pet, or robot imagery or copy.
- */
+@Composable
+fun IntroConstellationScreen(onDone: () -> Unit) {
+    NavyBackground(Modifier.fillMaxSize().captureScreenMotion()) {
+        ConstellationBackground(Modifier.matchParentSize())
+        Column(Modifier.fillMaxSize().safeDrawingPadding().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            TextButton(onClick = onDone, modifier = Modifier.align(Alignment.End)) { Text("Skip", color = MutedGray) }
+            Column(Modifier.weight(1f).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                CaptureMark(Modifier.size(88.dp))
+                Spacer(Modifier.height(24.dp))
+                Text("Capture", style = MaterialTheme.typography.displayMedium)
+                Spacer(Modifier.height(12.dp))
+                Text("Ground truth, from the ground up.", style = MaterialTheme.typography.bodySmall, color = MutedGray, textAlign = TextAlign.Center)
+            }
+            ActionButton("Start capturing", onDone)
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
 @Composable
 fun CaptureTutorialScreen(onDone: () -> Unit) {
-    val pages =
-        listOf(
-            Triple("CAPTURE", "Ground truth, from the ground up.", "Hold your phone 6–12 inches off the ground, angled slightly forward and up. That low, forward view is the whole point."),
-            Triple("THE RIGHT HEIGHT", "Lens low, floor in the bottom.", "The floor should fill the bottom of the frame and the horizon sit high. If you can read the walls at eye level, you are too high."),
-            Triple("THE WRONG ANGLES", "No eye-level, no straight-down.", "An eye-level shot or one pointed straight at the floor is rejected. Neither is the ground-level view Capture pays for."),
-            Triple("LIGHT AND FOCUS", "Sharp subject, even light.", "Keep the subject in focus, avoid motion blur, and avoid near-black or blown-out frames. Natural or indoor light both work."),
-            Triple("LABELING", "Object, place, or action — plus posture.", "Pick one primary label, add a posture (required), then optional expression, surface, lighting, weather, and motion."),
-            Triple("READY", "You're all set.", "Capture now to take a ground-level photo or short clip, label it, and submit."),
-        )
-
-    val pagerState = rememberPagerState(pageCount = { pages.size })
+    val pager = rememberPagerState(pageCount = { 4 })
     val scope = rememberCoroutineScope()
-    val lastPage = pagerState.currentPage == pages.size - 1
-
-    Column(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Spacer(Modifier.weight(1f))
-
-        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxWidth().weight(6f)) { page ->
-            val (title, headline, body) = pages[page]
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                if (page == 0) {
-                    BrandLogo(Modifier.size(96.dp))
-                    Spacer(Modifier.height(20.dp))
+    NavyBackground(Modifier.fillMaxSize().captureScreenMotion()) {
+        Column(Modifier.fillMaxSize().safeDrawingPadding().padding(vertical = 16.dp)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                CaptureMark(Modifier.size(28.dp))
+                TextButton(onClick = onDone) { Text("Skip", color = MutedGray) }
+            }
+            HorizontalPager(state = pager, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                    when (page) {
+                        0 -> TutorialGroundLevelScreen()
+                        1 -> TutorialWhatToCaptureScreen()
+                        2 -> TutorialLabelingScreen()
+                        else -> TutorialEarnLevelScreen()
+                    }
                 }
-                Text(
-                    title,
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = if (page == 0) AccentOrange else MaterialTheme.colorScheme.onBackground,
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    headline,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    body,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
-                    textAlign = TextAlign.Center,
-                )
+            }
+            Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    repeat(4) { i ->
+                        Box(Modifier.size(if (i == pager.currentPage) 24.dp else 8.dp, 8.dp)
+                            .background(if (i == pager.currentPage) CaptureAccent else CaptureOutline, CaptureRadii.pill))
+                    }
+                }
+                ActionButton(if (pager.currentPage == 3) "Start capturing" else "Continue", {
+                    if (pager.currentPage == 3) onDone() else scope.launch { pager.animateScrollToPage(pager.currentPage + 1) }
+                })
             }
         }
+    }
+}
 
-        Spacer(Modifier.height(24.dp))
-
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            repeat(pages.size) { index ->
-                val active = pagerState.currentPage == index
-                Box(
-                    Modifier
-                        .size(if (active) 22.dp else 8.dp, 8.dp)
-                        .background(
-                            color = if (active) AccentMagenta else MutedGray.copy(alpha = 0.4f),
-                            shape = CircleShape,
-                        ),
-                )
+@Composable
+private fun TutorialGroundLevelScreen() {
+    Text("Get low", style = MaterialTheme.typography.displaySmall)
+    CapturePanel(Modifier.fillMaxWidth()) {
+        GroundLevelDiagram(Modifier.fillMaxWidth().height(220.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("6–12 in", style = CaptureNumeric, color = CaptureInk)
+            Text("0–45° ↗", style = CaptureNumeric, color = CaptureAccentBright)
+        }
+    }
+    Text("Hold your phone low, tilt it up.", style = MaterialTheme.typography.bodySmall, color = MutedGray)
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        listOf(R.drawable.gallery_bad_01_eyelevel, R.drawable.gallery_bad_02_topdown).forEach { image ->
+            Box(Modifier.weight(1f).aspectRatio(1.3f).clip(CaptureRadii.lg)) {
+                Image(painterResource(image), if (image == R.drawable.gallery_bad_01_eyelevel) "Incorrect eye-level view" else "Incorrect top-down view", Modifier.matchParentSize(), contentScale = ContentScale.Crop)
+                Text("×", color = ErrorRed, style = CaptureNumeric,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).background(CaptureBase.copy(alpha = .8f), CaptureRadii.pill).padding(horizontal = 8.dp))
             }
         }
+    }
+}
 
-        Spacer(Modifier.height(24.dp))
+@Composable
+private fun GroundLevelDiagram(modifier: Modifier) {
+    Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        drawRect(CaptureSurface2, Offset(0f, h / 3), Size(w, h * 2 / 3))
+        drawLine(MutedGray.copy(alpha = .5f), Offset(0f, h / 3), Offset(w, h / 3), 1.dp.toPx())
+        val vanish = Offset(w * .7f, h / 3)
+        repeat(5) { drawLine(CaptureAccent.copy(alpha = .12f), vanish, Offset(w * it / 4, h), 1.dp.toPx()) }
+        val phone = Offset(w * .3f, h * .58f)
+        drawRoundRect(CaptureBase, phone, Size(w * .13f, h * .3f), CornerRadius(8.dp.toPx()))
+        drawRoundRect(CaptureAccent, phone, Size(w * .13f, h * .3f), CornerRadius(8.dp.toPx()), style = Stroke(2.dp.toPx()))
+        val lens = Offset(w * .365f, h * .62f)
+        drawCircle(CaptureAccent, 3.dp.toPx(), lens)
+        val end = Offset(w * .8f, h * .16f)
+        val cone = Path().apply { moveTo(lens.x, lens.y); lineTo(w * .88f, h * .1f); lineTo(w * .88f, h * .6f); close() }
+        drawPath(cone, CaptureAccent.copy(alpha = .08f))
+        drawLine(CaptureAccent, lens, end, 2.dp.toPx(), StrokeCap.Round)
+        val x = w * .18f
+        drawLine(CaptureAccent, Offset(x, lens.y), Offset(x, h), 2.dp.toPx())
+        listOf(lens.y, h - 2.dp.toPx()).forEach { y -> drawLine(CaptureAccent, Offset(x - 8.dp.toPx(), y), Offset(x + 8.dp.toPx(), y), 2.dp.toPx()) }
+    }
+}
 
-        Button(
-            onClick = {
-                if (lastPage) onDone()
-                else scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
-            },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (lastPage) "Start capturing" else "Continue")
+@Composable
+private fun TutorialWhatToCaptureScreen() {
+    Text("What to capture", style = MaterialTheme.typography.displaySmall)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(Triple(R.drawable.gallery_good_03_livingroom, "OBJECTS", CaptureSymbol.OBJECT),
+            Triple(R.drawable.gallery_good_01_doorway, "PLACES", CaptureSymbol.PLACE),
+            Triple(R.drawable.gallery_good_02_stairs, "ACTIONS", CaptureSymbol.MOTION)).forEach { (image, label, icon) ->
+            Box(Modifier.weight(1f).aspectRatio(.42f).clip(CaptureRadii.lg)) {
+                Image(painterResource(image), label, Modifier.matchParentSize(), contentScale = ContentScale.Crop)
+                Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.Transparent, CaptureBase.copy(alpha = .9f)))))
+                Column(Modifier.align(Alignment.BottomStart).padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CaptureIcon(icon, Modifier.size(22.dp), CaptureInk)
+                    Text(label, style = MaterialTheme.typography.labelSmall, color = MutedGray)
+                }
+            }
         }
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+        listOf(CaptureSymbol.SURFACE to "Surface", CaptureSymbol.LIGHT to "Lighting", CaptureSymbol.WEATHER to "Weather", CaptureSymbol.MOTION to "Motion").forEach { (icon, label) ->
+            Box(Modifier.size(48.dp).background(CaptureSurface2, CaptureRadii.pill), contentAlignment = Alignment.Center) {
+                CaptureIcon(icon, Modifier.size(22.dp), description = label)
+            }
+        }
+    }
+}
 
-        Spacer(Modifier.weight(1f))
+@Composable
+private fun TutorialLabelingScreen() {
+    Text("Labeling", style = MaterialTheme.typography.displaySmall)
+    Box(Modifier.fillMaxWidth().aspectRatio(.85f).clip(CaptureRadii.xl)) {
+        Image(painterResource(R.drawable.gallery_good_01_doorway), "Doorway capture with labels", Modifier.matchParentSize(), contentScale = ContentScale.Crop)
+        Box(Modifier.fillMaxWidth(.65f).fillMaxHeight(.6f).align(Alignment.Center).border(1.dp, CaptureAccentBright, CaptureRadii.sm))
+        Column(Modifier.align(Alignment.BottomStart).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("PRIMARY · PLACE", "POSTURE · REQUIRED", "SECONDARY · OPTIONAL").forEach { label ->
+                Text(label, style = MaterialTheme.typography.labelSmall, color = CaptureInk,
+                    modifier = Modifier.background(CaptureBase.copy(alpha = .85f), CaptureRadii.pill).border(1.dp, CaptureAccentBorder, CaptureRadii.pill).padding(horizontal = 12.dp, vertical = 8.dp))
+            }
+        }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf("PHOTO" to "$0.10", "5–15 SEC" to "$0.25", "15–30 SEC" to "$0.40").forEach { (label, amount) ->
+            Column(Modifier.weight(1f).background(CaptureSurface2, CaptureRadii.md).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(amount, style = CaptureNumeric.copy(fontSize = 20.sp), color = CaptureInk)
+                Text(label, style = MaterialTheme.typography.labelSmall, color = MutedGray)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TutorialEarnLevelScreen() {
+    Text("Earn & level", style = MaterialTheme.typography.displaySmall)
+    ConstellationLadder(compact = true)
+    Box(Modifier.fillMaxWidth().background(CaptureGradients.action, CaptureRadii.xl).padding(20.dp)) {
+        Text("Rate ×1.0 → ×1.5 · Bond waived at Pathfinder.", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
     }
 }

@@ -42,6 +42,10 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.BorderStroke
+import ai.loosh.union.CaptureOutline
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -63,6 +67,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -77,13 +83,12 @@ import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 import java.io.File
 import kotlinx.coroutines.delay
 import org.json.JSONObject
-import ai.loosh.union.AccentCyan
-import ai.loosh.union.AccentMagenta
-import ai.loosh.union.AccentOrange
-import ai.loosh.union.AccentViolet
+import ai.loosh.union.*
 import ai.loosh.union.LivenessScreen
 import ai.loosh.union.MutedGray
 import ai.loosh.union.WarnAmber
+import ai.loosh.union.CaptureBase
+import ai.loosh.union.CaptureRadii
 
 @Composable
 fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
@@ -93,8 +98,35 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
     var onboarded by remember { mutableStateOf(vm.onboarded()) }
     var tutorialDone by remember { mutableStateOf(vm.tutorialDone()) }
     var showGallery by remember { mutableStateOf(false) }
+    var galleryReason by remember { mutableStateOf<String?>(null) }
+    var showLevel by remember { mutableStateOf(false) }
+    var showProfile by remember { mutableStateOf(false) }
+    var captureKind by remember { mutableStateOf(KIND_OBJECT) }
+    androidx.activity.compose.BackHandler(enabled = showProfile && s.selected == null) { showProfile = false }
+    var previousLevel by remember { mutableIntStateOf(s.level) }
+    var observedResult by remember { mutableStateOf(s.lastResult) }
+    var celebrateLevel by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(s.level, s.lastResult) {
+        val outcome = s.lastResult
+        if (outcome != null && outcome !== observedResult && outcome.verdict?.accepted == true &&
+            (outcome.levelAfter ?: previousLevel) > previousLevel) {
+            celebrateLevel = outcome.levelAfter
+        }
+        previousLevel = s.level
+        observedResult = outcome
+    }
     var showLiveness by remember { mutableStateOf(false) }
     var pendingKind by remember { mutableStateOf<String?>(null) }
+    var lastCaptureKind by remember { mutableStateOf(KIND_OBJECT) }
+    LaunchedEffect(s.selected) { s.selected?.let { lastCaptureKind = bountyKind(it) } }
+    val beginCapture: (String) -> Unit = { kind ->
+        if (s.livenessVerified) vm.startOpenCapture(kind)
+        else {
+            pendingKind = kind
+            showLiveness = true
+            vm.startLiveness()
+        }
+    }
 
     if (!onboarded) {
         OnboardingScreen(onDone = {
@@ -156,72 +188,96 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
     }
 
     if (showGallery) {
-        ExampleGalleryScreen(onBack = { showGallery = false })
+        ExampleGalleryScreen(onBack = { showGallery = false }, reason = galleryReason)
         return
     }
 
+    if (showLevel) {
+        LevelScreen(s, onBack = { showLevel = false })
+        return
+    }
+
+    celebrateLevel?.let { level -> LevelUpOverlay(level) { celebrateLevel = null } }
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = Color.Transparent,
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
-            CaptureHeader(s)
+        NavyBackground(Modifier.fillMaxSize().padding(padding)) {
+            Column(Modifier.fillMaxSize().captureScreenMotion(s.selected?.optString("id"))) {
+                CaptureHeader(s, onLevel = { showLevel = true })
 
-            if (s.status == AsyncStatus.Working) {
-                LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text(
-                    s.message,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MutedGray,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                )
-            }
-
-            s.error?.let { CaptureErrorCard(it, vm::dismissError) }
-
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                if (s.wallet.isEmpty()) {
-                    WalletGate(
-                        server = server,
-                        busy = s.busy,
-                        onServerChange = { server = it },
-                        onUseServer = { vm.server(server) },
-                        onConnect = { over18 -> vm.connect(sender, over18) },
+                if (s.status == AsyncStatus.Working) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    Text(
+                        s.message,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MutedGray,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     )
-                } else {
-                    WalletActions(s, vm)
+                }
 
-                    s.lastResult?.let { VerdictCard(it, vm::dismissVerdict) }
+                s.error?.let { CaptureErrorCard(it, vm::dismissError) }
 
-                    if (s.selected != null) {
-                        SelectedEditor(s, vm, sender)
-                    } else {
+                val verdictContent: @Composable () -> Unit = {
+                    s.lastResult?.let { result ->
+                        androidx.compose.runtime.key(result) {
+                            VerdictCard(result, vm::dismissVerdict, onGallery = {
+                                galleryReason = result.verdict?.reason
+                                showGallery = true
+                            }, s = s, onCaptureAgain = {
+                                vm.dismissVerdict()
+                                beginCapture(lastCaptureKind)
+                            })
+                        }
+                    }
+                }
+                Box(Modifier.fillMaxWidth().weight(1f)) {
+                    if (s.wallet.isNotEmpty() && s.selected == null) {
                         CaptureHome(
                             s = s,
                             creating = creating,
                             onCreatingChange = { creating = it },
                             vm = vm,
                             sender = sender,
-                            onCapture = { kind ->
-                                if (s.livenessVerified) {
-                                    vm.startOpenCapture(kind)
-                                } else {
-                                    pendingKind = kind
-                                    showLiveness = true
-                                    vm.startLiveness()
-                                }
-                            },
-                            onGallery = { showGallery = true },
+                            onCapture = beginCapture,
+                            onGallery = { galleryReason = null; showGallery = true },
+                            verdict = verdictContent,
+                            profile = showProfile,
+                            kind = captureKind,
+                            onKindChange = { captureKind = it },
+                            onLevel = { showLevel = true },
+                            onProfile = { showProfile = true },
                         )
+                    } else {
+                        val scroll = rememberScrollState()
+                        LaunchedEffect(s.selected?.optString("id")) { scroll.scrollTo(0) }
+                        Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(horizontal = 20.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            if (s.wallet.isEmpty()) {
+                                WalletGate(
+                                    server = server,
+                                    busy = s.busy,
+                                    onServerChange = { server = it },
+                                    onUseServer = { vm.server(server) },
+                                    onConnect = { over18 -> vm.connect(sender, over18) },
+                                )
+                            } else {
+                                verdictContent()
+                                if (s.busy && s.message.startsWith("Submitting labels")) JudgePendingScreen(s.image)
+                                SelectedEditor(s, vm, sender)
+                            }
+                        }
+                    }
+                }
+                if (s.selected == null && s.wallet.isNotEmpty()) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        FloatingBottomBar(showProfile, !s.busy,
+                            onGallery = { galleryReason = null; showGallery = true },
+                            onCapture = { showProfile = false; beginCapture(captureKind) },
+                            onProfile = { showProfile = true })
                     }
                 }
             }
@@ -230,38 +286,11 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
 }
 
 @Composable
-private fun CaptureHeader(s: PilotState) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "CAPTURE",
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
-            if (s.wallet.isNotEmpty()) {
-                Text(
-                    "${s.wallet.take(6)}\u2026${s.wallet.takeLast(4)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = AccentCyan,
-                )
-            } else {
-                Text(
-                    "DEVNET",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MutedGray,
-                )
-            }
-        }
-        Text(
-            "Devnet only \u2022 TEST-USDC rewards \u2022 TEST-SKR bond",
-            style = MaterialTheme.typography.labelSmall,
-            color = MutedGray,
-        )
+private fun CaptureHeader(s: PilotState, onLevel: () -> Unit) {
+    Row(Modifier.fillMaxWidth().captureGlass().padding(horizontal = 20.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        CaptureWordmark()
+        LevelBadgeRing(s, onLevel)
     }
 }
 
@@ -289,8 +318,8 @@ private fun CaptureErrorCard(message: String, onDismiss: () -> Unit) {
 @Composable
 private fun SectionHeader(text: String) {
     Text(
-        text.uppercase(),
-        style = MaterialTheme.typography.titleLarge,
+        text,
+        style = MaterialTheme.typography.headlineSmall,
         color = MaterialTheme.colorScheme.onBackground,
     )
 }
@@ -345,12 +374,12 @@ private fun WalletGate(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
         )
-        Card(Modifier.fillMaxWidth()) {
+        Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, CaptureOutline)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     "PILOT SERVER",
                     style = MaterialTheme.typography.labelSmall,
-                    color = AccentCyan,
+                    color = CaptureAccentBright,
                 )
                 OutlinedTextField(
                     server,
@@ -394,7 +423,7 @@ private fun WalletActions(s: PilotState, vm: SeekerViewModel) {
 private fun SelectedEditor(s: PilotState, vm: SeekerViewModel, sender: ActivityResultSender) {
     val selected = s.selected ?: return
     val kind = bountyKind(selected)
-    TextButton(onClick = { vm.close() }, enabled = !s.busy) { Text("\u2190 Back to bounties") }
+    TextButton(onClick = { vm.close() }, enabled = !s.busy) { Text("\u2190 BACK TO CAPTURE") }
     Text(
         selected.getJSONObject("bounty").getString("title"),
         style = MaterialTheme.typography.titleLarge,
@@ -451,37 +480,58 @@ private fun CaptureHome(
     sender: ActivityResultSender,
     onCapture: (String) -> Unit,
     onGallery: () -> Unit,
+    verdict: @Composable () -> Unit,
+    profile: Boolean,
+    kind: String,
+    onKindChange: (String) -> Unit,
+    onLevel: () -> Unit,
+    onProfile: () -> Unit,
 ) {
-    LevelCard(s)
-
-    var kind by remember { mutableStateOf(KIND_OBJECT) }
-    Text(
-        "Capture now",
-        style = MaterialTheme.typography.titleLarge,
-        color = MaterialTheme.colorScheme.onBackground,
-    )
-    Text(
-        "No bounty wait — capture, label, and submit. Earn the base rate times your level multiplier.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-    )
-    LabelChipFlow {
-        LabelChip("Object photo", kind == KIND_OBJECT, AccentOrange, enabled = !s.busy, glyph = ChipGlyph.CHECK) { kind = KIND_OBJECT }
-        LabelChip("Place photo", kind == KIND_PLACE, AccentOrange, enabled = !s.busy, glyph = ChipGlyph.CHECK) { kind = KIND_PLACE }
-        LabelChip("Action clip", kind == KIND_ACTION, AccentOrange, enabled = !s.busy, glyph = ChipGlyph.CHECK) { kind = KIND_ACTION }
+    val list = rememberLazyListState()
+    LaunchedEffect(s.lastResult, profile) { list.scrollToItem(0) }
+    LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (s.lastResult != null) item(key = "verdict") { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { verdict() } }
+        if (profile) {
+            item(key = "profile") {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text("Profile", style = MaterialTheme.typography.displaySmall)
+                    Text("${s.wallet.take(6)}…${s.wallet.takeLast(4)}", style = MaterialTheme.typography.bodySmall, color = MutedGray)
+                    LevelCard(s)
+                    MetricTiles(s)
+                    RateTicker(s)
+                    Text("DEVNET · TEST-USDC REWARDS · TEST-SKR BOND", style = MaterialTheme.typography.labelSmall, color = MutedGray)
+                    WalletActions(s, vm)
+                    Dashboard(s, creating, onCreatingChange, vm, sender)
+                }
+            }
+        } else {
+            item(key = "stats") {
+                Row(Modifier.fillMaxWidth().captureCardMotion(0), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    StatPill(CaptureSymbol.RING, "L${s.level}", "Level ${s.level}", onLevel)
+                    StatPill(CaptureSymbol.BOLT, "×${String.format(java.util.Locale.US, "%.2f", s.rateMultiplier)}", "Rate multiplier", onLevel)
+                    // The pinned contract has no streak field; never invent a count.
+                    StatPill(CaptureSymbol.STREAK, "—", "Streak unavailable", onProfile)
+                }
+            }
+            item(key = "capture") {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CaptureButton(enabled = !s.busy, onCapture = { onCapture(kind) }, onGallery = onGallery)
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        listOf(Triple(KIND_OBJECT, CaptureSymbol.OBJECT, "Object photo"),
+                            Triple(KIND_PLACE, CaptureSymbol.PLACE, "Place photo"),
+                            Triple(KIND_ACTION, CaptureSymbol.VIDEO, "Action clip")).forEach { (value, icon, label) ->
+                            IconButton(onClick = { onKindChange(value) }, enabled = !s.busy,
+                                modifier = Modifier.semantics { selected = kind == value }.background(if (kind == value) CaptureAccentTint else CaptureSurface, CaptureRadii.pill)) {
+                                CaptureIcon(icon, Modifier.size(22.dp), if (kind == value) CaptureAccent else MutedGray, label)
+                            }
+                        }
+                    }
+                }
+            }
+            item(key = "rank") { ProgressRingCard(s, onLevel) }
+        }
     }
-    Button(
-        onClick = { onCapture(kind) },
-        enabled = !s.busy,
-        modifier = Modifier.fillMaxWidth().height(56.dp),
-    ) {
-        Text(if (s.livenessVerified) "Capture now" else "Prove human & capture")
-    }
-    OutlinedButton(onClick = onGallery, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) {
-        Text("Good vs bad capture examples")
-    }
-
-    Dashboard(s, creating, onCreatingChange, vm, sender)
 }
 
 @Composable
@@ -493,9 +543,9 @@ private fun Dashboard(
     sender: ActivityResultSender,
 ) {
     if (s.worker) {
-        Card(Modifier.fillMaxWidth()) {
+        Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, CaptureOutline)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("WORKER BOND", style = MaterialTheme.typography.labelSmall, color = AccentViolet)
+                Text("WORKER BOND", style = MaterialTheme.typography.labelSmall, color = CaptureAccent)
                 Text(
                     "${s.bond} TEST-SKR base units. Locked while any fulfillment is pending; 24-hour cooldown after a deposit.",
                     style = MaterialTheme.typography.bodySmall,
@@ -512,7 +562,7 @@ private fun Dashboard(
             }
         }
     } else {
-        Card(Modifier.fillMaxWidth()) {
+        Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, CaptureOutline)) {
             Text(
                 "Ask the operator to enroll this wallet before capturing or reviewing.",
                 style = MaterialTheme.typography.bodySmall,
@@ -532,7 +582,7 @@ private fun Dashboard(
         EmptyState("No open bounties yet", "Check back soon — new bounties appear here.")
     }
     s.bounties.forEach { b ->
-        Card(Modifier.fillMaxWidth()) {
+        Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, CaptureOutline)) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(b.getString("title"), style = MaterialTheme.typography.titleMedium)
                 Text(
@@ -544,7 +594,7 @@ private fun Dashboard(
                     "Funding total: ${b.getLong("reward_usdc_units") * b.getInt("slots") / 1_000_000.0} TEST-USDC. Pilot fee: 0.",
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
-                    color = AccentOrange,
+                    color = CaptureAccentBright,
                 )
                 val mine = b.getString("requester") == s.wallet
                 val id = b.getString("id")
@@ -589,7 +639,7 @@ private fun Dashboard(
         EmptyState("No submissions yet", "Claim a bounty and capture to get started.")
     }
     s.submissions.forEach { sub ->
-        Card(Modifier.fillMaxWidth()) {
+        Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, CaptureOutline)) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(sub.getJSONObject("bounty").getString("title"), style = MaterialTheme.typography.titleMedium)
                 val status = sub.getString("status")
@@ -597,7 +647,7 @@ private fun Dashboard(
                 Text(
                     "Status: $status",
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (status == "eligible") AccentMagenta else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    color = if (status == "eligible") CaptureAccent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                 )
                 OutlinedButton(onClick = { vm.open(sub, false) }, enabled = !s.busy) {
                     Text(if (sub.isNull("media_hash")) "Capture" else "Open submission and labels")
@@ -671,7 +721,7 @@ private fun Dashboard(
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
         )
         pending.take(10).forEach { tx ->
-            Card(Modifier.fillMaxWidth()) {
+            Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, CaptureOutline)) {
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -712,15 +762,15 @@ private fun CreateBountyForm(
     OutlinedTextField(title, { title = it }, label = { Text("Bounty title") }, modifier = Modifier.fillMaxWidth())
     Text("Kind", style = MaterialTheme.typography.labelLarge)
     LabelChipFlow {
-        LabelChip("Object", kind == KIND_OBJECT, AccentViolet, glyph = ChipGlyph.CHECK) {
+        LabelChip("Object", kind == KIND_OBJECT, CaptureAccent, glyph = ChipGlyph.CHECK) {
             kind = KIND_OBJECT
             selectedIds = emptySet()
         }
-        LabelChip("Place", kind == KIND_PLACE, AccentViolet, glyph = ChipGlyph.CHECK) {
+        LabelChip("Place", kind == KIND_PLACE, CaptureAccent, glyph = ChipGlyph.CHECK) {
             kind = KIND_PLACE
             selectedIds = emptySet()
         }
-        LabelChip("Action", kind == KIND_ACTION, AccentViolet, glyph = ChipGlyph.CHECK) {
+        LabelChip("Action", kind == KIND_ACTION, CaptureAccent, glyph = ChipGlyph.CHECK) {
             kind = KIND_ACTION
             selectedIds = emptySet()
         }
@@ -739,7 +789,7 @@ private fun CreateBountyForm(
                 LabelChip(
                     c.name,
                     c.id in selectedIds,
-                    AccentViolet,
+                    CaptureAccent,
                     enabled = !busy,
                     glyph = ChipGlyph.CHECK,
                 ) {
@@ -811,7 +861,7 @@ private fun PhotoEditor(
                 LabelChip(
                     c.getString("name"),
                     category == c.getInt("id"),
-                    AccentViolet,
+                    CaptureAccent,
                     enabled = enabled,
                     glyph = ChipGlyph.CHECK,
                 ) { category = c.getInt("id") }
@@ -824,7 +874,7 @@ private fun PhotoEditor(
         Modifier
             .fillMaxWidth()
             .aspectRatio(bitmap.width.toFloat() / bitmap.height)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(CaptureRadii.md)
             .background(MaterialTheme.colorScheme.surface),
     ) {
         Image(bitmap.asImageBitmap(), "Approved object photo", Modifier.fillMaxSize())
@@ -882,9 +932,9 @@ private fun PhotoEditor(
                 val isSelected = index == selectedBox && !isPreview
                 val color =
                     when {
-                        isPreview -> AccentCyan.copy(alpha = 0.6f)
-                        isSelected -> AccentMagenta
-                        else -> AccentCyan
+                        isPreview -> CaptureAccent.copy(alpha = 0.6f)
+                        isSelected -> CaptureAccent
+                        else -> CaptureAccent
                     }
                 drawRect(
                     color,
@@ -892,6 +942,9 @@ private fun PhotoEditor(
                     Size(b.w * size.width, b.h * size.height),
                     style = Stroke(if (isSelected) 4.dp.toPx() else 3.dp.toPx()),
                 )
+                if (isSelected || isPreview) {
+                    drawCircle(CaptureAccent, 3.dp.toPx(), Offset(b.x * size.width, b.y * size.height))
+                }
             }
         }
         // Centered empty-state helper overlaid on the image.
@@ -899,7 +952,7 @@ private fun PhotoEditor(
             Text(
                 "Drag to draw a box around each object",
                 style = MaterialTheme.typography.labelMedium,
-                color = AccentCyan,
+                color = CaptureAccentBright,
                 modifier = Modifier
                     .align(Alignment.Center)
                     .background(MaterialTheme.colorScheme.background.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
@@ -912,14 +965,14 @@ private fun PhotoEditor(
     Text(
         "${boxes.size} boxes",
         style = MaterialTheme.typography.labelMedium,
-        color = AccentCyan,
+        color = CaptureAccentBright,
     )
     boxes.forEachIndexed { index, b ->
         Text(
             "${index + 1}: category ${b.categoryId}, x=${"%.2f".format(b.x)}, y=${"%.2f".format(b.y)}, width=${"%.2f".format(b.w)}, height=${"%.2f".format(b.h)}",
             style = MaterialTheme.typography.bodySmall,
             fontFamily = FontFamily.Monospace,
-            color = if (index == selectedBox) AccentMagenta else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            color = if (index == selectedBox) CaptureAccent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
         )
     }
     if (editable) {
@@ -977,7 +1030,7 @@ private fun PhotoEditor(
                     boxes = boxes.filterIndexed { i, _ -> i != selectedBox }
                     selectedBox = null
                 }) {
-                    Text("Delete selected box \u2715", color = AccentMagenta)
+                    Text("Delete selected box \u2715", color = CaptureAccent)
                 }
             }
         }
@@ -1016,7 +1069,7 @@ private fun CapturePhoto(enabled: Boolean, onPhoto: (ByteArray) -> Unit) {
         onDispose { live.set(false) }
     }
     if (!permission) {
-        Card(Modifier.fillMaxWidth()) {
+        Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, CaptureOutline)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     "The camera is used once, to capture the object or scene you're labeling. Nothing is analyzed on device beyond this capture.",
@@ -1093,17 +1146,17 @@ private fun CapturePhoto(enabled: Boolean, onPhoto: (ByteArray) -> Unit) {
         Modifier
             .fillMaxWidth()
             .aspectRatio(3f / 4f)
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color.Black),
+            .clip(CaptureRadii.md)
+            .background(CaptureBase),
     ) {
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
-        LowAngleGuidance(Modifier.align(Alignment.BottomCenter))
         ViewfinderGrid(Modifier.fillMaxSize())
+        LowAngleGuidance(Modifier.align(Alignment.TopCenter))
         if (capturing) {
             Box(
                 Modifier
                     .fillMaxSize()
-                    .background(Color.White.copy(alpha = 0.25f)),
+                    .background(CaptureInk.copy(alpha = 0.25f)),
             )
         }
         ShutterButton(
@@ -1173,7 +1226,7 @@ private fun PlaceEditor(
         Modifier
             .fillMaxWidth()
             .aspectRatio(bitmap.width.toFloat() / bitmap.height)
-            .clip(RoundedCornerShape(14.dp)),
+            .clip(CaptureRadii.md),
     )
     PickerHelper("Choose the single scene class")
     LabelChipFlow {
@@ -1182,7 +1235,7 @@ private fun PlaceEditor(
             LabelChip(
                 c.getString("name"),
                 category == c.getInt("id"),
-                AccentViolet,
+                CaptureAccent,
                 enabled = enabled && editable,
                 glyph = ChipGlyph.CHECK,
             ) { category = c.getInt("id") }
@@ -1249,7 +1302,7 @@ private fun ActionEditor(
         modifier = Modifier
             .fillMaxWidth()
             .height(240.dp)
-            .clip(RoundedCornerShape(14.dp)),
+            .clip(CaptureRadii.md),
     )
     Text(
         "Clip length $durationMs ms. Choose one action tag, then set the trim.",
@@ -1263,7 +1316,7 @@ private fun ActionEditor(
             LabelChip(
                 c.getString("name"),
                 category == c.getInt("id"),
-                AccentViolet,
+                CaptureAccent,
                 enabled = enabled && editable,
                 glyph = ChipGlyph.CHECK,
             ) { category = c.getInt("id") }
@@ -1274,7 +1327,7 @@ private fun ActionEditor(
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Text("Start", style = MaterialTheme.typography.labelSmall, color = MutedGray)
-        Text("$startMs ms", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = AccentCyan)
+        Text("$startMs ms", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = CaptureAccent)
     }
     Slider(
         value = startMs.toFloat(),
@@ -1290,7 +1343,7 @@ private fun ActionEditor(
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Text("End", style = MaterialTheme.typography.labelSmall, color = MutedGray)
-        Text("$endMs ms", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = AccentCyan)
+        Text("$endMs ms", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = CaptureAccent)
     }
     Slider(
         value = endMs.toFloat(),
@@ -1307,7 +1360,7 @@ private fun ActionEditor(
             "Trim ${trim.startMs}\u2013${trim.endMs} ms",
             style = MaterialTheme.typography.labelMedium,
             fontFamily = FontFamily.Monospace,
-            color = AccentCyan,
+            color = CaptureAccentBright,
         )
     } else {
         Text(
@@ -1371,7 +1424,7 @@ private fun CaptureVideo(enabled: Boolean, onVideo: (ByteArray, Int) -> Unit) {
         onDispose { live.set(false) }
     }
     if (!permission) {
-        Card(Modifier.fillMaxWidth()) {
+        Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, CaptureOutline)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     "The camera records one short action clip (\u2264 30 s) for labeling. Nothing is analyzed on device beyond this clip.",
@@ -1468,18 +1521,18 @@ private fun CaptureVideo(enabled: Boolean, onVideo: (ByteArray, Int) -> Unit) {
         Modifier
             .fillMaxWidth()
             .aspectRatio(3f / 4f)
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color.Black),
+            .clip(CaptureRadii.md)
+            .background(CaptureBase),
     ) {
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
-        LowAngleGuidance(Modifier.align(Alignment.BottomCenter))
         ViewfinderGrid(Modifier.fillMaxSize())
+        LowAngleGuidance(Modifier.align(Alignment.TopCenter))
         // Monospace timer overlay.
         val timerColor =
             when {
                 elapsedMs >= MAX_ACTION_MS -> MaterialTheme.colorScheme.error
                 elapsedMs >= 25_000 -> WarnAmber
-                else -> Color.White
+                else -> CaptureInk
             }
         Text(
             "${formatClock(elapsedMs)} / 0:30",
@@ -1489,7 +1542,7 @@ private fun CaptureVideo(enabled: Boolean, onVideo: (ByteArray, Int) -> Unit) {
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(12.dp)
-                .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                .captureGlass(CaptureRadii.pill)
                 .padding(horizontal = 8.dp, vertical = 4.dp),
         )
         if (endedByCap) {
@@ -1556,7 +1609,7 @@ private fun CaptureVideo(enabled: Boolean, onVideo: (ByteArray, Int) -> Unit) {
 @Composable
 private fun ConfirmationStrip(onRetake: () -> Unit, onUse: () -> Unit) {
     AnimatedVisibility(visible = true, enter = fadeIn() + scaleIn(initialScale = 0.95f)) {
-        Card(Modifier.fillMaxWidth()) {
+        Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, CaptureOutline)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     "Looks good?",
@@ -1574,50 +1627,31 @@ private fun ConfirmationStrip(onRetake: () -> Unit, onUse: () -> Unit) {
 
 @Composable
 private fun LowAngleGuidance(modifier: Modifier = Modifier) {
-    val transition = rememberInfiniteTransition(label = "low-angle")
-    val alpha by transition.animateFloat(
-        initialValue = 0.45f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(1200), RepeatMode.Reverse),
-        label = "low-angle-alpha",
-    )
-    Column(
-        modifier = modifier.padding(12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        // Slim cyan "ground plane" bracket.
-        Canvas(Modifier.size(width = 160.dp, height = 22.dp)) {
-            val w = size.width
-            val h = size.height
-            val stroke = 3.dp.toPx()
-            val brace = w * 0.18f
-            // left tick
-            drawLine(AccentCyan, Offset(0f, h), Offset(0f, h - brace), stroke, StrokeCap.Round)
-            drawLine(AccentCyan, Offset(0f, h - brace), Offset(brace, h - brace), stroke, StrokeCap.Round)
-            // right tick
-            drawLine(AccentCyan, Offset(w, h), Offset(w, h - brace), stroke, StrokeCap.Round)
-            drawLine(AccentCyan, Offset(w, h - brace), Offset(w - brace, h - brace), stroke, StrokeCap.Round)
-            // ground line
-            drawLine(AccentCyan.copy(alpha = 0.8f), Offset(brace, h), Offset(w - brace, h), stroke, StrokeCap.Round)
+    GlassCard(modifier = modifier.padding(12.dp), tint = CaptureAccent) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CaptureIcon(CaptureSymbol.CAMERA, Modifier.size(24.dp), CaptureInk)
+            Column {
+                Text("6–12 in · 0–45° ↗", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
+                Text("FLOOR VISIBLE", style = MaterialTheme.typography.labelSmall, color = MutedGray)
+            }
         }
-        Text(
-            "6\u201312 IN OFF THE GROUND",
-            style = MaterialTheme.typography.labelSmall,
-            color = MutedGray.copy(alpha = alpha),
-        )
     }
 }
 
 @Composable
 private fun ViewfinderGrid(modifier: Modifier = Modifier) {
-    val quadrants = listOf(AccentOrange, AccentCyan, AccentViolet, AccentMagenta)
+    // Neutral guide: no on-device detector is wired, so never claim a label is present.
     Canvas(modifier = modifier) {
-        val cell = size.minDimension / 2f
-        val alpha = 0.18f
-        drawRect(quadrants[0].copy(alpha = alpha), Offset(0f, 0f), Size(cell, cell))
-        drawRect(quadrants[1].copy(alpha = alpha), Offset(cell, 0f), Size(cell, cell))
-        drawRect(quadrants[2].copy(alpha = alpha), Offset(0f, cell), Size(cell, cell))
-        drawRect(quadrants[3].copy(alpha = alpha), Offset(cell, cell), Size(cell, cell))
+        val w = size.width
+        val h = size.height
+        drawLine(CaptureAccent.copy(alpha = .25f), Offset(w / 2, 0f), Offset(w / 2, h), 1.dp.toPx())
+        drawLine(CaptureAccent.copy(alpha = .25f), Offset(0f, h / 2), Offset(w, h / 2), 1.dp.toPx())
+        val arm = 20.dp.toPx()
+        val inset = 12.dp.toPx()
+        listOf(Offset(inset, inset), Offset(w - inset, inset), Offset(inset, h - inset), Offset(w - inset, h - inset)).forEachIndexed { i, p ->
+            drawLine(CaptureAccent, p, p + Offset(if (i % 2 == 0) arm else -arm, 0f), 2.dp.toPx())
+            drawLine(CaptureAccent, p, p + Offset(0f, if (i < 2) arm else -arm), 2.dp.toPx())
+        }
     }
 }
 
@@ -1640,7 +1674,7 @@ private fun ShutterButton(
             .size(72.dp)
             .scale(scale)
             .clip(CircleShape)
-            .background(AccentOrange)
+            .background(CaptureAccent)
             .clickable(interactionSource = interaction, indication = null, enabled = enabled) {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onClick()
@@ -1651,13 +1685,13 @@ private fun ShutterButton(
             Modifier
                 .size(58.dp)
                 .clip(CircleShape)
-                .background(AccentOrange),
+                .background(CaptureAccent),
         )
         Box(
             Modifier
                 .size(50.dp)
                 .clip(CircleShape)
-                .background(Color.White),
+                .background(CaptureInk),
         )
     }
 }
@@ -1678,7 +1712,7 @@ private fun RecordButton(
         label = "record-scale",
     )
     val dotColor by animateColorAsState(
-        targetValue = if (recording) Color.White else MaterialTheme.colorScheme.error,
+        targetValue = if (recording) CaptureInk else CaptureAccent,
         label = "record-dot",
     )
     Box(
@@ -1686,7 +1720,7 @@ private fun RecordButton(
             .size(72.dp)
             .scale(scale)
             .clip(CircleShape)
-            .background(Color.White.copy(alpha = 0.15f))
+            .captureGlass(CaptureRadii.pill)
             .clickable(interactionSource = interaction, indication = null, enabled = enabled) {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onClick()
@@ -1699,14 +1733,14 @@ private fun RecordButton(
                 Modifier
                     .size(26.dp)
                     .clip(RoundedCornerShape(6.dp))
-                    .background(Color.White),
+                    .background(CaptureInk),
             )
         } else {
             Box(
                 Modifier
                     .size(54.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.error),
+                    .background(CaptureGradients.action),
                 contentAlignment = Alignment.Center,
             ) {
                 Box(Modifier.size(10.dp).clip(CircleShape).background(dotColor))
@@ -1750,7 +1784,7 @@ private fun SecondaryPicker(
             listOf(selection.surfaceType, selection.lighting, selection.weather).count { it != null } +
             (if (selection.egoMotion) 1 else 0)
 
-    Card(Modifier.fillMaxWidth()) {
+    Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, CaptureOutline)) {
         Column(
             Modifier
                 .padding(vertical = 4.dp)
@@ -1797,7 +1831,7 @@ private fun SecondaryPicker(
                                 LabelChip(
                                     c.name,
                                     c.id in selection.expressions,
-                                    AccentMagenta,
+                                    CaptureAccent,
                                     enabled = enabled,
                                     glyph = ChipGlyph.DISMISS,
                                 ) {
@@ -1820,7 +1854,7 @@ private fun SecondaryPicker(
                                 LabelChip(
                                     c.name,
                                     c.id in selection.postures,
-                                    AccentMagenta,
+                                    CaptureAccent,
                                     enabled = enabled,
                                     glyph = ChipGlyph.DISMISS,
                                 ) {
@@ -1865,7 +1899,7 @@ private fun SecondaryPicker(
                                     LabelChip(
                                         c.name,
                                         c.id in selection.environment,
-                                        AccentMagenta,
+                                        CaptureAccent,
                                         enabled = enabled,
                                         glyph = ChipGlyph.DISMISS,
                                     ) {
@@ -1942,7 +1976,7 @@ private fun SingleSelectMetaGroup(
             LabelChip(
                 c.name,
                 wire == selectedWire,
-                AccentViolet,
+                CaptureAccent,
                 enabled = enabled,
                 glyph = ChipGlyph.CHECK,
             ) {
