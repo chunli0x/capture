@@ -18,13 +18,10 @@ v2 changes (pinned by ``/home/hermes/clock-in/CAPTURE-V2-CONTRACT.md`` and
 - four new string-keyed metadata namespaces — ``surface_type``, ``lighting``,
   ``weather``, ``ego_motion`` — all optional, exposed as string ``id`` (slug).
 
-2026-10-12 confidentiality rework: the registry is the one public surface that
-exposed ground-level-egocentric capture vocabulary that read as animal/dog
-behaviour ("tail wag", "sniff", "fetch", "paw raised", "ears-flat", "hackles",
-"belly exposed", etc.). All such labels were neutralized to human egocentric
-capture terms ("wave", "look around", "pick up", "arm raised", "on guard",
-"reclining", ...) while keeping every numeric id stable so stored bounties,
-labels, and the client pickers keep resolving. The 6-dim structure is unchanged.
+2026-10-12: registry vocabulary is human ground-level-egocentric capture.
+Labels describe people, objects, places, and actions at ground level. Numeric
+ids are the stable contract; names are the only thing that may be reworded
+over time.
 
 Numeric namespaces keep the ``{int: (name, kind)}`` shape; the metadata
 namespaces are ``{slug: name}``. ``all_categories()`` flattens both and marks
