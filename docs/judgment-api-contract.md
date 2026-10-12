@@ -11,8 +11,15 @@ must be stated, never hidden. "can't tell" is first-class and never penalized.
 
 Pinned identifiers (devnet):
 - program id:  5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV  (seeker-bounty)
-- skr mint:    3aGKaVL7GpcTcTuKjkyirnVeyNG1JGFNyGGueu8mAGbM
+- skr mint:    3aGKaVL7GpcTcTuKjkyirnVeyNG1JGFNyGGueu8mAGbM  (devnet TEST-SKR, working)
 - usdc mint:   TXtqUVPDj6JuDoeyFJvwuUqy5jGYTgF98kEkbeN6U8Z   (capture path only, dormant)
+
+Real mainnet token (NOT used on devnet; do not wire into the demo):
+- SKR (mainnet): SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3, 6 decimals,
+  mint authority FMNn5sorEBbEoGQGrh7y3xSbYGt116F12FpL2VTsohiw. This is the eventual
+  production token. The devnet demo keeps using the devnet TEST-SKR mint above;
+  we do not hold that mainnet mint authority, so it cannot be minted for a devnet
+  payout. Branding says "$SKR" everywhere; the address swap happens post-hackathon.
 
 ---
 

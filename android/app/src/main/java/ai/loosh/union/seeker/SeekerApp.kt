@@ -552,7 +552,7 @@ private fun CaptureHome(
                     MetricTiles(s)
                     RateTicker(s)
                     SettleEarnings(s, vm)
-                    Text("DEVNET · TEST-USDC REWARDS · TEST-SKR BOND", style = MaterialTheme.typography.labelSmall, color = MutedGray)
+                    Text("DEVNET · TEST-SKR REWARDS · TEST-SKR BOND", style = MaterialTheme.typography.labelSmall, color = MutedGray)
                     WalletActions(s, vm)
                     CapturePanel(Modifier.fillMaxWidth()) {
                         Text("Albums and teams", style = MaterialTheme.typography.titleLarge)

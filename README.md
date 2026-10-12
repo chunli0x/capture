@@ -94,6 +94,11 @@ with level and is waived at Pathfinder.
   judging), **reward** (consensus-aligned judgments earn SKR), **slash** (lose
   stake for systematic disagreement). A devnet fixture mint.
 
+The production SKR token is a separate mainnet mint (`SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3`),
+not used in the devnet demo. The demo mints test-SKR because we hold its mint
+authority; the mainnet token's mint authority is not ours, so it is swapped in
+post-hackathon, not before.
+
 Settlement is **real on-chain transfer**: the SKR bond escrows on-chain at
 deposit, aligned judges are paid test-SKR on agreement, and a systematic
 disagreement warns then slashes the bond to a penalty vault. Each resolved batch
