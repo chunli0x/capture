@@ -5,10 +5,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-seeker_bounty = "HyNNfKuyEuyc98fo2zsdyPrHmCX7tuMXvVPF8vJB12Sm"
+seeker_bounty = "5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV"
 
 [programs.devnet]
-seeker_bounty = "HyNNfKuyEuyc98fo2zsdyPrHmCX7tuMXvVPF8vJB12Sm"
+seeker_bounty = "5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV"
 
 [registry]
 url = "https://api.apr.dev"

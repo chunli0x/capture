@@ -53,7 +53,7 @@ def runtime(tmp_path):
     key.write_text(json.dumps(list(bytes(verifier))))
     chain = Chain(
         SimpleNamespace(
-            program_id="HyNNfKuyEuyc98fo2zsdyPrHmCX7tuMXvVPF8vJB12Sm",
+            program_id="5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV",
             usdc_mint=str(Keypair().pubkey()),
             skr_mint=str(Keypair().pubkey()),
             verifier_key_file=key,
@@ -206,7 +206,9 @@ def test_refund_preserves_pending_then_expiry_unlocks(runtime):
     ok(send(rt, "refund", admin, b))
     assert balance(rt, admin.pubkey(), c.usdc) == 9000
     assert balance(rt, worker.pubkey(), c.usdc) == 10_000
-    ok(send(rt, "expire", worker, b, s))
+    # Finding F: expire requires the requester (admin) as authority; a worker
+    # (non-requester) cannot expire the submission post-deadline.
+    ok(send(rt, "expire", admin, b, s))
     ok(send(rt, "refund", admin, b))
     assert balance(rt, admin.pubkey(), c.usdc) == 10_000
     ok(send(rt, "withdraw", worker))

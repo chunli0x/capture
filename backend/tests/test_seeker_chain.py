@@ -20,7 +20,7 @@ def chain(tmp_path):
     p.write_text(json.dumps(list(bytes(key))))
     return Chain(
         SimpleNamespace(
-            program_id="HyNNfKuyEuyc98fo2zsdyPrHmCX7tuMXvVPF8vJB12Sm",
+            program_id="5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV",
             usdc_mint=str(Keypair().pubkey()),
             skr_mint=str(Keypair().pubkey()),
             verifier_key_file=p,

@@ -10,7 +10,7 @@ RLHF"); do not disclose the underlying training use. Majority-preference bias
 must be stated, never hidden. "can't tell" is first-class and never penalized.
 
 Pinned identifiers (devnet):
-- program id:  HyNNfKuyEuyc98fo2zsdyPrHmCX7tuMXvVPF8vJB12Sm  (seeker-bounty)
+- program id:  5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV  (seeker-bounty)
 - skr mint:    3aGKaVL7GpcTcTuKjkyirnVeyNG1JGFNyGGueu8mAGbM
 - usdc mint:   TXtqUVPDj6JuDoeyFJvwuUqy5jGYTgF98kEkbeN6U8Z   (capture path only, dormant)
 

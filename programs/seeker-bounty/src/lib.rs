@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
 // Development identity only. Deploy with your own keypair and update all clients.
-declare_id!("HyNNfKuyEuyc98fo2zsdyPrHmCX7tuMXvVPF8vJB12Sm");
+declare_id!("5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV");
 
 const COOLDOWN: i64 = 86_400;
 
@@ -50,10 +50,13 @@ pub mod seeker_bounty {
             bond.pending = 0;
         }
         require_keys_eq!(bond.worker, ctx.accounts.worker.key(), Error::Unauthorized);
-        // Finding 17: a terminally-slashed bond (warnings >= 2) must refuse new
-        // deposits — funds escrowed into a slashed vault can never be withdrawn
-        // and stay forfeit. Reject rather than silently accept unusable money.
-        require!(bond.warnings < 2, Error::Slashed);
+        // A slashed bond (warnings >= 2) is reset to clean on deposit: the slash
+        // already drained the vault, so a new deposit is a fresh bond, not an
+        // extension of the old one. This is the "re-deposit a fresh bond" path.
+        if bond.warnings >= 2 {
+            bond.warnings = 0;
+            bond.pending = 0;
+        }
         bond.unlock_at = Clock::get()?
             .unix_timestamp
             .checked_add(COOLDOWN)
@@ -168,6 +171,22 @@ pub mod seeker_bounty {
             batch_id,
             merkle_root,
         });
+        Ok(())
+    }
+
+    /// Record a payment id so a settle_skr retry is idempotent (finding D).
+    /// The mint authority records the id BEFORE minting; a retry whose payment
+    /// account already exists must skip the mint. Append-only via `init`.
+    pub fn record_payment(
+        ctx: Context<RecordPayment>,
+        payment_id: [u8; 16],
+    ) -> Result<()> {
+        require!(payment_id != [0u8; 16], Error::Invalid);
+        ctx.accounts
+            .payment
+            .set_inner(Payment {
+                mint_authority: ctx.accounts.mint_authority.key(),
+            });
         Ok(())
     }
 
@@ -287,6 +306,11 @@ pub mod seeker_bounty {
     }
 
     pub fn expire(ctx: Context<Settle>) -> Result<()> {
+        require_keys_eq!(
+            ctx.accounts.authority.key(),
+            ctx.accounts.bounty.requester,
+            Error::Unauthorized
+        );
         require!(
             Clock::get()?.unix_timestamp >= ctx.accounts.bounty.deadline,
             Error::Locked
@@ -368,9 +392,11 @@ pub fn slashable(warnings: u8) -> bool {
     warnings >= 2
 }
 
-/// A slashed bond (two or more warnings) can no longer withdraw.
+/// A bond freezes on its first warning; only a clean bond can withdraw. This
+/// closes the withdraw-after-warn escape: a warned worker must keep the vault
+/// funded so the second-strike slash has something to forfeit.
 pub fn withdrawable(warnings: u8) -> bool {
-    warnings < 2
+    warnings == 0
 }
 
 /// A zeroed Merkle root is rejected (it would anchor an empty/unresolved batch).
@@ -424,6 +450,12 @@ pub struct Batch {
     /// Merkle root of the batch's resolved preference entries. Append-only: a
     /// batch_id can be anchored exactly once (``init``).
     pub merkle_root: [u8; 32],
+}
+#[account]
+#[derive(InitSpace)]
+pub struct Payment {
+    /// The treasury keypair that recorded (and mints) this payment id.
+    pub mint_authority: Pubkey,
 }
 
 #[derive(Accounts)]
@@ -536,6 +568,16 @@ pub struct PostBatch<'info> {
     pub batch: Account<'info, Batch>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+#[instruction(payment_id: [u8; 16])]
+pub struct RecordPayment<'info> {
+    #[account(mut)]
+    pub mint_authority: Signer<'info>,
+    #[account(init, payer=mint_authority, space=8+Payment::INIT_SPACE, seeds=[b"payment", payment_id.as_ref()], bump)]
+    pub payment: Account<'info, Payment>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -741,11 +783,13 @@ mod tests {
 
     #[test]
     fn slashed_bond_is_terminal_withdraw_and_warn_refuse() {
-        // Terminal (255) and threshold (2) both refuse further warns/withdraws.
+        // Terminal (255) and threshold (2) refuse further warns/withdraws, and
+        // a warned bond (1) is frozen too (finding A): only a clean bond (0)
+        // can withdraw.
         assert!(!withdrawable(255));
         assert!(!withdrawable(2));
+        assert!(!withdrawable(1));
         assert!(withdrawable(0));
-        assert!(withdrawable(1));
     }
 
     #[test]
