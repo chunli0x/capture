@@ -113,41 +113,4 @@ fun TierIcon(level: Int, modifier: Modifier = Modifier) {
     }
 }
 
-/** One rung of the level ladder: icon, name + requirement, and the rate chip. */
-@Composable
-fun TierRow(tier: LevelTier) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        TierIcon(tier.level, Modifier.size(36.dp))
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(tier.name, style = MaterialTheme.typography.titleMedium, color = CaptureInk)
-            Text(
-                if (tier.acceptedThreshold == 0) "0 accepted · starting level"
-                else "${tier.acceptedThreshold}+ accepted · ≥${tier.rateThresholdPercent}% approval",
-                style = MaterialTheme.typography.bodySmall,
-                color = MutedGray,
-            )
-        }
-        Text(
-            "×${tier.rateMultiplier.formatRate()}",
-            style = MaterialTheme.typography.labelLarge,
-            color = CaptureInk,
-            modifier = Modifier.background(CaptureSurface2, CaptureRadii.pill).border(1.dp, CaptureOutline, CaptureRadii.pill).padding(horizontal = 12.dp, vertical = 6.dp),
-        )
-    }
-}
 
-private fun Double.formatRate(): String =
-    if (this == this.toInt().toDouble()) this.toInt().toString() else "%.2f".format(this)
-
-/** The full "LEVEL / REQUIREMENTS — RATE" ladder from the POP EDITORIAL design. */
-@Composable
-fun EditorialTierLadder(modifier: Modifier = Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("LEVEL / REQUIREMENTS", style = MaterialTheme.typography.labelSmall, color = MutedGray)
-            Text("RATE", style = MaterialTheme.typography.labelSmall, color = MutedGray)
-        }
-        LEVEL_TIERS.forEach { TierRow(it) }
-    }
-}
