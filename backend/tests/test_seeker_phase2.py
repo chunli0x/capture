@@ -665,10 +665,22 @@ def test_video_pass_helpers_fail_closed():
     # sightengine: no frames analyzed -> never pass.
     assert not sightengine_video_pass({"status": "success", "faces": []})
     # A documented sync video response nests frames under data.frames, each
-    # frame carrying its own faces list. A clean response (frames analyzed,
-    # no faces in any frame) passes.
+    # frame carrying its own faces list AND nudity object. A clean response
+    # (frames analyzed, no faces, no sexual-content signal) passes.
     assert sightengine_video_pass(
-        {"status": "success", "data": {"frames": [{"faces": []}, {"faces": []}]}}
+        {
+            "status": "success",
+            "data": {
+                "frames": [
+                    {"faces": [], "nudity": {"sexual_activity": 0.001, "sexual_display": 0.001, "erotica": 0.001, "sextoy": 0.001, "suggestive": 0.001}},
+                    {"faces": [], "nudity": {"sexual_activity": 0.001, "sexual_display": 0.001, "erotica": 0.001, "sextoy": 0.001, "suggestive": 0.001}},
+                ]
+            },
+        }
+    )
+    # A frame missing its nudity object fails closed (provider did not analyze it).
+    assert not sightengine_video_pass(
+        {"status": "success", "data": {"frames": [{"faces": []}]}}
     )
     # A face detected in any single frame must block, even if others are clean.
     assert not sightengine_video_pass(

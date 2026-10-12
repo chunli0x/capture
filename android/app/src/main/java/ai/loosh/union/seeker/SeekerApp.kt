@@ -36,6 +36,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -224,6 +225,7 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
         NavyBackground(Modifier.fillMaxSize().padding(padding)) {
             Column(Modifier.fillMaxSize().captureScreenMotion(s.selected?.optString("id"))) {
                 CaptureHeader(s, onLevel = { showLevel = true })
+                TestnetBanner()
 
                 if (s.status == AsyncStatus.Working) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -275,11 +277,10 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
                             verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             if (s.wallet.isEmpty()) {
                                 WalletGate(
-                                    server = server,
                                     busy = s.busy,
-                                    onServerChange = { server = it },
-                                    onUseServer = { vm.server(server) },
+                                    error = s.error,
                                     onConnect = { over18 -> vm.connect(sender, over18) },
+                                    onDismissError = vm::dismissError,
                                 )
                             } else {
                                 verdictContent()
@@ -308,6 +309,27 @@ private fun CaptureHeader(s: PilotState, onLevel: () -> Unit) {
         horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         CaptureWordmark()
         LevelBadgeRing(s, onLevel)
+    }
+}
+
+/** A persistent, unmissable testnet disclaimer pinned under the header. */
+@Composable
+private fun TestnetBanner() {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(CaptureYellow)
+            .border(1.dp, CaptureInk)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "TESTNET",
+            style = MaterialTheme.typography.labelLarge,
+            color = CaptureInk,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -372,52 +394,58 @@ private fun EmptyState(title: String, subtitle: String) {
 
 @Composable
 private fun WalletGate(
-    server: String,
     busy: Boolean,
-    onServerChange: (String) -> Unit,
-    onUseServer: () -> Unit,
+    error: String?,
     onConnect: (Boolean) -> Unit,
+    onDismissError: () -> Unit,
 ) {
     var over18 by remember { mutableStateOf(false) }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Spacer(Modifier.height(8.dp))
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        EditorialHeading("SIGN IN.")
         Text(
             "Capture objects, scenes, or actions, label them by hand, and review each submission independently.",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = CaptureInk,
         )
-        Text(
-            "Payment needs the requester's explicit acceptance. This pilot does not verify unique humanity.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-        )
-        Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, CaptureOutline)) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    "PILOT SERVER",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = CaptureAccentBright,
-                )
-                OutlinedTextField(
-                    server,
-                    { onServerChange(it) },
-                    label = { Text("Pilot server address") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    textStyle = LocalTextStyle.current.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 13.sp,
-                    ),
-                )
-                Button(onClick = onUseServer, enabled = !busy) { Text("Use server") }
+        if (error != null) {
+            Row(
+                Modifier.fillMaxWidth().background(ErrorRedBg, CaptureRadii.md).border(1.dp, ErrorRed, CaptureRadii.md).padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("!", style = MaterialTheme.typography.titleMedium, color = ErrorRed, modifier = Modifier.padding(end = 10.dp))
+                Text(error, style = MaterialTheme.typography.bodyMedium, color = ErrorRed, modifier = Modifier.weight(1f))
+                TextButton(onClick = onDismissError) { Text("Dismiss", color = ErrorRed) }
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(checked = over18, onCheckedChange = { over18 = it }, enabled = !busy)
-            Text("I confirm I am 18 or older", style = MaterialTheme.typography.bodyMedium)
+        Row(
+            Modifier.fillMaxWidth().background(WarnAmberBg, CaptureRadii.md).padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(20.dp).border(1.dp, WarnAmber, CircleShape), contentAlignment = Alignment.Center) {
+                Text("i", style = MaterialTheme.typography.labelSmall, color = WarnAmber)
+            }
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "Approved captures are paid in TEST-USDC (devnet). Bonded uploads are auto-judged; free uploads are peer-reviewed.",
+                style = MaterialTheme.typography.bodySmall,
+                color = WarnAmber,
+            )
         }
-        Button(onClick = { onConnect(over18) }, enabled = !busy && over18, modifier = Modifier.fillMaxWidth()) {
-            Text("Sign in with wallet")
+        Row(
+            Modifier.fillMaxWidth().background(CaptureSurface2, CaptureRadii.md).border(1.dp, CaptureOutline, CaptureRadii.md).padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(checked = over18, onCheckedChange = { over18 = it }, enabled = !busy)
+            Text("I confirm I am 18 or older", style = MaterialTheme.typography.bodyMedium, color = CaptureInk)
+        }
+        Button(
+            onClick = { onConnect(over18) },
+            enabled = !busy && over18,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = CaptureAccent, contentColor = Color.White, disabledContainerColor = ButtonGrey, disabledContentColor = ButtonGreyInk),
+            shape = CaptureRadii.pill,
+        ) {
+            Text("Sign in with Seeker Wallet", style = MaterialTheme.typography.titleMedium)
         }
     }
 }
@@ -442,7 +470,7 @@ private fun SelectedEditor(s: PilotState, vm: SeekerViewModel, sender: ActivityR
     val kind = bountyKind(selected)
     TextButton(onClick = { vm.close() }, enabled = !s.busy) { Text("\u2190 BACK TO CAPTURE") }
     Text(
-        selected.getJSONObject("bounty").getString("title"),
+        if (selected.isNull("bounty")) "Open capture" else selected.getJSONObject("bounty").getString("title"),
         style = MaterialTheme.typography.titleLarge,
         color = MaterialTheme.colorScheme.onBackground,
     )
@@ -658,7 +686,10 @@ private fun Dashboard(
     s.submissions.forEach { sub ->
         Card(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, CaptureOutline)) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(sub.getJSONObject("bounty").getString("title"), style = MaterialTheme.typography.titleMedium)
+                // Open uploads have no bounty (bounty_id is NULL); render a
+                // fallback title instead of dereferencing a missing object.
+                val title = if (sub.isNull("bounty")) "Open capture" else sub.getJSONObject("bounty").getString("title")
+                Text(title, style = MaterialTheme.typography.titleMedium)
                 val status = sub.getString("status")
                 val id = sub.getString("id")
                 Text(
@@ -1213,7 +1244,8 @@ private fun CapturePhoto(enabled: Boolean, onPhoto: (ByteArray) -> Unit) {
 
 /** The bounty kind governing a submission's media + label shape (`object|place|action`). */
 private fun bountyKind(selected: JSONObject): String =
-    selected.optJSONObject("bounty")?.optString("kind", "object") ?: "object"
+    if (selected.has("kind")) selected.getString("kind")
+    else selected.optJSONObject("bounty")?.optString("kind", "object") ?: "object"
 
 /** Kind-aware noun for reward copy; object keeps the phase-1 "photo", others go neutral. */
 private fun rewardNoun(kind: String): String =

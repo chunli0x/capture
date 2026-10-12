@@ -313,14 +313,31 @@ def sightengine_nudity_pass(data):
     nudity = data.get("nudity")
     if not isinstance(nudity, dict):
         return False
+
+    def _prob(key: str, default: float) -> float:
+        """Coerce one probability to a finite float in [0,1]; fail closed on
+        anything malformed (non-finite, bool, string, out of range)."""
+        raw = nudity.get(key, default)
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            return float("nan")
+        if isinstance(raw, bool) or not (0.0 <= v <= 1.0):
+            return float("nan")
+        return v
+
     # Explicit sexual-content categories. A clean frame scores ~0.001 on each.
     explicit = max(
-        float(nudity.get("sexual_activity", 1)),
-        float(nudity.get("sexual_display", 1)),
-        float(nudity.get("erotica", 1)),
-        float(nudity.get("sextoy", 1)),
+        _prob("sexual_activity", 1.0),
+        _prob("sexual_display", 1.0),
+        _prob("erotica", 1.0),
+        _prob("sextoy", 1.0),
     )
-    suggestive = float(nudity.get("suggestive", 0))
+    suggestive = _prob("suggestive", 0.0)
+    # NaN propagates through max()/comparison as "not < threshold", which would
+    # read as a pass — so reject any non-finite value explicitly.
+    if not (math.isfinite(explicit) and math.isfinite(suggestive)):
+        return False
     if explicit >= 0.5 or suggestive >= 0.7:
         return False
     return True
@@ -348,9 +365,10 @@ def sightengine_video_pass(data):
         faces = frame.get("faces")
         if not isinstance(faces, list) or len(faces) != 0:
             return False
-        # Enforce the nudity model per frame too, mirroring the image path.
-        nudity = frame.get("nudity")
-        if nudity is not None and not sightengine_nudity_pass({"nudity": nudity}):
+        # Enforce the nudity model per frame too, mirroring the image path. A
+        # frame that is MISSING its nudity object fails closed exactly like a
+        # frame with a sexual-content signal — the provider did not analyze it.
+        if not sightengine_nudity_pass(frame):
             return False
     return True
 
@@ -432,26 +450,27 @@ class MediaCipher:
         return self.cipher.decrypt(data[:12], data[12:], digest.encode())
 
 
-def extract_video_frame(mp4: bytes, seek_ratio: float = 0.4) -> bytes:
+def extract_video_frame(mp4: bytes, duration_ms: int | None) -> bytes:
     """Extract one representative JPEG frame from an MP4 for the VLM judge.
 
-    Uses ffmpeg to decode a single frame near ``seek_ratio`` of the clip and
-    re-encode it as a small JPEG (bounded dimensions) so the judge can see the
-    actual ego-centric view. Raises :class:`MediaRejected` if ffmpeg is missing
-    or cannot produce a frame — the caller treats that as "no judge image"
-    rather than a pass.
+    Uses ffmpeg to decode a single frame near 40% of the clip (so the frame is
+    representative of the action, not the opening frame) and re-encode it as a
+    small JPEG (bounded dimensions) so the judge can see the actual ego-centric
+    view. Raises :class:`MediaRejected` if ffmpeg is missing or cannot produce a
+    frame — the caller treats that as "no judge image" rather than a pass.
     """
     import shutil
 
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
         raise MediaRejected("ffmpeg unavailable for video frame extraction")
-    # Seek to ~40% of the clip and grab one frame at bounded scale.
+    # Seek to ~40% of the declared clip duration, in seconds (not a ratio).
+    seek_s = ((duration_ms or 0) / 1000.0) * 0.4
     try:
         proc = subprocess.run(
             [
                 ffmpeg, "-hide_banner", "-loglevel", "error",
-                "-ss", str(seek_ratio), "-i", "pipe:0",
+                "-ss", str(seek_s), "-i", "pipe:0",
                 "-frames:v", "1", "-vf", "scale='min(720,iw)':-2",
                 "-f", "image2pipe", "-vcodec", "mjpeg", "-",
             ],

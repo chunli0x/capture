@@ -260,14 +260,20 @@ fun LevelScreen(s: PilotState, onBack: () -> Unit) {
     androidx.activity.compose.BackHandler(onBack = onBack)
     NavyBackground(Modifier.fillMaxSize().captureScreenMotion()) {
         Column(Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            TextButton(onClick = onBack, modifier = Modifier.align(Alignment.Start)) { Text("← Back") }
-            Text(s.levelName, style = MaterialTheme.typography.displaySmall)
-            LevelRingBadge(s.level, LEVEL_TIERS.getOrNull(s.level + 1)?.let { s.acceptedCount.toFloat() / it.acceptedThreshold } ?: 1f, Modifier.size(72.dp))
-            Text("RATE ×${decimal(s.rateMultiplier)} · BOND ${if (s.bondMultiplier == 0.0) "WAIVED" else "×${decimal(s.bondMultiplier, 1)}"}",
-                style = MaterialTheme.typography.titleMedium, color = MutedGray)
-            ConstellationLadder(s.level)
-            LevelCard(s)
+            verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            TextButton(onClick = onBack, modifier = Modifier.align(Alignment.Start)) { Text("← Back", color = MutedGray) }
+            EditorialHeading("EARN & LEVEL.")
+            EditorialTierLadder(Modifier.fillMaxWidth())
+            Text(
+                "Meet both requirements to level up. Approval rate: last 50 judged submissions.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MutedGray,
+            )
+            Text(
+                "You are ${s.levelName} · ${s.acceptedCount} accepted · RATE ×${decimal(s.rateMultiplier)}",
+                style = MaterialTheme.typography.titleMedium,
+                color = CaptureAccentDeep,
+            )
         }
     }
 }
@@ -293,7 +299,17 @@ fun JudgePendingScreen(image: Bitmap? = null) {
 @Composable
 fun VerdictCard(result: SubmissionResult, onDismiss: () -> Unit, onGallery: () -> Unit = {}, s: PilotState? = null, onCaptureAgain: () -> Unit = onDismiss) {
     if (result.verdict == null) {
-        JudgePendingScreen(s?.image)
+        if (result.pendingReview) {
+            CaptureIcon(CaptureSymbol.VERIFIED, Modifier.size(32.dp), CaptureInk)
+            Text("Submitted for peer review", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "A bonded upload is auto-judged instantly. Yours is in the free review queue — other users will verify it and you'll earn when it's accepted.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MutedGray,
+            )
+        } else {
+            JudgePendingScreen(s?.image)
+        }
         TextButton(onClick = onDismiss) { Text("DISMISS") }
         return
     }

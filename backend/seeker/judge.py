@@ -191,6 +191,8 @@ class AstraJudge(Judge):
             return verdict
         except subprocess.TimeoutExpired:
             raise JudgeUnavailable("judge timed out")
+        except OSError as exc:
+            raise JudgeUnavailable(f"judge failed to launch: {exc}")
         finally:
             for p in (image_path, out_path):
                 try:
@@ -259,7 +261,8 @@ def _parse_verdict(raw: str) -> Verdict | None:
 
 
 def build_judge(settings=None) -> Judge:
-    """Pick the judge: Astra when ``judge_driver=astra``, otherwise the stub."""
+    """Pick the judge: Astra when ``judge_driver=astra``; an unknown non-empty
+    driver is a hard error (never a silent stub); empty driver is the stub."""
     driver = (getattr(settings, "judge_driver", "") if settings else "") or os.environ.get(
         "SEEKER_JUDGE_DRIVER", ""
     )
@@ -272,4 +275,8 @@ def build_judge(settings=None) -> Judge:
             or os.environ.get("SEEKER_JUDGE_TIMEOUT_SECONDS", "90")
         )
         return AstraJudge(codex_bin=codex, timeout_seconds=timeout)
+    if driver:
+        raise RuntimeError(
+            f"Unknown SEEKER_JUDGE_DRIVER {driver!r}; expected '' (stub) or 'astra'"
+        )
     return StubJudge()

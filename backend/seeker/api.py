@@ -447,7 +447,7 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             decoded = cipher.decrypt(s.encrypted_media, s.media_hash)
             if s.kind == "action":
                 try:
-                    judge_image = extract_video_frame(decoded)
+                    judge_image = extract_video_frame(decoded, s.duration_ms)
                 except MediaRejected:
                     judge_image = None
             else:
@@ -1123,6 +1123,10 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             )
         )
         actor.quality_checks += 1
+        # Reaching the free-check threshold is also self-serve enrollment: the
+        # reviewer becomes a worker so they can capture without an operator key.
+        if actor.quality_checks >= QUALITY_CHECKS_REQUIRED:
+            actor.worker = True
         db.flush()
         reviews = db.scalars(
             select(Review).where(Review.submission_id == sid)
@@ -1294,6 +1298,9 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             if not actor.skr_funded:
                 fail(409, "Get test SKR first")
             actor.bonded = True
+            # Bonding is the self-serve worker enrollment: an unlocked account
+            # must be able to capture without the operator-key /operator/enroll.
+            actor.worker = True
         return {"bonded": True}
 
     @app.post("/bond/{action}/prepare")

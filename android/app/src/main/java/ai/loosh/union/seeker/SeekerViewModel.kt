@@ -32,7 +32,8 @@ private fun JSONArray.objects() = (0 until length()).map { getJSONObject(it) }
 
 /** The bounty kind governing a submission's media + label shape (`object|place|action`). */
 private fun bountyKindOf(submission: JSONObject): String =
-    submission.optJSONObject("bounty")?.optString("kind", "object") ?: "object"
+    if (submission.has("kind")) submission.getString("kind")
+    else submission.optJSONObject("bounty")?.optString("kind", "object") ?: "object"
 
 /** Serializes a [BountyDraft] to the create-bounty request body the server expects. */
 private fun BountyDraft.toJson(): JSONObject {
@@ -696,7 +697,8 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         val payoutUsdc = result.optInt("payout_usdc", 0)
         val levelAfter =
             if (result.has("level_after")) result.optInt("level_after", -1).takeIf { it >= 0 } else null
-        return buildSubmissionResult(accepted, reason, payoutUsdc, levelAfter)
+        val status = result.optString("status", "")
+        return buildSubmissionResult(accepted, reason, payoutUsdc, levelAfter, status)
     }
 
     /** Posture is the one required secondary dimension in v2; refuse to mint a label without it. */

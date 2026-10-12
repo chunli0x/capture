@@ -87,9 +87,10 @@ fun LivenessScreen(
         Modifier.fillMaxSize().padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text("Prove you're human", style = MaterialTheme.typography.headlineSmall)
+        Text("Are you human?", style = MaterialTheme.typography.headlineSmall)
         Text(
-            "This check runs on your device. Your face never leaves your phone.",
+            "A quick on-device motion check (e.g. blink or turn your head). " +
+                "Nothing is recorded or uploaded — your face never leaves your phone.",
             style = MaterialTheme.typography.bodyMedium,
         )
 

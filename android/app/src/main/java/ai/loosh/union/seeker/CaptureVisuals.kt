@@ -3,6 +3,7 @@ package ai.loosh.union.seeker
 import ai.loosh.union.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,11 +22,14 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ai.loosh.union.R
 import kotlin.math.*
 
 /** Applied once at each screen root; cards never repeat the canvas gradient. */
@@ -80,19 +84,21 @@ fun GlassCard(modifier: Modifier = Modifier, tint: Color = CaptureAccent, conten
 
 @Composable
 fun CaptureMark(modifier: Modifier = Modifier) {
-    Canvas(modifier.semantics { contentDescription = "Capture" }) {
-        val u = size.minDimension
-        drawCircle(CaptureGradients.ring, u * .34f, center, style = Stroke(u * .075f, cap = StrokeCap.Round))
-        val bracket = Path().apply { moveTo(u * .12f, u * .36f); lineTo(u * .12f, u * .12f); lineTo(u * .36f, u * .12f) }
-        drawPath(bracket, CaptureInk, style = Stroke(u * .04f, cap = StrokeCap.Round))
-    }
+    // The retro pop-art camera mark (the identity image). Rendered from the
+    // bundled art rather than drawn vectors, so it matches the brand exactly.
+    Image(
+        painter = painterResource(R.drawable.capture_camera_art),
+        contentDescription = "Capture",
+        modifier = modifier,
+        contentScale = ContentScale.Fit,
+    )
 }
 
 @Composable
 fun CaptureWordmark() {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         CaptureMark(Modifier.size(28.dp))
-        Text("Capture", style = MaterialTheme.typography.displaySmall.copy(fontSize = 20.sp, lineHeight = 24.sp), color = CaptureInk)
+        Text("CAPTURE", style = MaterialTheme.typography.displaySmall.copy(fontSize = 20.sp, lineHeight = 24.sp), color = CaptureInk)
     }
 }
 

@@ -182,9 +182,11 @@ private fun TutorialLabelingScreen() {
 
 @Composable
 private fun TutorialEarnLevelScreen() {
-    Text("Earn & level", style = MaterialTheme.typography.displaySmall)
-    ConstellationLadder(compact = true)
-    Box(Modifier.fillMaxWidth().background(CaptureGradients.action, CaptureRadii.xl).padding(20.dp)) {
-        Text("Rate ×1.0 → ×1.5 · Bond waived at Pathfinder.", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
-    }
+    EditorialHeading("EARN & LEVEL.")
+    EditorialTierLadder(Modifier.fillMaxWidth())
+    Text(
+        "Meet both requirements to level up. Approval rate: last 50 judged submissions.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MutedGray,
+    )
 }
