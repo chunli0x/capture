@@ -197,7 +197,7 @@ def do_liveness(c, h, wallet, task_id="capture-session"):
     r = c.post(
         "/liveness/complete",
         headers=h,
-        json={"contributor": wallet, "session_id": session_id, "result_digest": "0" * 64},
+        json={"contributor": wallet, "session_id": session_id, "result_digest": "ab" * 32},
     )
     assert r.status_code == 200, r.text
     return r.json()["liveness_proof_hash"]
@@ -642,7 +642,7 @@ def test_liveness_requires_matching_wallet(pilot):
         json={
             "contributor": str(keys[0].pubkey()),
             "session_id": session_id,
-            "result_digest": "0" * 64,
+            "result_digest": "ab" * 32,
         },
     )
     assert r.status_code == 403

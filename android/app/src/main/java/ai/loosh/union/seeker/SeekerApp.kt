@@ -210,6 +210,7 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
         BondScreen(
             s = s,
             vm = vm,
+            sender = sender,
             onReviewQueue = { showReviewQueue = true },
         )
         return
@@ -545,6 +546,7 @@ private fun CaptureHome(
                     LevelCard(s)
                     MetricTiles(s)
                     RateTicker(s)
+                    SettleEarnings(s, vm)
                     Text("DEVNET · TEST-USDC REWARDS · TEST-SKR BOND", style = MaterialTheme.typography.labelSmall, color = MutedGray)
                     WalletActions(s, vm)
                     Dashboard(s, creating, onCreatingChange, vm, sender)
@@ -575,6 +577,30 @@ private fun CaptureHome(
                 }
             }
             item(key = "rank") { ProgressRingCard(s, onLevel) }
+        }
+    }
+}
+
+@Composable
+private fun SettleEarnings(s: PilotState, vm: SeekerViewModel) {
+    CapturePanel(Modifier.fillMaxWidth(), elevated = true) {
+        Text("ACCRUED EARNINGS", style = MaterialTheme.typography.labelMedium, color = MutedGray)
+        Text(
+            String.format(java.util.Locale.US, "%.2f TEST-USDC", s.pendingUsdc / 1_000_000.0),
+            style = CaptureNumeric,
+            color = CaptureAccent,
+        )
+        Text(
+            "Accepted uploads accrue here. Settling sends the balance to your wallet in one transfer.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MutedGray,
+        )
+        Button(
+            onClick = { vm.settle() },
+            enabled = !s.busy && s.pendingUsdc > 0,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Settle to wallet")
         }
     }
 }

@@ -48,7 +48,36 @@ def apply_migrations(engine):
                 )
             applied += 1
     applied += apply_nullability_migrations(engine)
+    applied += apply_index_migrations(engine)
     return applied
+
+
+def apply_index_migrations(engine):
+    """Create DB-enforced indexes the ADD COLUMN framework cannot express.
+
+    Finding 11: open (bounty_id IS NULL) uploads had no uniqueness constraint,
+    because ``UNIQUE(bounty_id, media_hash)`` treats every NULL bounty_id as
+    distinct. A PostgreSQL partial unique index on the exact media_hash (where
+    bounty_id IS NULL) closes the cross-wallet duplicate race at the database,
+    not just in application code. SQLite partial indexes are supported too but
+    the deployed backend is PostgreSQL; both paths are provided.
+    """
+    applied = 0
+    inspector = inspect(engine)
+    if not inspector.has_table("seeker_submissions"):
+        return 0
+    index_name = "uq_open_upload_media_hash"
+    existing = {ix["name"] for ix in inspector.get_indexes("seeker_submissions")}
+    if index_name in existing:
+        return 0
+    ddl = (
+        "CREATE UNIQUE INDEX uq_open_upload_media_hash "
+        "ON seeker_submissions (media_hash) "
+        "WHERE bounty_id IS NULL AND media_hash IS NOT NULL"
+    )
+    with engine.begin() as conn:
+        conn.exec_driver_sql(ddl)
+    return applied + 1
 
 
 def apply_nullability_migrations(engine):

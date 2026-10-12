@@ -16,6 +16,7 @@ from seeker.db import Base, Challenge, Review, Submission, now
 from seeker.media import (
     MediaCipher,
     MediaRejected,
+    ModerationUnavailable,
     canonicalize,
     sightengine_nudity_pass,
     sightengine_pass,
@@ -469,8 +470,10 @@ def test_provider_contract_fail_closed():
     }
     assert sightengine_nudity_pass({"nudity": clean})
     assert not sightengine_nudity_pass({"nudity": {**clean, "erotica": 0.8}})
-    assert not sightengine_nudity_pass({})
-    with pytest.raises(KeyError):
+    # Malformed/missing responses are now an OUTAGE (raise), not a pass/fail.
+    with pytest.raises(ModerationUnavailable):
+        sightengine_nudity_pass({})
+    with pytest.raises(ModerationUnavailable):
         sightengine_pass({"status": "success"})
     with pytest.raises(MediaRejected):
         canonicalize(b"bad")
@@ -554,7 +557,8 @@ async def test_moderation_errors_do_not_pass(pilot, monkeypatch):
     monkeypatch.delenv("all_proxy", raising=False)
     settings = pilot[-1]
     m = Moderation(settings)
-    with pytest.raises(MediaRejected):
+    # Unconfigured moderation is now an outage (503 path), not a strike.
+    with pytest.raises(ModerationUnavailable):
         await m.scan(png())
     settings.sightengine_user = "user"
     settings.sightengine_secret = "secret"
@@ -563,7 +567,7 @@ async def test_moderation_errors_do_not_pass(pilot, monkeypatch):
         raise httpx.ReadTimeout("timeout")
 
     monkeypatch.setattr(httpx.AsyncClient, "post", unavailable)
-    with pytest.raises(MediaRejected):
+    with pytest.raises(ModerationUnavailable):
         await m.scan(png())
 
     async def incomplete(*args, **kwargs):
@@ -572,5 +576,5 @@ async def test_moderation_errors_do_not_pass(pilot, monkeypatch):
         )
 
     monkeypatch.setattr(httpx.AsyncClient, "post", incomplete)
-    with pytest.raises(MediaRejected):
+    with pytest.raises(ModerationUnavailable):
         await m.scan(png())

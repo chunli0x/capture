@@ -200,6 +200,15 @@ class LivenessSessionStore:
                 f"the challenge expired {now - session.expires_at:.0f}s ago; "
                 "request a new session"
             )
+        # Reject a degenerate result digest (empty or all-zero bytes). A real
+        # on-device ML Kit challenge produces a hash over detected landmark
+        # motion; an empty/zero digest is the trivial bypass where a client
+        # sends `"0" * 64` without running any challenge. This is a hard gate,
+        # not proof — the server still cannot cryptographically verify the
+        # motion itself (no camera stream crosses the wire), so liveness remains
+        # an on-device assertion with per-wallet rate limits, as documented.
+        if len(result_digest) == 0 or result_digest == b"\x00" * len(result_digest):
+            raise LivenessError("result_digest is degenerate (empty or all-zero)")
 
         digest = proof_hash(
             nonce=session.nonce,

@@ -1,32 +1,39 @@
 # Capture
 
-**Ground truth, from the ground up.**
+**Labeled ground-level data, human-captured.**
 
-Capture is an open-upload data-labeling network for **ground-level egocentric
+Capture is a mobile data-labeling network for **ground-level egocentric
 capture** — a photo or short video shot six to twelve inches off the ground,
 angled forward or up. Anyone with a phone can prove they are human, capture
 physical-world media, and label it against a structured taxonomy in exchange
-for devnet **TEST-USDC**, backed by a slashable **TEST-SKR** quality bond. It
-is built for the CLOCK IN hackathon (Solana Mobile × RadiantsDAO, September 8
-– October 8 2026).
+for devnet **test-USDC**, backed by a slashable **test-SKR** quality bond. It
+is built for the CLOCK IN hackathon (Solana Mobile × RadiantsDAO) and runs on
+**Solana Seeker Mobile**.
+
+![Capture screens](docs/screens.png)
 
 ## How it works
 
-1. **Prove human (liveness gate).** Before a first upload, the backend issues
-   a fresh, single-use motion challenge (blink, turn left, turn right, smile).
+1. **Prove human (liveness gate).** Before a first upload, the backend issues a
+   fresh, single-use motion challenge (blink, turn left, turn right, smile).
    The check runs on-device; no biometric material leaves the phone. This is a
    liveness gate, not bank-grade anti-spoofing.
-2. **Capture.** The worker records ground-level egocentric capture — the
-   camera held 6–12 inches off the ground, angled forward or up — as a photo
-   (an object or place) or a short video (an action).
-3. **Label.** The worker applies the six label dimensions described below.
-4. **Judge.** A vision-language-model quality judge accepts or rejects each
+2. **Capture.** The worker records ground-level egocentric capture — the camera
+   held 6–12 inches off the ground, angled forward or up — as a photo (an
+   object or place) or a short video (an action).
+3. **Moderate.** Moderation runs first, fail-closed: Sightengine nudity-2.0,
+   face-age, and genai detection. An outage blocks with 503 — it never strikes
+   a worker's bond, and never passes silently.
+4. **Label.** The worker applies six label dimensions against a server-owned
+   closed vocabulary.
+5. **Judge.** A vision-language-model quality judge accepts or rejects each
    submission (gpt-6-astra via the Codex CLI, behind `backend/seeker/judge.py`).
-5. **Record.** An accepted submission accrues a TEST-USDC payout (base rate ×
+6. **Settle.** An accepted submission accrues a test-USDC payout (base rate ×
    level multiplier × label premium) off-chain and advances the worker's level;
    a media-policy violation triggers the two-strike bond ladder — first strike
    `warn` (bond intact), second strike `slash` (full bond drained on-chain to a
-   penalty vault). Payouts settle on-chain in a batched transfer.
+   penalty vault). Payouts settle on-chain in a batched transfer
+   (`POST /bond/settle`).
 
 ## Label dimensions
 
@@ -37,7 +44,7 @@ Six dimensions, drawn from a server-owned closed vocabulary (`GET /taxonomy`):
 | OBJECT      | yes      | bounding box(es) around the object |
 | PLACE       | yes      | a single scene class |
 | ACTION      | yes      | a video trim plus one tag |
-| POSTURE     | yes      | the subject's pose (required in v2) |
+| POSTURE     | yes      | the subject's pose |
 | EXPRESSION  | no       | facial expression |
 | ENVIRONMENT | no       | indoor/outdoor, time, weather, surface, light |
 
@@ -47,24 +54,24 @@ image would do).
 
 ## Progression
 
-Five levels, gated by both a cumulative accepted-count and a rolling
-acceptance rate over the last 50 judged submissions:
+Five levels, gated by both a cumulative accepted-count and a rolling acceptance
+rate over the last 50 judged submissions:
 
 ```
 Scout → Regular → Veteran → Expert → Pathfinder
 ```
 
-Every contributor is at least a Scout. The TEST-SKR bond requirement scales
-down with level and is waived at Pathfinder.
+Every contributor is at least a Scout. The test-SKR bond requirement scales down
+with level and is waived at Pathfinder.
 
 ## Tokens & settlement
 
-- **TEST-USDC** — payroll. A devnet test token, never real USDC.
-- **TEST-SKR** — the slashable quality bond, escrowed on-chain in a real
+- **test-USDC** — payroll. A devnet test token, never real USDC.
+- **test-SKR** — the slashable quality bond, escrowed on-chain in a real
   staking contract. A devnet fixture mint.
 
 Settlement is **real on-chain transfer**: the SKR bond escrows on-chain at
-deposit, and accepted payouts transfer TEST-USDC from the treasury in a batched
+deposit, and accepted payouts transfer test-USDC from the treasury in a batched
 settle (`POST /bond/settle`). A media-policy violation warns, and a second
 violation slashes the entire bond to a penalty vault.
 
@@ -81,14 +88,21 @@ October 12 2026:
 
 - Deployed to **Solana devnet**; backend live at `https://capture.magnumopus.ai`.
 - **119 backend tests** and **114 Android tests** pass.
+- The SKR bond is a real on-chain staking contract with full slash, live on
+  devnet.
 - Everything here runs on **devnet test tokens**.
 
 Not done / honest caveats:
 
 - Liveness is an on-device motion challenge, not bank-grade anti-spoofing
-  (device attestation is a roadmap item).
+  (device attestation is a roadmap item). A degenerate (all-zero) result digest
+  is rejected, but the server cannot cryptographically verify the motion itself.
 - Moderation (Sightengine nudity + face-age + genai) is fail-closed in code,
   not validated as a compliance claim.
+- The ground-level angle is asserted by the human and checked by the judge, not
+  yet enforced by measured device pose (capture-verification is a roadmap item).
+- Sybil resistance is partial: the bond raises the cost of fake accounts but
+  does not eliminate them.
 
 ## Repository layout
 
@@ -102,7 +116,8 @@ Not done / honest caveats:
 │   └── tests/          backend test suite
 ├── programs/           Anchor workspaces
 │   └── seeker-bounty/  on-chain settlement + SKR bond program
-├── scripts/            devnet bootstrap, deploy, and demo helpers
+├── scripts/            devnet bootstrap and demo helpers
+├── docs/               deck + screenshot assets
 └── .github/            CI workflows
 ```
 
@@ -153,8 +168,8 @@ Notes:
   `SEEKER_LOCAL_SQLITE=true SEEKER_DATABASE_URL=sqlite:///./seeker.db ./scripts/dev_bootstrap.sh`).
 - The dependency set is tested on Python 3.11. If `python3` is a newer minor,
   pass `PYTHON=python3.11 ./scripts/dev_bootstrap.sh`.
-- Media moderation (Sightengine/Hive) is unconfigured by default, so uploads
-  reject — that is expected and safe. The API still starts and `/health` still
+- Media moderation (Sightengine) is unconfigured by default, so uploads block
+  with 503 — that is expected and safe. The API still starts and `/health` still
   responds.
 
 ## Build & run

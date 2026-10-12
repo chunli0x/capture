@@ -30,11 +30,13 @@ from .db import (
     Rate,
     Review,
     Submission,
+    Violation,
     now,
 )
 from .media import (
     MediaCipher,
     MediaRejected,
+    ModerationUnavailable,
     Moderation,
     canonicalize,
     canonicalize_video,
@@ -322,7 +324,7 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             fail(409, "Claim expired")
         return s, b.kind == "action"
 
-    def enforce_media_policy(wallet):
+    def enforce_media_policy(wallet, media_hash=None):
         """Two-strike media-policy ladder, settled on-chain via the worker's
         bond. Reads the on-chain warnings counter, then issues ``warn`` (first
         strike -> 422) or ``slash`` (second strike -> 403) signed by the
@@ -333,7 +335,25 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
         The program's ladder requires ``warnings >= 2`` before a slash is legal
         (``warn`` advances 0 -> 1 -> 2), so a second strike issues one more
         warn to reach the threshold, then slashes the bond. ``slashed`` is the
-        on-chain terminal state (warnings == 255); no separate DB flag."""
+        on-chain terminal state (warnings == 255); no separate DB flag.
+
+        Idempotency (finding 4): a (worker, media_hash) that was already
+        punished is not struck again — retrying the same rejected upload must
+        not consume a second strike.
+        """
+        if media_hash:
+            with database.transaction() as db:
+                already = db.scalar(
+                    select(Violation.id).where(
+                        Violation.worker == wallet,
+                        Violation.media_hash == media_hash,
+                    )
+                )
+                if already is not None:
+                    warnings = chain.bond_warnings(wallet)
+                    if warnings >= 2:
+                        fail(403, "Media policy violation (second strike): bond slashed")
+                    fail(422, "Media policy violation: warning already issued on your bond")
         try:
             warnings = chain.bond_warnings(wallet)
         except ChainUnavailable as exc:
@@ -343,6 +363,9 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
                 chain.issue("warn", wallet)
             except ChainUnavailable as exc:
                 fail(503, f"Media rejected and warning failed: {exc}")
+            if media_hash:
+                with database.transaction() as db:
+                    db.add(Violation(worker=wallet, media_hash=media_hash, created=now()))
             fail(422, "Media policy violation: first warning issued on your bond")
         try:
             if warnings < 2:
@@ -350,6 +373,15 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             chain.issue("slash", wallet)  # full vault forfeit
         except ChainUnavailable as exc:
             fail(503, f"Media rejected and slash failed: {exc}")
+        # The bond is now terminal on-chain. Clear the worker's enrollment so a
+        # slashed wallet cannot keep earning on a stale `bonded` flag (finding
+        # 3). A slashed worker must re-deposit a fresh bond to participate.
+        with database.transaction() as db:
+            if media_hash:
+                db.add(Violation(worker=wallet, media_hash=media_hash, created=now()))
+            actor = lock(db, Actor, wallet)
+            actor.bonded = False
+            actor.worker = False
         fail(403, "Media policy violation (second strike): bond slashed")
 
     def _check_category(kind, cid):
@@ -1039,8 +1071,10 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             return {"media_hash": existing}
 
         # Moderation is network I/O: no DB transaction is held across it. A
-        # rejection here is a media-policy violation and enforces the two-strike
-        # warn/slash ladder on the worker's bond (not a plain 422).
+        # MediaRejected here is a media-policy violation and enforces the
+        # two-strike warn/slash ladder on the worker's bond. A
+        # ModerationUnavailable (provider down, malformed response, unconfigured)
+        # is an outage, NOT misconduct — it must 503 without a strike.
         try:
             verdict = (
                 await moderator.scan_video(data)
@@ -1048,8 +1082,10 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
                 else await moderator.scan(data)
             )
         except MediaRejected as exc:
-            await run_in_threadpool(enforce_media_policy, actor.wallet)
+            await run_in_threadpool(enforce_media_policy, actor.wallet, media_hash)
             fail(422, str(exc))  # unreachable: enforce_media_policy always fails
+        except ModerationUnavailable as exc:
+            fail(503, f"Moderation unavailable: {exc}")
 
         def finalize():
             with database.transaction() as db:
@@ -1383,19 +1419,44 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
 
         Accepted uploads credit ``pending_usdc`` off-chain; this endpoint drains
         the whole balance to the worker's USDC ATA in one treasury transaction
-        (fee minimization: one tx per settle, not one per accepted upload)."""
+        (fee minimization: one tx per settle, not one per accepted upload).
+
+        Durability (finding 1): the balance is moved pending -> settling and
+        committed BEFORE the treasury transfer is broadcast. On a confirmed
+        transfer, settling is cleared; on failure, settling is restored to
+        pending. A dropped/lost transaction can no longer lose earnings or be
+        double-paid on retry.
+        """
         with database.transaction() as db:
             actor = lock(db, Actor, actor.wallet)
             if not actor.worker:
                 fail(403, "Worker enrollment required")
+            # Restore any previously-failed settle before accruing the new amount.
+            if actor.settling_usdc > 0:
+                actor.pending_usdc += actor.settling_usdc
+                actor.settling_usdc = 0
             amount = actor.pending_usdc
             if amount <= 0:
                 return {"settled": 0, "signature": None, "pending_usdc": 0}
-            try:
-                signature = chain.settle_usdc(actor.wallet, amount)
-            except ChainUnavailable as exc:
-                fail(503, f"Settlement unavailable: {exc}")
+            # Commit the reservation before any network I/O.
             actor.pending_usdc = 0
+            actor.settling_usdc = amount
+
+        # Network I/O outside the lock: broadcast the treasury transfer.
+        try:
+            signature = chain.settle_usdc(actor.wallet, amount)
+        except ChainUnavailable as exc:
+            # Restore the reserved balance: the transfer did not confirm.
+            with database.transaction() as db:
+                worker = lock(db, Actor, actor.wallet)
+                worker.settling_usdc = 0
+                worker.pending_usdc += amount
+            fail(503, f"Settlement unavailable: {exc}")
+
+        # Confirmed: clear the reservation atomically.
+        with database.transaction() as db:
+            worker = lock(db, Actor, actor.wallet)
+            worker.settling_usdc = 0
         return {"settled": amount, "signature": signature, "pending_usdc": 0}
 
     @app.post("/bond/{action}/prepare")

@@ -29,15 +29,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 
 /**
- * The hard gate before a first upload: deposit a $20 SKR bond OR complete free
- * quality checks. Rendered whenever `/me` reports `unlocked == false`.
+ * The hard gate before a first upload: deposit the minimum TEST-SKR bond, a
+ * real on-chain escrow. Rendered whenever `/me` reports `unlocked == false`.
  */
 @Composable
 fun BondScreen(
     s: PilotState,
     vm: SeekerViewModel,
+    sender: ActivityResultSender,
     onReviewQueue: () -> Unit,
 ) {
     NavyBackground(Modifier.fillMaxSize().captureScreenMotion()) {
@@ -53,14 +55,15 @@ fun BondScreen(
             CaptureWordmark()
             Text("Unlock Capture", style = MaterialTheme.typography.displaySmall)
             Text(
-                "Before your first upload, choose one path: deposit a SKR bond for instant judging, " +
-                    "or complete a few free quality checks on other users' submissions.",
+                "Before your first capture, deposit the minimum TEST-SKR bond. It is a real " +
+                    "on-chain escrow — the tokens are transferred out of your wallet and can be " +
+                    "slashed for invalid submissions.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MutedGray,
                 textAlign = TextAlign.Center,
             )
             if (s.unlocked) UnlockedBanner()
-            BondCard(s, vm)
+            BondCard(s, vm, sender)
             QualityCheckCard(s, vm, onReviewQueue)
         }
     }
@@ -85,11 +88,12 @@ private fun UnlockedBanner() {
 }
 
 @Composable
-private fun BondCard(s: PilotState, vm: SeekerViewModel) {
+private fun BondCard(s: PilotState, vm: SeekerViewModel, sender: ActivityResultSender) {
     CapturePanel(Modifier.fillMaxWidth(), elevated = true) {
-        Text("DEPOSIT \$20 SKR BOND", style = MaterialTheme.typography.labelMedium, color = CaptureAccentBright)
+        Text("DEPOSIT THE MINIMUM TEST-SKR BOND", style = MaterialTheme.typography.labelMedium, color = CaptureAccentBright)
         Text(
-            "\$20 of SKR unlocks instant judging on your uploads. The devnet bond is recorded server-side, not transferred.",
+            "The minimum TEST-SKR bond is a real on-chain escrow. Your tokens are transferred " +
+                "into the contract and can be slashed for invalid work; withdraw what remains later.",
             style = MaterialTheme.typography.bodySmall,
             color = MutedGray,
         )
@@ -97,7 +101,7 @@ private fun BondCard(s: PilotState, vm: SeekerViewModel) {
             s.bonded -> DoneRow("Bond deposited — instant judging is on.")
             s.bondFunded -> {
                 DoneRow("Test SKR funded.")
-                Button(onClick = { vm.depositBond() }, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = { vm.depositBond(sender) }, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) {
                     Text("Deposit bond")
                 }
             }
@@ -120,9 +124,10 @@ private fun QualityCheckCard(s: PilotState, vm: SeekerViewModel, onReviewQueue: 
     val required = s.qualityChecksRequired
     val done = required > 0 && s.qualityChecks >= required
     CapturePanel(Modifier.fillMaxWidth(), elevated = true) {
-        Text("START FREE — QUALITY CHECKS", style = MaterialTheme.typography.labelMedium, color = CaptureAccentBright)
+        Text("QUALITY CHECKS", style = MaterialTheme.typography.labelMedium, color = CaptureAccentBright)
         Text(
-            "Review other users' submissions to unlock capturing for free. Free-tier uploads are peer-reviewed; bonded uploads get instant judging.",
+            "Reviewing other users' submissions helps the network, but it does not yet unlock " +
+                "capturing — depositing the bond is the only unlock route today.",
             style = MaterialTheme.typography.bodySmall,
             color = MutedGray,
         )

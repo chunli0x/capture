@@ -50,6 +50,10 @@ pub mod seeker_bounty {
             bond.pending = 0;
         }
         require_keys_eq!(bond.worker, ctx.accounts.worker.key(), Error::Unauthorized);
+        // Finding 17: a terminally-slashed bond (warnings >= 2) must refuse new
+        // deposits — funds escrowed into a slashed vault can never be withdrawn
+        // and stay forfeit. Reject rather than silently accept unusable money.
+        require!(bond.warnings < 2, Error::Slashed);
         bond.unlock_at = Clock::get()?
             .unix_timestamp
             .checked_add(COOLDOWN)

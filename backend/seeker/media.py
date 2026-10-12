@@ -18,7 +18,14 @@ MAX_VIDEO_BYTES = 100 * 1024 * 1024
 
 
 class MediaRejected(ValueError):
-    pass
+    """A genuine, affirmatively-analyzed policy violation (nudity, face, genai,
+    non-photo). Strikes the worker's bond ladder."""
+
+
+class ModerationUnavailable(Exception):
+    """The moderation provider could not be reached or returned an unusable
+    response (missing config, HTTP error, malformed structure or scores). The
+    caller must 503 WITHOUT striking the worker — an outage is not misconduct."""
 
 
 def canonicalize(raw: bytes):
@@ -293,11 +300,14 @@ def canonicalize_video(raw, max_bytes=MAX_VIDEO_BYTES, max_seconds=MAX_VIDEO_SEC
 
 
 def sightengine_pass(data):
-    if data["status"] != "success" or not isinstance(data["faces"], list):
-        return False
+    if data.get("status") != "success":
+        raise ModerationUnavailable("moderation provider did not report success")
+    faces = data.get("faces")
+    if not isinstance(faces, list):
+        raise ModerationUnavailable("moderation response is missing the faces list")
     # Conservative object-only pilot: do not admit any detected real faces.
     # Age detection alone cannot prove absence of minors with obscured faces.
-    return len(data["faces"]) == 0
+    return len(faces) == 0
 
 
 def sightengine_nudity_pass(data):
@@ -307,26 +317,34 @@ def sightengine_nudity_pass(data):
     known-CSAM hash matching (PhotoDNA/MD5) the way Hive did — this is a
     classifier over nudity/sexual-content probabilities, not a known-abuse
     database lookup. For the devnet pilot (ground-level egocentric capture)
-    that is an accepted, documented tradeoff. Fails closed on a missing or
-    malformed nudity object.
+    that is an accepted, documented tradeoff. Raises ModerationUnavailable on
+    a missing or malformed nudity object (an outage, not misconduct), and
+    returns False only for an affirmative sexual-content signal.
     """
     nudity = data.get("nudity")
     if not isinstance(nudity, dict):
-        return False
+        raise ModerationUnavailable("moderation response is missing the nudity object")
 
     def _prob(key: str, default: float) -> float:
-        """Coerce one probability to a finite float in [0,1]; fail closed on
-        anything malformed (non-finite, bool, string, out of range)."""
+        """Coerce one probability to a finite float in [0,1]. Raises
+        ModerationUnavailable on anything malformed (non-finite, bool, string,
+        out of range) — a malformed score means the provider did not give a
+        usable verdict, so fail closed as an outage, never as a strike."""
         raw = nudity.get(key, default)
+        if isinstance(raw, bool):
+            raise ModerationUnavailable(f"malformed nudity probability {key!r}")
         try:
             v = float(raw)
         except (TypeError, ValueError):
-            return float("nan")
-        if isinstance(raw, bool) or not (0.0 <= v <= 1.0):
-            return float("nan")
+            raise ModerationUnavailable(f"malformed nudity probability {key!r}")
+        if not math.isfinite(v) or not (0.0 <= v <= 1.0):
+            raise ModerationUnavailable(f"non-finite nudity probability {key!r}")
         return v
 
     # Explicit sexual-content categories. A clean frame scores ~0.001 on each.
+    # Each probability is validated individually BEFORE aggregation: a NaN in
+    # any one slot can no longer be silently ignored by max() and read as a
+    # pass (finding 13).
     explicit = max(
         _prob("sexual_activity", 1.0),
         _prob("sexual_display", 1.0),
@@ -334,10 +352,6 @@ def sightengine_nudity_pass(data):
         _prob("sextoy", 1.0),
     )
     suggestive = _prob("suggestive", 0.0)
-    # NaN propagates through max()/comparison as "not < threshold", which would
-    # read as a pass — so reject any non-finite value explicitly.
-    if not (math.isfinite(explicit) and math.isfinite(suggestive)):
-        return False
     if explicit >= 0.5 or suggestive >= 0.7:
         return False
     return True
@@ -350,19 +364,22 @@ def sightengine_genai_pass(data):
     optional per-generator breakdown under ``type.ai_generators``. A value at
     or above the threshold means the frame is likely synthetic (Midjourney,
     Stable Diffusion, DALL-E, etc.) — which Capture must exclude, since the
-    product is real ground-level capture. Fails closed on a missing or
-    malformed ``type`` object, mirroring the other moderation checks.
+    product is real ground-level capture. Raises ModerationUnavailable on a
+    missing or malformed ``type`` object (an outage, not misconduct), and
+    returns False only for an affirmative synthetic signal.
     """
     type_obj = data.get("type")
     if not isinstance(type_obj, dict):
-        return False
+        raise ModerationUnavailable("moderation response is missing the type object")
     raw = type_obj.get("ai_generated")
+    if isinstance(raw, bool):
+        raise ModerationUnavailable("malformed ai_generated probability")
     try:
         v = float(raw)
     except (TypeError, ValueError):
-        return False
-    if isinstance(raw, bool) or not math.isfinite(v) or not (0.0 <= v <= 1.0):
-        return False
+        raise ModerationUnavailable("malformed ai_generated probability")
+    if not math.isfinite(v) or not (0.0 <= v <= 1.0):
+        raise ModerationUnavailable("non-finite ai_generated probability")
     return v < 0.5
 
 
@@ -378,26 +395,27 @@ def sightengine_video_pass(data):
     image path.
     """
     if data.get("status") != "success":
-        return False
+        raise ModerationUnavailable("video moderation did not report success")
     frames = (data.get("data") or {}).get("frames")
     if not isinstance(frames, list) or len(frames) == 0:
-        return False
+        raise ModerationUnavailable("video moderation returned no analyzed frames")
     for frame in frames:
         if not isinstance(frame, dict):
-            return False
+            raise ModerationUnavailable("video moderation returned a malformed frame")
         faces = frame.get("faces")
-        if not isinstance(faces, list) or len(faces) != 0:
+        if not isinstance(faces, list):
+            raise ModerationUnavailable("video frame is missing its faces list")
+        if len(faces) != 0:
             return False
         # Enforce the nudity model per frame too, mirroring the image path. A
-        # frame that is MISSING its nudity object fails closed exactly like a
-        # frame with a sexual-content signal — the provider did not analyze it.
+        # frame that is MISSING its nudity object fails closed as an outage,
+        # exactly like a malformed score — the provider did not analyze it.
         if not sightengine_nudity_pass(frame):
             return False
-    # Reject AI-generated clips: a synthetic video is not real capture. genai
-    # scores sit at the top level of the sync-video response (not per frame);
-    # check once against the payload. Missing/absent -> fail closed.
-    if not sightengine_genai_pass(data):
-        return False
+        # genai scores for video sit under EACH frame's ``type.ai_generated``,
+        # not the top level (finding 5). A synthetic frame rejects the clip.
+        if not sightengine_genai_pass(frame):
+            return False
     return True
 
 
@@ -408,7 +426,7 @@ class Moderation:
     async def scan(self, data: bytes):
         s = self.settings
         if not (s.sightengine_user and s.sightengine_secret):
-            raise MediaRejected("Moderation service is not configured")
+            raise ModerationUnavailable("Moderation service is not configured")
         try:
             async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
                 sight = await client.post(
@@ -422,6 +440,8 @@ class Moderation:
                 )
                 sight.raise_for_status()
                 payload = sight.json()
+                # A policy verdict (return False) is a strike; a malformed or
+                # missing response (raise) is an outage and must NOT strike.
                 if (
                     not sightengine_pass(payload)
                     or not sightengine_nudity_pass(payload)
@@ -434,16 +454,19 @@ class Moderation:
                     "sightengine": "pass",
                     "sha256": hashlib.sha256(data).hexdigest(),
                 }
+        except ModerationUnavailable:
+            raise
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
-            raise MediaRejected("Moderation unavailable or image not approved") from exc
+            raise ModerationUnavailable("Moderation unavailable") from exc
 
     async def scan_video(self, data: bytes):
         """Video moderation. Fails closed: if a provider cannot scan the video
         (unconfigured, error, or a non-video verdict), the submission is blocked —
-        never default-PASS."""
+        never default-PASS. An outage raises ModerationUnavailable (503, no
+        strike); a real policy verdict raises MediaRejected (strike)."""
         s = self.settings
         if not (s.sightengine_user and s.sightengine_secret):
-            raise MediaRejected("Video moderation service is not configured")
+            raise ModerationUnavailable("Video moderation service is not configured")
         try:
             async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
                 sight = await client.post(
@@ -464,10 +487,10 @@ class Moderation:
                     "sightengine": "pass",
                     "sha256": hashlib.sha256(data).hexdigest(),
                 }
+        except ModerationUnavailable:
+            raise
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
-            raise MediaRejected(
-                "Video moderation unavailable or not approved"
-            ) from exc
+            raise ModerationUnavailable("Video moderation unavailable") from exc
 
 
 class MediaCipher:

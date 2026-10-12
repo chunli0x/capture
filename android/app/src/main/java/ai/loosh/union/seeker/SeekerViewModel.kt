@@ -106,6 +106,7 @@ data class PilotState(
     val taxonomy: List<TaxonomyCategory> = emptyList(),
     val reviewing: Boolean = false,
     val bond: Long = 0,
+    val pendingUsdc: Long = 0,
     // --- Capture v2: leveling ---
     val level: Int = 0,
     val levelName: String = "Scout",
@@ -367,6 +368,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
                 worker = me.getBoolean("worker"),
                 reviewer = me.getBoolean("reviewer"),
                 bond = me.getLong("bond_test_skr_units"),
+                pendingUsdc = me.optLong("pending_usdc", 0),
                 bounties = b,
                 submissions = s,
                 reviews = r,
@@ -419,10 +421,46 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
             mutable.update { it.copy(bondFunded = true) }
         }
 
-    /** Devnet server-recorded bond deposit. Does not touch the on-chain prepare seam. */
-    fun depositBond() =
+    /**
+     * Devnet bond deposit. POST /bond/deposit returns the prepared on-chain
+     * escrow transaction (self-serve enrollment — no prior worker flag needed),
+     * which the wallet signs + sends, then /transactions/{id}/confirm marks the
+     * account bonded. Mirrors [transact] but hits /bond/deposit directly.
+     */
+    fun depositBond(sender: ActivityResultSender) =
         run("Depositing bond", "Bond deposited") {
-            post("/bond/deposit")
+            val prepared = post("/bond/deposit")
+            val tx = Base64.decode(prepared.getString("transaction_base64"), Base64.DEFAULT)
+            val result =
+                adapter.transact(sender) { auth ->
+                    check(Base58.encode(auth.accounts.first().publicKey) == mutable.value.wallet) {
+                        "Wallet changed; sign in again."
+                    }
+                    signAndSendTransactions(arrayOf(tx))
+                }
+            check(result is TransactionResult.Success) {
+                "Wallet did not send the transaction. Refresh to recover if it was sent."
+            }
+            val sig =
+                result.successPayload?.signatures?.first()
+                    ?: error("Wallet returned no signature; use Recover.")
+            val id = prepared.getString("id")
+            val signature = Base58.encode(sig)
+            storeSignature(id, signature)
+            try {
+                confirm(id, signature)
+                clearSignature(id)
+            } catch (e: Exception) {
+                // Leave the signature persisted so recover() can replay the confirm.
+                throw e
+            }
+            refreshData()
+        }
+
+    /** Settles accrued earnings: POST /bond/settle drains pending_usdc to the wallet. */
+    fun settle() =
+        run("Settling earnings", "Earnings settled") {
+            post("/bond/settle")
             refreshData()
         }
 

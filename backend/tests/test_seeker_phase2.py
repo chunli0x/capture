@@ -16,6 +16,7 @@ from seeker.media import (
     MediaCipher,
     MediaRejected,
     Moderation,
+    ModerationUnavailable,
     canonicalize_video,
     sightengine_genai_pass,
     sightengine_nudity_pass,
@@ -635,15 +636,15 @@ def test_video_moderation_fail_closed(pilot, monkeypatch):
 
     settings = pilot[-1]
     m = Moderation(settings)
-    # Unconfigured -> blocked.
-    with pytest.raises(MediaRejected):
+    # Unconfigured -> outage (503), not a strike.
+    with pytest.raises(ModerationUnavailable):
         __import__("asyncio").run(m.scan_video(mp4()))
 
     settings.sightengine_user = "user"
     settings.sightengine_secret = "secret"
 
     async def image_only(*args, **kwargs):
-        # A provider that returns an image verdict (cannot scan video) -> block.
+        # A provider that returns an image verdict (cannot scan video) -> outage.
         return httpx.Response(
             200,
             json={"status": "success", "faces": []},
@@ -651,81 +652,50 @@ def test_video_moderation_fail_closed(pilot, monkeypatch):
         )
 
     monkeypatch.setattr(httpx.AsyncClient, "post", image_only)
-    with pytest.raises(MediaRejected):
+    with pytest.raises(ModerationUnavailable):
         __import__("asyncio").run(m.scan_video(mp4()))
 
     async def error(*args, **kwargs):
         raise httpx.ReadTimeout("timeout")
 
     monkeypatch.setattr(httpx.AsyncClient, "post", error)
-    with pytest.raises(MediaRejected):
+    with pytest.raises(ModerationUnavailable):
         __import__("asyncio").run(m.scan_video(mp4()))
 
 
 def test_video_pass_helpers_fail_closed():
-    # sightengine: no frames analyzed -> never pass.
-    assert not sightengine_video_pass({"status": "success", "faces": []})
+    # sightengine: no frames analyzed -> outage (raise), never pass.
+    with pytest.raises(ModerationUnavailable):
+        sightengine_video_pass({"status": "success", "faces": []})
     # A documented sync video response nests frames under data.frames, each
-    # frame carrying its own faces list AND nudity object. A clean response
-    # (frames analyzed, no faces, no sexual-content signal) passes.
+    # frame carrying its own faces list, nudity object, AND type.ai_generated
+    # score (finding 5: genai is per-frame for video, not top-level). A clean
+    # response passes.
+    clean_frame = {"faces": [], "nudity": {"sexual_activity": 0.001, "sexual_display": 0.001, "erotica": 0.001, "sextoy": 0.001, "suggestive": 0.001}, "type": {"ai_generated": 0.001}}
     assert sightengine_video_pass(
-        {
-            "status": "success",
-            "type": {"ai_generated": 0.001},
-            "data": {
-                "frames": [
-                    {"faces": [], "nudity": {"sexual_activity": 0.001, "sexual_display": 0.001, "erotica": 0.001, "sextoy": 0.001, "suggestive": 0.001}},
-                    {"faces": [], "nudity": {"sexual_activity": 0.001, "sexual_display": 0.001, "erotica": 0.001, "sextoy": 0.001, "suggestive": 0.001}},
-                ]
-            },
-        }
+        {"status": "success", "data": {"frames": [clean_frame, dict(clean_frame)]}}
     )
-    # A frame missing its nudity object fails closed (provider did not analyze it).
+    # A frame missing its nudity object is an outage (provider did not analyze it).
+    with pytest.raises(ModerationUnavailable):
+        sightengine_video_pass({"status": "success", "data": {"frames": [{"faces": []}]}})
+    # A frame missing its genai score is an outage (provider did not analyze it).
+    with pytest.raises(ModerationUnavailable):
+        sightengine_video_pass({"status": "success", "data": {"frames": [{"faces": [], "nudity": {"sexual_activity": 0.001, "sexual_display": 0.001, "erotica": 0.001, "sextoy": 0.001, "suggestive": 0.001}}]}})
+    # A face detected in any single frame must block (a real violation, not outage).
     assert not sightengine_video_pass(
-        {"status": "success", "data": {"frames": [{"faces": []}]}}
+        {"status": "success", "data": {"frames": [clean_frame, {"faces": [{"x1": 0.1}], "nudity": {"sexual_activity": 0.001, "sexual_display": 0.001, "erotica": 0.001, "sextoy": 0.001, "suggestive": 0.001}, "type": {"ai_generated": 0.001}}]}}
     )
-    # A face detected in any single frame must block, even if others are clean.
+    # A frame that lacks a faces list -> outage (raise).
+    with pytest.raises(ModerationUnavailable):
+        sightengine_video_pass({"status": "success", "data": {"frames": [{}]}})
+    # A frame with a sexual-content signal fails closed (a real violation).
     assert not sightengine_video_pass(
-        {"status": "success", "data": {"frames": [{"faces": []}, {"faces": [{"x1": 0.1}]}]}}
+        {"status": "success", "data": {"frames": [{"faces": [], "nudity": {"sexual_activity": 0.9, "sexual_display": 0.1, "erotica": 0.1, "sextoy": 0.1, "suggestive": 0.1}, "type": {"ai_generated": 0.001}}]}}
     )
-    # A frame that lacks a faces list is not a clean verdict -> fail closed.
+    # An AI-generated frame (genai at/above threshold) rejects the clip — the
+    # score now lives per-frame (finding 5), not at the top level.
     assert not sightengine_video_pass(
-        {"status": "success", "data": {"frames": [{}]}}
-    )
-    # A frame with a sexual-content signal fails closed (nudity-2.0 model).
-    assert not sightengine_video_pass(
-        {
-            "status": "success",
-            "data": {
-                "frames": [
-                    {"faces": [], "nudity": {"sexual_activity": 0.9, "sexual_display": 0.1, "erotica": 0.1, "sextoy": 0.1, "suggestive": 0.1}}
-                ]
-            },
-        }
-    )
-    # A clean frame (no faces, no nudity, not AI-generated) passes.
-    assert sightengine_video_pass(
-        {
-            "status": "success",
-            "type": {"ai_generated": 0.001},
-            "data": {
-                "frames": [
-                    {"faces": [], "nudity": {"sexual_activity": 0.001, "sexual_display": 0.001, "erotica": 0.001, "sextoy": 0.001, "suggestive": 0.001}}
-                ]
-            },
-        }
-    )
-    # An AI-generated clip (genai at/above threshold) fails even with clean frames.
-    assert not sightengine_video_pass(
-        {
-            "status": "success",
-            "type": {"ai_generated": 0.95},
-            "data": {
-                "frames": [
-                    {"faces": [], "nudity": {"sexual_activity": 0.001, "sexual_display": 0.001, "erotica": 0.001, "sextoy": 0.001, "suggestive": 0.001}}
-                ]
-            },
-        }
+        {"status": "success", "data": {"frames": [{"faces": [], "nudity": {"sexual_activity": 0.001, "sexual_display": 0.001, "erotica": 0.001, "sextoy": 0.001, "suggestive": 0.001}, "type": {"ai_generated": 0.95}}]}}
     )
 
 
@@ -741,9 +711,14 @@ def test_sightengine_nudity_pass():
     assert not sightengine_nudity_pass(
         {"nudity": {**clean, "suggestive": 0.8}}
     )
-    # missing/malformed nudity object -> fail closed
-    assert not sightengine_nudity_pass({})
-    assert not sightengine_nudity_pass({"nudity": None})
+    # missing/malformed nudity object -> outage (raise), not a pass/fail
+    with pytest.raises(ModerationUnavailable):
+        sightengine_nudity_pass({})
+    with pytest.raises(ModerationUnavailable):
+        sightengine_nudity_pass({"nudity": None})
+    # a malformed probability (NaN) must raise, never silently pass (finding 13)
+    with pytest.raises(ModerationUnavailable):
+        sightengine_nudity_pass({"nudity": {**clean, "erotica": float("nan")}})
 
 
 def test_sightengine_genai_pass():
@@ -752,13 +727,19 @@ def test_sightengine_genai_pass():
     # at/above threshold -> synthetic -> reject
     assert not sightengine_genai_pass({"type": {"ai_generated": 0.5}})
     assert not sightengine_genai_pass({"type": {"ai_generated": 0.999}})
-    # missing/malformed/non-finite/out-of-range type object -> fail closed
-    assert not sightengine_genai_pass({})
-    assert not sightengine_genai_pass({"type": None})
-    assert not sightengine_genai_pass({"type": {"ai_generated": None}})
-    assert not sightengine_genai_pass({"type": {"ai_generated": "nope"}})
-    assert not sightengine_genai_pass({"type": {"ai_generated": 1.7}})
-    assert not sightengine_genai_pass({"type": {"ai_generated": float("nan")}})
+    # missing/malformed/non-finite/out-of-range type object -> outage (raise)
+    with pytest.raises(ModerationUnavailable):
+        sightengine_genai_pass({})
+    with pytest.raises(ModerationUnavailable):
+        sightengine_genai_pass({"type": None})
+    with pytest.raises(ModerationUnavailable):
+        sightengine_genai_pass({"type": {"ai_generated": None}})
+    with pytest.raises(ModerationUnavailable):
+        sightengine_genai_pass({"type": {"ai_generated": "nope"}})
+    with pytest.raises(ModerationUnavailable):
+        sightengine_genai_pass({"type": {"ai_generated": 1.7}})
+    with pytest.raises(ModerationUnavailable):
+        sightengine_genai_pass({"type": {"ai_generated": float("nan")}})
 
 
 # ---- offline keypoint job ----
@@ -915,8 +896,9 @@ def test_migration_0002_adds_phase2_columns(tmp_path):
     # 7 submission columns); 0005 adds 1 (actors.liveness_completed); 0006 adds
     # 3 (actors.bonded, quality_checks, skr_funded); 0007 adds 1
     # (reviews.accepted); 0008 adds 1 (submissions.payout_signature); 0009 adds
-    # 1 (actors.pending_usdc).
-    assert apply_migrations(engine) == 20
+    # 1 (actors.pending_usdc); 0010 adds 1 (actors.settling_usdc); the partial
+    # unique index (open-upload dedup) adds 1 more.
+    assert apply_migrations(engine) == 22
     assert apply_migrations(engine) == 0  # re-run is a no-op
 
     bounty_cols = {c["name"] for c in inspect(engine).get_columns("seeker_bounties")}

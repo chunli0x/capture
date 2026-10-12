@@ -123,7 +123,7 @@ def _liveness(c, h, wallet):
         json={
             "contributor": wallet,
             "session_id": r.json()["session_id"],
-            "result_digest": "0" * 64,
+            "result_digest": "ab" * 32,
         },
     )
     assert r.status_code == 200, r.text

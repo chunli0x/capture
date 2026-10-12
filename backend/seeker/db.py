@@ -65,6 +65,11 @@ class Actor(Base):
     # balance on-chain in one transaction (fee minimization: one treasury tx per
     # settle, not one per accepted upload).
     pending_usdc: Mapped[int] = mapped_column(BigInteger, default=0)
+    # A settle in flight: moved here (and committed) before the treasury
+    # transfer is broadcast, so a dropped/lost transaction cannot lose or
+    # double-pay earnings (finding 1). Cleared on confirmed settle, restored on
+    # failure.
+    settling_usdc: Mapped[int] = mapped_column(BigInteger, default=0)
 
 
 class Challenge(Base):
@@ -165,6 +170,21 @@ class Review(Base):
     # Open-upload peer reviews carry a boolean verdict (accept/reject) instead of
     # full labels; NULL for the operator bounty-review path.
     accepted: Mapped[bool | None] = mapped_column(Boolean)
+
+
+class Violation(Base):
+    """One punished media-policy violation, deduped by (worker, media_hash).
+
+    Finding 4: without this journal, retrying the same rejected upload could
+    count as another strike, and concurrent failures could read the same warning
+    count. Recording the punished hash makes enforcement idempotent per upload.
+    """
+    __tablename__ = "seeker_violations"
+    __table_args__ = (UniqueConstraint("worker", "media_hash"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    worker: Mapped[str] = mapped_column(ForeignKey(Actor.wallet), index=True)
+    media_hash: Mapped[str] = mapped_column(String(64))
+    created: Mapped[int] = mapped_column(BigInteger)
 
 
 class Prepared(Base):

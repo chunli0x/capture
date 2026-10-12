@@ -122,7 +122,7 @@ def do_liveness(c, h, wallet, task_id="capture-session"):
     r = c.post(
         "/liveness/complete",
         headers=h,
-        json={"contributor": wallet, "session_id": r.json()["session_id"], "result_digest": "0" * 64},
+        json={"contributor": wallet, "session_id": r.json()["session_id"], "result_digest": "ab" * 32},
     )
     assert r.status_code == 200, r.text
 
