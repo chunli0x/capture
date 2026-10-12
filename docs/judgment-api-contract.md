@@ -107,6 +107,7 @@ GET /batch/{id}/dataset
   {
     "batch_id": "...",
     "merkle_root": "hex" | null,
+    "anchored": false,
     "entries": [
       {"pair_id","output_a_url","output_b_url","preference","agreement","confidence",
        "media_type","task_type","rubric"}
@@ -159,7 +160,16 @@ closed (ChainUnavailable -> 503) and never record earnings without a confirmed
 signature. Reuse the settle_usdc durability pattern (reserve -> broadcast ->
 confirm -> clear) so a lost tx cannot lose or double-pay.
 
-## 8. On-chain Merkle anchor — post_batch (blockchain-dev owns the Rust; backend wires chain.py)
+## 8. Merkle provenance — backend computes, on-chain anchor deferred
+
+The backend computes a Merkle root over each resolved batch and records it on the
+`judgment_batch.merkle_root` column. The `anchored` flag marks whether that root
+has been committed on-chain.
+
+The on-chain commit is the `post_batch` instruction (blockchain-dev owns the
+Rust; backend wires chain.py), **deferred** because the currently deployed
+program is immutable (upgrade authority burned) and predates the `Batch` account.
+The instruction is specified here so the next program deploy can add it:
 
 New program instruction `post_batch(batch_id: [u8;16], merkle_root: [u8;32])`.
 Anchor discriminator = sha256("global:post_batch")[:8].
@@ -178,7 +188,8 @@ New account struct:
 
 chain.py build path: action "post_batch", accounts = [verifier(signer), config,
 batch_pda(init), SYSTEM, RENT], data = discriminator("post_batch") + batch_id(16)
-+ merkle_root(32). Server-signed (verifier = slash_authority).
++ merkle_root(32). Server-signed (verifier = slash_authority). `post_batch`
+currently fails closed until the new program binary is deployed.
 
 Merkle root (backend computes): over resolved pairs in a batch, leaf =
 sha256(f"{pair_id}|{preference}|{agreement}|{confidence}"), standard Merkle tree,

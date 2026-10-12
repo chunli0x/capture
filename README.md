@@ -20,8 +20,8 @@ judges are paid (`base_skr × level multiplier`), dissenters earn nothing, and
 forcing a guess. New judges pass a 10-pair calibration gate before they can
 stake, and a judge-accuracy ladder (agreement-rate driven) raises their rate
 multiplier. Systematic disagreement below a floor runs the two-strike bond
-warn/slash ladder on-chain, and each resolved batch commits a Merkle root
-on-chain as provenance.
+warn/slash ladder on-chain, and each resolved batch records a Merkle root as
+provenance (on-chain anchoring is a next deploy).
 
 Honest notes (state, do not hide):
 
@@ -97,7 +97,7 @@ with level and is waived at Pathfinder.
 Settlement is **real on-chain transfer**: the SKR bond escrows on-chain at
 deposit, aligned judges are paid test-SKR on agreement, and a systematic
 disagreement warns then slashes the bond to a penalty vault. Each resolved batch
-commits a Merkle root on-chain as provenance.
+records a Merkle root as provenance (on-chain anchoring is a next deploy).
 
 ## The judge
 
