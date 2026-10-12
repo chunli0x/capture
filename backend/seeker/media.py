@@ -6,6 +6,7 @@ import hashlib
 import io
 import math
 import os
+import subprocess
 import warnings
 
 import httpx
@@ -476,3 +477,37 @@ class MediaCipher:
 
     def decrypt(self, data, digest):
         return self.cipher.decrypt(data[:12], data[12:], digest.encode())
+
+
+def extract_video_frame(mp4: bytes, seek_ratio: float = 0.4) -> bytes:
+    """Extract one representative JPEG frame from an MP4 for the VLM judge.
+
+    Uses ffmpeg to decode a single frame near ``seek_ratio`` of the clip and
+    re-encode it as a small JPEG (bounded dimensions) so the judge can see the
+    actual ego-centric view. Raises :class:`MediaRejected` if ffmpeg is missing
+    or cannot produce a frame — the caller treats that as "no judge image"
+    rather than a pass.
+    """
+    import shutil
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise MediaRejected("ffmpeg unavailable for video frame extraction")
+    # Seek to ~40% of the clip and grab one frame at bounded scale.
+    try:
+        proc = subprocess.run(
+            [
+                ffmpeg, "-hide_banner", "-loglevel", "error",
+                "-ss", str(seek_ratio), "-i", "pipe:0",
+                "-frames:v", "1", "-vf", "scale='min(720,iw)':-2",
+                "-f", "image2pipe", "-vcodec", "mjpeg", "-",
+            ],
+            input=mp4,
+            capture_output=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        raise MediaRejected("video frame extraction timed out")
+    if proc.returncode != 0 or not proc.stdout:
+        raise MediaRejected("could not extract a video frame")
+    return proc.stdout

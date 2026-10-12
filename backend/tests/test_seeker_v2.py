@@ -273,34 +273,72 @@ def test_media_tier_buckets_duration():
 def test_stub_judge_rules():
     j = StubJudge()
     good = dict(secondary={"postures": [{"id": 1}]}, metadata={"ego_motion": True})
+    img = b"fake-png-bytes"
     # no media -> reject
-    assert j.judge("object", [{"x": 1}], good["secondary"], good["metadata"], None, False).accepted is False
+    assert j.judge("object", [{"x": 1}], good["secondary"], good["metadata"], None, False, None).accepted is False
     # no primary label -> reject
-    assert j.judge("object", None, good["secondary"], good["metadata"], None, True).accepted is False
+    assert j.judge("object", None, good["secondary"], good["metadata"], None, True, img).accepted is False
     # no posture -> reject
-    assert j.judge("object", [{"x": 1}], {}, {"ego_motion": True}, None, True).accepted is False
+    assert j.judge("object", [{"x": 1}], {}, {"ego_motion": True}, None, True, img).accepted is False
     # video with no ego-motion -> reject
-    v = j.judge("action", [{"x": 1}], good["secondary"], {}, None, True)
+    v = j.judge("action", [{"x": 1}], good["secondary"], {}, None, True, img)
     assert v.accepted is False and "ego-motion" in v.reason
     # happy object path -> accept
-    assert j.judge("object", [{"x": 1}], good["secondary"], good["metadata"], None, True).accepted is True
+    assert j.judge("object", [{"x": 1}], good["secondary"], good["metadata"], None, True, img).accepted is True
+    # media present but pixels undecodable: stub still keys off has_media, so a
+    # header-only synthetic video with valid labels accepts (stub is label-only)
+    assert j.judge("action", [{"x": 1}], good["secondary"], {"ego_motion": True}, 9000, True, None).accepted is True
     # weather tagged while indoor -> reject
     indoor = {"postures": [{"id": 1}], "environment": [{"id": 1, "name": "indoor", "kind": "environment", "group": "indoor_outdoor"}]}
-    assert j.judge("object", [{"x": 1}], indoor, {"weather": {"id": "sun"}, "ego_motion": True}, None, True).accepted is False
+    assert j.judge("object", [{"x": 1}], indoor, {"weather": {"id": "sun"}, "ego_motion": True}, None, True, img).accepted is False
 
 
 def test_build_judge_defaults_to_stub(monkeypatch):
-    monkeypatch.delenv("SEEKER_JUDGE_URL", raising=False)
-    monkeypatch.delenv("SEEKER_JUDGE_KEY", raising=False)
+    monkeypatch.delenv("SEEKER_JUDGE_DRIVER", raising=False)
     assert isinstance(build_judge(), StubJudge)
 
 
 def test_build_judge_env_gates_astra(monkeypatch):
     from seeker.judge import AstraJudge
 
-    monkeypatch.setenv("SEEKER_JUDGE_URL", "https://example.test/v1")
-    monkeypatch.setenv("SEEKER_JUDGE_KEY", "k")
+    monkeypatch.setenv("SEEKER_JUDGE_DRIVER", "astra")
     assert isinstance(build_judge(), AstraJudge)
+
+
+def test_parse_verdict_accepts_bare_and_fenced():
+    from seeker.judge import _parse_verdict
+
+    assert _parse_verdict('{"accepted": true, "reason": "ok"}').accepted is True
+    assert _parse_verdict('```json\n{"accepted": false, "reason": "blurry"}\n```').accepted is False
+    assert _parse_verdict("garbage") is None
+    assert _parse_verdict("") is None
+    # non-bool accepted is rejected as unparseable
+    assert _parse_verdict('{"accepted": "yes", "reason": "x"}') is None
+
+
+def test_astra_judge_fails_closed_when_codex_missing(monkeypatch):
+    from seeker.judge import AstraJudge, JudgeUnavailable
+
+    j = AstraJudge(codex_bin="/nonexistent/codex")
+    try:
+        j.judge("object", [{"x": 1}], {"postures": [{"id": 1}]}, {}, None, True, b"img")
+        assert False, "expected JudgeUnavailable"
+    except JudgeUnavailable:
+        pass
+
+
+def test_astra_judge_fails_closed_when_no_decodable_image():
+    from seeker.judge import AstraJudge, JudgeUnavailable
+
+    j = AstraJudge(codex_bin="/nonexistent/codex")
+    # media present but pixels undecodable -> fail closed, not accept
+    try:
+        j.judge("object", [{"x": 1}], {"postures": [{"id": 1}]}, {}, None, True, None)
+        assert False, "expected JudgeUnavailable"
+    except JudgeUnavailable:
+        pass
+    # genuinely no media -> ordinary reject (not an availability error)
+    assert j.judge("object", [{"x": 1}], {"postures": [{"id": 1}]}, {}, None, False, None).accepted is False
 
 
 # ---- open-upload HTTP flow ----

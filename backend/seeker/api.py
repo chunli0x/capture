@@ -38,6 +38,7 @@ from .media import (
     Moderation,
     canonicalize,
     canonicalize_video,
+    extract_video_frame,
 )
 from .schemas import (
     ActionLabels,
@@ -54,7 +55,7 @@ from .schemas import (
     labels_agree,
 )
 from .leveling import ROLLING_WINDOW, level_info
-from .judge import StubJudge, build_judge
+from .judge import JudgeUnavailable, StubJudge, build_judge
 from .payout import payout_units
 from . import taxonomy
 
@@ -416,14 +417,34 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             fail(409, "Submission is immutable")
         boxes, secondary, metadata = validate_open_labels(body, s)
 
-        verdict = judge.judge(
-            s.kind,
-            boxes,
-            secondary,
-            metadata,
-            s.duration_ms,
-            s.media_hash is not None,
-        )
+        # Decode the stored media so the judge sees actual pixels, not just the
+        # media-hash presence flag. For an action video, extract one frame.
+        judge_image: bytes | None = None
+        if s.encrypted_media and s.media_hash:
+            decoded = cipher.decrypt(s.encrypted_media, s.media_hash)
+            if s.kind == "action":
+                try:
+                    judge_image = extract_video_frame(decoded)
+                except MediaRejected:
+                    judge_image = None
+            else:
+                judge_image = decoded
+
+        try:
+            verdict = judge.judge(
+                s.kind,
+                boxes,
+                secondary,
+                metadata,
+                s.duration_ms,
+                s.media_hash is not None,
+                judge_image,
+            )
+        except JudgeUnavailable as exc:
+            # Fail-closed: a real judge that cannot be reached must never accept
+            # silently, and must not slash the worker. Leave the submission
+            # claimable so the client can retry when the judge recovers.
+            fail(503, f"Quality judge unavailable: {exc}")
 
         level_before = contributor_level(db, actor.wallet)["level"]
         payout = 0
