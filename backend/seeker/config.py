@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     judge_driver: str = ""
     judge_codex_bin: str = "/home/hermes/.local/bin/codex"
     judge_timeout_seconds: int = 90
+    # Per-wallet daily cap on judged uploads. The VLM judge is the single
+    # biggest token cost; this bounds a heavy user (or a script) from draining
+    # the judge budget. 0 disables.
+    judge_daily_cap: int = 50
 
     @model_validator(mode="after")
     def safe_environment(self):

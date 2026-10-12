@@ -429,16 +429,10 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
 
         worker = lock(db, Actor, actor.wallet)
         if not worker.bonded:
-            # FREE tier (unlocked via quality checks, not bonded): no VLM judge,
-            # no tokens. Commit the labels and drop the upload into the
-            # peer-review queue; acceptance/payout are settled later by two peer
-            # reviews (see POST /submissions/{sid}/reviews).
-            s.labels = boxes
-            s.secondary = secondary
-            s.capture_metadata = metadata
-            s.label_hash = digest(canonical(boxes))
-            s.status = "review"
-            return {"id": s.id, "status": "review"}
+            # No free tier yet. A non-bonded worker cannot create a submission
+            # through the gate above; fail closed here rather than route to the
+            # (not-yet-launched) peer-review queue.
+            fail(403, "Bond required — deposit the SKR bond to capture")
 
         # Decode the stored media so the judge sees actual pixels, not just the
         # media-hash presence flag. For an action video, extract one frame.
@@ -452,6 +446,11 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
                     judge_image = None
             else:
                 judge_image = decoded
+
+        # Judge budget guard: the VLM is the dominant token cost, so bound
+        # judged uploads per wallet per day (configurable; 0 disables).
+        if settings.judge_daily_cap > 0:
+            rate(db, "judge:" + actor.wallet, settings.judge_daily_cap, 86400)
 
         try:
             verdict = judge.judge(
@@ -675,13 +674,13 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             if actor.worker or actor.reviewer
             else "wallet-only",
             "bond_test_skr_units": settings.min_bond,
-            # Capture bond gate: bonded once the bond is deposited, quality_checks
-            # counts completed free peer-reviews, and unlocked is the submission
-            # gate (bonded OR enough free quality checks).
+            # Capture bond gate: bonded once the bond is deposited. No free tier
+            # yet, so unlocked == bonded (peer reviews launch later and will
+            # re-add the quality-checks path).
             "bonded": actor.bonded,
             "quality_checks": actor.quality_checks,
             "quality_checks_required": QUALITY_CHECKS_REQUIRED,
-            "unlocked": actor.bonded or actor.quality_checks >= QUALITY_CHECKS_REQUIRED,
+            "unlocked": actor.bonded,
             **level,
         }
 
@@ -867,12 +866,10 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
                     "Liveness proof required; complete /liveness/session then "
                     "/liveness/complete first",
                 )
-            if not actor.bonded and actor.quality_checks < QUALITY_CHECKS_REQUIRED:
-                fail(
-                    403,
-                    "Bond required — deposit the SKR bond or complete "
-                    f"{QUALITY_CHECKS_REQUIRED} free quality checks",
-                )
+            if not actor.bonded:
+                # No free tier yet: peer reviews launch later. During this
+                # initial stage every capturer must hold the SKR bond.
+                fail(403, "Bond required — deposit the SKR bond to capture")
             rate(db, "open-upload:" + actor.wallet, 60, 3600)
             s = Submission(
                 bounty_id=None,

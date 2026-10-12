@@ -1,8 +1,8 @@
-"""Capture bond gate + free peer-review path (CAPTURE-BOND-SPEC).
+"""Capture bond gate + judge routing (CAPTURE-BOND-SPEC, bonded-only stage).
 
-Covers the hard gate (bonded OR 3 quality checks), the faucet -> deposit ->
-unlock flow, the free peer-review settle (agree -> accept, disagree -> reject),
-quality_checks accumulation to unlock, and bonded-judge vs free-review routing.
+Covers the hard gate (bonded only — the free peer-review tier is deferred), the
+faucet -> deposit -> unlock flow, bonded-judge routing, and the fail-closed
+behavior of an unbonded worker.
 """
 
 import base64
@@ -151,25 +151,10 @@ def object_labels(media_hash, postures=(1,), environment=(), boxes=None, **extra
 
 
 def make_free(app, wallet):
-    """Mark a worker as unlocked via quality checks (not bonded)."""
+    """Mark a worker with 3 quality checks (the deferred free-tier path)."""
+
     with app.state.database.transaction() as db:
         db.get(Actor, wallet).quality_checks = 3
-
-
-def free_submission(c, app, h, wallet):
-    """Create an open upload from a free (unlocked, unbonded) worker and return
-    its (sid, media_hash) in status='review'."""
-    make_free(app, wallet)
-    sid = open_submission(c, h)
-    mh = upload_media(c, h, sid)
-    r = c.post(
-        f"/submissions/{sid}/labels",
-        headers=h,
-        json=object_labels(mh, postures=[1], environment=[1]),
-    )
-    assert r.status_code == 200, r.text
-    assert r.json() == {"id": sid, "status": "review"}
-    return sid, mh
 
 
 # ---- bond flow ----
@@ -214,107 +199,70 @@ def test_open_upload_gated_until_unlocked(pilot):
     assert c.post("/submissions", headers=h[1], json={"kind": "object"}).status_code == 200
 
 
-# ---- free peer-review path ----
+# ---- bonded-only gate (free tier deferred) ----
 
 
-def test_free_review_increments_quality_checks_to_unlock(pilot):
+def test_quality_checks_do_not_unlock_without_bond(pilot):
     c, app, h, keys, *_ = pilot
-    # keys[3] is a free worker (unlocked via quality checks, not bonded); three
-    # peer-review uploads from them.
+    # Even a worker with 3 quality checks (the old free path) is NOT unlocked:
+    # the free tier is deferred, so the bond is the only way in.
     make_free(app, str(keys[3].pubkey()))
-    submissions = []
-    for _ in range(3):
-        sid = open_submission(c, h[3])
-        mh = upload_media(c, h[3], sid)
-        r = c.post(
-            f"/submissions/{sid}/labels",
-            headers=h[3],
-            json=object_labels(mh, postures=[1], environment=[1]),
-        )
-        assert r.status_code == 200, r.text
-        assert r.json() == {"id": sid, "status": "review"}
-        submissions.append((sid, mh))
-
-    reviewer = h[0]
-    me = c.get("/me", headers=reviewer).json()
+    me = c.get("/me", headers=h[3]).json()
+    assert me["quality_checks"] == 3
+    assert me["bonded"] is False
     assert me["unlocked"] is False
-    assert me["quality_checks"] == 0
 
-    q = c.get("/review-queue", headers=reviewer).json()
-    assert {s["id"] for s in q} == {sid for sid, _ in submissions}
+    r = c.post("/submissions", headers=h[3], json={"kind": "object"})
+    assert r.status_code == 403
+    assert "bond" in r.json()["detail"].lower()
 
-    for i, (sid, mh) in enumerate(submissions, 1):
-        r = c.post(
-            f"/submissions/{sid}/reviews",
-            headers=reviewer,
-            json={"accepted": True},
+    # Deposit the bond and the same worker is now unlocked.
+    assert c.post("/bond/faucet", headers=h[3]).json() == {"funded": True}
+    assert c.post("/bond/deposit", headers=h[3]).json() == {"bonded": True}
+    assert c.post("/submissions", headers=h[3], json={"kind": "object"}).status_code == 200
+
+
+def test_unbonded_labels_fail_closed_not_queued(pilot):
+    c, app, h, keys, *_ = pilot
+    # A submission can no longer be created by an unbonded worker, so there is
+    # nothing to route to review; but defend the label path directly: seed a
+    # claimed submission, then confirm an unbonded worker cannot label it.
+    with app.state.database.transaction() as db:
+        import time as _time
+        from seeker.db import Submission as _Submission
+        s = _Submission(
+            bounty_id=None,
+            worker=str(keys[3].pubkey()),
+            expires=_time.time() + 3600,
+            kind="object",
         )
-        assert r.status_code == 200, r.text
-        assert r.json() == {"status": "review"}  # only one review, not settled
-        me = c.get("/me", headers=reviewer).json()
-        assert me["quality_checks"] == i
-        assert me["unlocked"] is (i >= 3)
-
-
-def test_peer_review_agree_settles_accepted(pilot):
-    c, app, h, keys, *_ = pilot
-    make_free(app, str(keys[3].pubkey()))
-    sid = open_submission(c, h[3])
+        db.add(s)
+        db.flush()
+        sid = s.id
+    # Give the worker liveness but not the bond.
+    do_liveness(c, h[3], str(keys[3].pubkey()))
     mh = upload_media(c, h[3], sid)
-    labels = object_labels(mh, postures=[1], environment=[1])
-    r = c.post(f"/submissions/{sid}/labels", headers=h[3], json=labels)
-    assert r.json() == {"id": sid, "status": "review"}
-
-    # keys[4] (reviewer) reviews first; keys[5] (reviewer=False) reviews second,
-    # proving open uploads need no operator reviewer enrollment.
-    assert (
-        c.post(f"/submissions/{sid}/reviews", headers=h[4], json={"accepted": True}).json()["status"]
-        == "review"
+    r = c.post(
+        f"/submissions/{sid}/labels",
+        headers=h[3],
+        json=object_labels(mh, postures=[1], environment=[1]),
     )
-    r = c.post(f"/submissions/{sid}/reviews", headers=h[5], json={"accepted": True})
-    assert r.json() == {"status": "accepted"}
-
-    with app.state.database.transaction() as db:
-        s = db.get(Submission, sid)
-        assert s.accepted is True
-        assert s.payout_usdc == 100_000  # complete photo -> $0.10
-        assert s.judged_at is not None
-        assert db.get(Actor, str(keys[3].pubkey())).accepted_count == 1
+    assert r.status_code == 403
+    assert "bond" in r.json()["detail"].lower()
 
 
-def test_peer_review_disagree_settles_rejected(pilot):
-    c, app, h, keys, *_ = pilot
-    make_free(app, str(keys[3].pubkey()))
-    sid = open_submission(c, h[3])
-    mh = upload_media(c, h[3], sid)
-    labels = object_labels(mh, postures=[1], environment=[1])
-    c.post(f"/submissions/{sid}/labels", headers=h[3], json=labels)
-
-    c.post(f"/submissions/{sid}/reviews", headers=h[4], json={"accepted": True})
-    r = c.post(f"/submissions/{sid}/reviews", headers=h[5], json={"accepted": False})
-    assert r.json() == {"status": "rejected"}
-
-    with app.state.database.transaction() as db:
-        s = db.get(Submission, sid)
-        assert s.accepted is False
-        assert s.payout_usdc == 0
-        assert db.get(Actor, str(keys[3].pubkey())).accepted_count == 0
-
-
-def test_review_queue_open_uploads_need_no_reviewer_enrollment(pilot):
-    c, app, h, keys, *_ = pilot
-    sid = free_submission(c, app, h[3], str(keys[3].pubkey()))[0]
-    # keys[5] is reviewer=False but authenticated -> still sees the open upload.
+def test_review_queue_empty_when_no_free_tier(pilot):
+    c, _app, h, *_ = pilot
+    # No free tier -> no open uploads enter status='review' -> the queue is empty.
     q = c.get("/review-queue", headers=h[5]).json()
-    assert [s["id"] for s in q] == [sid]
+    assert q == []
 
 
-# ---- bonded-judge vs free-review routing ----
+# ---- bonded-only judge routing ----
 
 
-def test_bonded_judge_vs_free_review_routing(pilot):
-    c, app, h, keys, *_ = pilot
-    # Bonded worker -> instant judge (verdict + payout).
+def test_bonded_worker_gets_judge_verdict(pilot):
+    c, _app, h, *_ = pilot
     assert c.post("/bond/faucet", headers=h[1]).json() == {"funded": True}
     assert c.post("/bond/deposit", headers=h[1]).json() == {"bonded": True}
     sid = open_submission(c, h[1])
@@ -329,22 +277,3 @@ def test_bonded_judge_vs_free_review_routing(pilot):
     assert body["status"] == "accepted"
     assert body["verdict"]["accepted"] is True
     assert body["payout_usdc"] == 100_000
-
-    # Free worker (unlocked via quality checks, not bonded) -> no judge.
-    make_free(app, str(keys[2].pubkey()))
-    sid2 = open_submission(c, h[2])
-    mh2 = upload_media(c, h[2], sid2)
-    r = c.post(
-        f"/submissions/{sid2}/labels",
-        headers=h[2],
-        json=object_labels(mh2, postures=[1], environment=[1]),
-    )
-    assert r.status_code == 200
-    assert r.json() == {"id": sid2, "status": "review"}
-
-    with app.state.database.transaction() as db:
-        s = db.get(Submission, sid2)
-        assert s.status == "review"
-        assert s.accepted is None
-        assert s.payout_usdc is None
-        assert s.judged_at is None
