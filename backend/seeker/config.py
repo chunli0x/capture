@@ -30,10 +30,13 @@ class Settings(BaseSettings):
     judge_window: int = Field(default=100, gt=0)
     judge_slash_floor: float = 0.45
     judge_slash_min_judged: int = Field(default=20, gt=0)
-    # Payout in SKR base units. The treasury keypair is the SKR mint authority;
-    # settlement mints test SKR to the judge (devnet faucet-equivalent).
+    # Payout in SKR base units (6 decimals). The treasury keypair is the SKR mint
+    # authority; settlement mints test SKR to the judge (devnet faucet-equivalent).
+    # USD anchor (incentive spec §8): 1 SKR ≈ $0.02. So:
+    #   judge_base_skr = 1 SKR      = $0.02 per aligned judgment (× level multiplier)
+    #   judge_flat_skr = 0.25 SKR   = $0.005 flat "can't tell" / calibration reward
     judge_base_skr: int = Field(default=1_000_000, gt=0)
-    judge_flat_skr: int = Field(default=100_000, gt=0)
+    judge_flat_skr: int = Field(default=250_000, gt=0)
     # Cap on flat "can't tell" payments a judge can earn per rolling window,
     # to bound abstention farming (finding #12): three colluding judges can
     # otherwise send "can't tell" on every fresh pair and collect flat without

@@ -32,10 +32,12 @@ Real mainnet token (NOT used on devnet; do not wire into the demo):
   (levels 1..4). See §6.
 - Slash floor: rolling agreement_rate < 0.45 AND judged_count >= 20 ->
   trigger two-strike warn/slash. Config `judge_slash_floor`, `judge_slash_min_judged`.
-- Payout (SKR base units, config-backed): `judge_base_skr` (per aligned judgment),
-  `judge_flat_skr` (flat "can't tell" / calibration reward). Starting devnet
-  defaults are starting hypotheses per the incentive spec §8 — pick conservative
-  values and document them.
+- Payout (SKR base units, 6 decimals, config-backed): `judge_base_skr` (per aligned
+  judgment), `judge_flat_skr` (flat "can't tell" / calibration reward). USD anchor:
+  1 SKR ≈ $0.02 (incentive spec §8). Devnet defaults: `judge_base_skr = 1_000_000`
+  (= 1 SKR ≈ $0.02/aligned judgment), `judge_flat_skr = 250_000`
+  (= 0.25 SKR ≈ $0.005 flat). Level multipliers (§6) apply on top of base. These
+  are starting hypotheses per incentive spec §8 — tune against real agreement data.
 
 ## 2. Data model (exact field names)
 
