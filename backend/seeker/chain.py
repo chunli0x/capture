@@ -333,9 +333,9 @@ class Chain:
                     program_id=TOKEN_PROGRAM_ID,
                     mint=self.skr,
                     dest=get_associated_token_address(worker, self.skr),
-                    mint_authority=payer,
+                    mint_authority=payer.pubkey(),
                     amount=self.settings.min_bond,
-                    signers=[payer],
+                    signers=[payer.pubkey()],
                 )
             )
         )
@@ -359,7 +359,7 @@ class Chain:
                     dest=get_associated_token_address(worker, self.usdc),
                     owner=payer.pubkey(),
                     amount=amount,
-                    signers=[payer],
+                    signers=[payer.pubkey()],
                 )
             )
         )

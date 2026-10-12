@@ -250,3 +250,39 @@ def test_find_signature_paginates_beyond_first_100(chain, resources):
     assert len(sig_calls) == 2
     assert sig_calls[0][1][1] == {"commitment": "finalized", "limit": 100}
     assert sig_calls[1][1][1]["before"] == decoys[-1]
+
+
+def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
+    # Regression: the treasury is a Keypair (not a Pubkey), and the SPL
+    # instruction params take pubkeys while _sign_and_send signs with the
+    # Keypair. This exercises both paths end to end against a stub RPC.
+    treasury = Keypair()
+    p = tmp_path / "treasury.json"
+    p.write_text(json.dumps(list(bytes(treasury))))
+    chain.treasury = treasury
+    chain.usdc_treasury = treasury
+    chain._load_key = lambda path: Keypair.from_bytes(bytes(json.loads(path.read_text())))
+
+    worker = Keypair()
+    sent = []
+
+    def fake_rpc(method, params):
+        sent.append((method, params))
+        if method == "getLatestBlockhash":
+            return {"value": {"blockhash": str(Hash.new_unique())}}
+        if method == "sendTransaction":
+            return "sig_" + method
+        raise AssertionError(f"unexpected rpc method: {method}")
+
+    chain.rpc = fake_rpc
+    # Faucet mints min_bond SKR to the worker (mint authority = treasury).
+    sig = chain.faucet(str(worker.pubkey()))
+    assert sig == "sig_sendTransaction"
+    # Settlement transfers USDC from the treasury to the worker.
+    sig = chain.settle_usdc(str(worker.pubkey()), 100_000)
+    assert sig == "sig_sendTransaction"
+
+    # Both produced exactly two sendTransaction calls (one each) and the
+    # instructions serialized without a Keypair/Pubkey type mismatch.
+    sends = [c for c in sent if c[0] == "sendTransaction"]
+    assert len(sends) == 2
