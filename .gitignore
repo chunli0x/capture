@@ -30,7 +30,7 @@ captures/
 # OS
 .DS_Store
 
-# Generated datasets (rebuild with tapfarm.generator.dataset)
+# Generated datasets (backend/data is dev-local output)
 backend/data/
 backend/.solana-cli.yml
 

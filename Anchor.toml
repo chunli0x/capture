@@ -6,8 +6,6 @@ skip-lint = false
 
 [programs.localnet]
 seeker_bounty = "HyNNfKuyEuyc98fo2zsdyPrHmCX7tuMXvVPF8vJB12Sm"
-tapfarm_stake = "9brNsPyt6cb9yVv9kFNvN9xwd9ww41BJqiyG4DpCR1aQ"
-union_bond = "BondDfbRr6dZ4TYr6yBSAqWnJb1zpCPtkTqTH1HNMz6a"
 
 [programs.devnet]
 seeker_bounty = "HyNNfKuyEuyc98fo2zsdyPrHmCX7tuMXvVPF8vJB12Sm"
@@ -20,5 +18,4 @@ cluster = "localnet"
 wallet = "backend/treasury.json"
 
 [scripts]
-test = "cd backend && pytest tests/test_stake_program.py -v"
-
+test = "cargo test -p seeker-bounty --lib"

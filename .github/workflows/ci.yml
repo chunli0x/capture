@@ -50,10 +50,8 @@ jobs:
       # Host-target tests only. Building the SBF binary needs the Solana
       # platform tools, which are not worth installing for every push; the
       # decision logic these cover is the part that changes.
-      # Both programs. Adding one and forgetting to gate it here is how a
-      # program ends up with tests nobody runs.
       - name: Run program logic tests
-        run: cargo test -p tapfarm-stake -p union-bond -p seeker-bounty --lib
+        run: cargo test -p seeker-bounty --lib
 
   android:
     name: Android (lint, unit tests, APK)

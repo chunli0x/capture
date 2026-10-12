@@ -21,12 +21,12 @@ is built for the CLOCK IN hackathon (Solana Mobile × RadiantsDAO, September 8
    (an object or place) or a short video (an action).
 3. **Label.** The worker applies the six label dimensions described below.
 4. **Judge.** A vision-language-model quality judge accepts or rejects each
-   submission. This build ships a deterministic rule-based stub; the real VLM
-   judge is the roadmap (see "The judge").
-5. **Record.** An accepted submission records a TEST-USDC payout (base rate ×
-   level multiplier × label premium) and advances the worker's level; a
-   rejected submission records a bond slash (payout 0). Settlement is recorded
-   on devnet, not a real transfer.
+   submission (gpt-6-astra via the Codex CLI, behind `backend/seeker/judge.py`).
+5. **Record.** An accepted submission accrues a TEST-USDC payout (base rate ×
+   level multiplier × label premium) off-chain and advances the worker's level;
+   a media-policy violation triggers the two-strike bond ladder — first strike
+   `warn` (bond intact), second strike `slash` (full bond drained on-chain to a
+   penalty vault). Payouts settle on-chain in a batched transfer.
 
 ## Label dimensions
 
@@ -60,43 +60,35 @@ down with level and is waived at Pathfinder.
 ## Tokens & settlement
 
 - **TEST-USDC** — payroll. A devnet test token, never real USDC.
-- **TEST-SKR** — the slashable quality bond. A devnet fixture mint.
+- **TEST-SKR** — the slashable quality bond, escrowed on-chain in a real
+  staking contract. A devnet fixture mint.
 
-Honest caveat: settlement in this build is **recorded, not transferred**. The
-on-chain TEST-USDC payout and TEST-SKR bond slash are the seams behind a devnet
-ledger record; no real tokens move.
+Settlement is **real on-chain transfer**: the SKR bond escrows on-chain at
+deposit, and accepted payouts transfer TEST-USDC from the treasury in a batched
+settle (`POST /bond/settle`). A media-policy violation warns, and a second
+violation slashes the entire bond to a penalty vault.
 
 ## The judge
 
 The quality judge is a vision-language model behind a clean abstraction
-(`backend/seeker/judge.py`). The default is a **deterministic rule-based stub**
-that checks only what is machine-readable from labels + metadata + media
-properties (missing media, missing primary label, missing posture, static
-action footage, indoor weather tags). Pixel-level reject rules — blur,
-exposure, ground-level horizon, screen content, watermark — are the real
-judge's job and are **not** enforced by the stub.
-
-The real judge (a hosted VLM) is gated behind `SEEKER_JUDGE_URL` +
-`SEEKER_JUDGE_KEY` and is the roadmap item. Until those are set, the stub runs
-and the test suite needs no network.
+(`backend/seeker/judge.py`), driven by `gpt-6-astra` via the Codex CLI. It is
+bounded by a per-wallet daily cap and fails closed (503) when it cannot be
+reached — an accepted upload must never settle silently.
 
 ## Status
 
-October 8 2026:
+October 12 2026:
 
-- Deployed to **Solana devnet**; backend live.
-- **585 backend tests** and **114 Android tests** pass.
+- Deployed to **Solana devnet**; backend live at `https://capture.magnumopus.ai`.
+- **119 backend tests** and **114 Android tests** pass.
 - Everything here runs on **devnet test tokens**.
 
 Not done / honest caveats:
 
-- The VLM quality judge is a deterministic stub; the real vision-language judge
-  is not wired.
-- Settlement is recorded on devnet, not a real transfer.
 - Liveness is an on-device motion challenge, not bank-grade anti-spoofing
   (device attestation is a roadmap item).
-- Moderation (Hive / Sightengine) is fail-closed in code, not validated as a
-  compliance claim.
+- Moderation (Sightengine nudity + face-age + genai) is fail-closed in code,
+  not validated as a compliance claim.
 
 ## Repository layout
 
@@ -106,7 +98,6 @@ Not done / honest caveats:
 │   └── app/            capture, label, judge UI; unit tests under src/test
 ├── backend/            FastAPI service
 │   ├── seeker/         Capture v2 API, taxonomy, judge, leveling, chain, DB
-│   ├── tapfarm/        legacy demo backend (tap-grid, pose, claim)
 │   ├── migrations/     database migrations
 │   └── tests/          backend test suite
 ├── programs/           Anchor workspaces

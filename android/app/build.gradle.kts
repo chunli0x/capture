@@ -20,10 +20,7 @@ android {
 
         // Point this at your machine's LAN IP when running the backend locally;
         // the Seeker cannot reach your laptop's localhost. Override without
-        // editing the file: -PunionApiBase=http://192.168.1.20:8000
-        val apiBase = (project.findProperty("unionApiBase") as String?)
-            ?: "http://10.0.2.2:8000"
-        buildConfigField("String", "API_BASE", "\"$apiBase\"")
+        // editing the file: -PseekerApiBase=http://192.168.1.20:8000
         val seekerBase = (project.findProperty("seekerApiBase") as String?) ?: "http://10.0.2.2:8001"
         require(!seekerBase.contains('"') && !seekerBase.contains('\n'))
         buildConfigField("String", "SEEKER_API_BASE", "\"$seekerBase\"")
