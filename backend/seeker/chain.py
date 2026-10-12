@@ -325,8 +325,8 @@ class Chain:
         if self.treasury is None:
             raise ChainUnavailable("SKR treasury (mint authority) is not configured")
         worker = Pubkey.from_string(wallet)
-        payer = self.treasury.pubkey()
-        instructions = [ata_instruction(payer, worker, self.skr)]
+        payer = self.treasury
+        instructions = [ata_instruction(payer.pubkey(), worker, self.skr)]
         instructions.append(
             mint_to(
                 MintToParams(
@@ -348,16 +348,16 @@ class Chain:
         if self.usdc_treasury is None:
             raise ChainUnavailable("USDC treasury (payout) is not configured")
         worker = Pubkey.from_string(wallet)
-        payer = self.usdc_treasury.pubkey()
-        source = get_associated_token_address(payer, self.usdc)
-        instructions = [ata_instruction(payer, worker, self.usdc)]
+        payer = self.usdc_treasury
+        source = get_associated_token_address(payer.pubkey(), self.usdc)
+        instructions = [ata_instruction(payer.pubkey(), worker, self.usdc)]
         instructions.append(
             transfer(
                 TransferParams(
                     program_id=TOKEN_PROGRAM_ID,
                     source=source,
                     dest=get_associated_token_address(worker, self.usdc),
-                    owner=payer,
+                    owner=payer.pubkey(),
                     amount=amount,
                     signers=[payer],
                 )
