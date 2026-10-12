@@ -48,6 +48,41 @@ Honest notes (state, do not hide):
 - K, thresholds, and rates are starting hypotheses — tune against real agreement
   data, not once.
 
+## Payout economics
+
+A judge's **base rate is $0.02 per aligned judgment**, times their level
+multiplier. Dissenters earn $0. "Can't tell" earns a flat **$0.005** and
+re-routes the pair. These are $SKR-denominated USD terms; the hackathon pays in
+**test $SKR on devnet** (1 test SKR anchors to $0.02).
+
+| Level | Agreement | Rate | ~Earns at 240/hr |
+|---|---|---|---|
+| Scout | no gate | ×1.00 | — |
+| Regular | ≥80% | ×1.10 | — |
+| Veteran | ≥88% | ×1.25 | $5.28/hr |
+| Expert | ≥93% | ×1.50 | $6.70/hr |
+| Pathfinder | ≥97% | ×2.00 | $9.31/hr |
+
+The gradient rewards accuracy, not speed: a Pathfinder earns ~2× a Scout because
+~97% of their judgments enter the dataset.
+
+Cost per useful label is flat regardless of judge quality, because dissenters
+are free:
+
+- 95% agreement → pay $1.90 per 100 judged → 95 useful labels → $0.020/label.
+- 60% agreement → pay $1.20 per 100 judged → 60 useful labels → $0.020/label.
+
+The operator always pays ~$0.02 per label that enters the dataset. A bad judge
+earns less and gets slashed; they were never overpaying.
+
+Whole-dataset cost (10,000 pairs at K=3): **~$540** total payout, versus ~$9,000
+for enterprise RLHF (~$0.30/judgment) or ~125 hours of manual labeling. $540 and
+zero operator time replaces $9k or 125 hours.
+
+The flywheel: judge → earn $SKR → stake more → unlock higher tiers → earn
+faster. The token accrues to people who are good at judging, and they reinvest
+it to earn more.
+
 ## Tokens & settlement
 
 - **test-SKR** — one token, three jobs: **stake** (deposit to unlock paid

@@ -50,6 +50,7 @@ fun JudgmentScreen(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit) {
                 textAlign = TextAlign.Center,
             )
             JudgeStatsCard(s)
+            JudgeTierLadder(judgeLevelFrom(s.judgeAgreementRate))
             if (!s.judgeCalibrated) {
                 CalibrationCard(s, vm)
             } else if (s.judgePair == null) {
@@ -66,7 +67,7 @@ private fun JudgeStatsCard(s: PilotState) {
     CapturePanel(Modifier.fillMaxWidth()) {
         Text("YOUR JUDGE STATS", style = MaterialTheme.typography.labelMedium, color = CaptureAccentBright)
         Text(
-            "Level ${s.judgeLevelName} · ${agreementPercent(s.judgeAgreementRate)}% agreement",
+            "Level ${s.judgeLevelName} · ${agreementPercent(s.judgeAgreementRate)}% agreement · ×${"%.2f".format(s.judgeRateMultiplier)} rate",
             style = MaterialTheme.typography.titleMedium,
             color = CaptureInk,
         )
@@ -84,7 +85,7 @@ private fun CalibrationCard(s: PilotState, vm: SeekerViewModel) {
         Text("CALIBRATION", style = MaterialTheme.typography.labelMedium, color = CaptureAccentBright)
         Text(
             "Answer ${s.calibrationRequired} known pairs before you can stake and earn. " +
-                "${s.calibrationCorrect} correct so far.",
+                "Calibration is unpaid. ${s.calibrationCorrect} correct so far.",
             style = MaterialTheme.typography.bodySmall,
             color = MutedGray,
         )

@@ -113,4 +113,45 @@ fun TierIcon(level: Int, modifier: Modifier = Modifier) {
     }
 }
 
+/** One rung of the judge-accuracy ladder (incentive spec §4), editorial-styled. */
+@Composable
+fun JudgeTierRow(tier: JudgeTier, active: Boolean, modifier: Modifier = Modifier) {
+    val requirement = tier.rateThreshold?.let { "≥${agreementPercent(it)}% agreement" } ?: "No gate"
+    Row(
+        modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TierIcon(tier.level, Modifier.size(40.dp))
+        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+            Text(
+                tier.name,
+                style = MaterialTheme.typography.titleSmall,
+                color = if (active) CaptureAccentBright else CaptureInk,
+            )
+            Text(requirement, style = MaterialTheme.typography.bodySmall, color = MutedGray)
+        }
+        Text("×${"%.2f".format(tier.rateMultiplier)}", style = MaterialTheme.typography.titleSmall, color = CaptureAccentBright)
+    }
+}
+
+/** The judge level ladder: agreement rate drives status and payout rate (§4). */
+@Composable
+fun JudgeTierLadder(currentLevel: Int, modifier: Modifier = Modifier) {
+    CapturePanel(modifier.fillMaxWidth()) {
+        Text("LEVEL LADDER", style = MaterialTheme.typography.labelMedium, color = CaptureAccentBright)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("LEVEL", style = MaterialTheme.typography.labelMedium, color = MutedGray, modifier = Modifier.weight(1f))
+            Text("AGREEMENT · RATE", style = MaterialTheme.typography.labelMedium, color = MutedGray)
+        }
+        JUDGE_TIERS.forEach { tier ->
+            JudgeTierRow(tier, active = tier.level == currentLevel)
+        }
+        Text(
+            "Agreement rate: rolling last 100 judged pairs. Status is free; only the rate multiplier costs money.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MutedGray,
+        )
+    }
+}
+
 
