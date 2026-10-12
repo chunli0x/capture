@@ -32,8 +32,9 @@ The full loop:
    idempotent per judgment). A judge whose rolling agreement rate stays below a
    floor runs the two-strike warn/slash ladder on-chain (full bond forfeit on
    the second strike).
-6. **Anchor.** Each fully-resolved batch records a Merkle root as dataset
-   provenance (on-chain anchoring is a next deploy).
+6. **Anchor.** Each fully-resolved batch records a Merkle root and commits it
+   on-chain via `post_batch` as dataset provenance (append-only per batch; a
+   failed final anchor is retried idempotently).
 
 A judge-accuracy ladder (agreement-rate driven) raises the rate multiplier from
 1.00 up to 2.00 across five levels.
@@ -116,6 +117,11 @@ Not done / honest caveats:
   gate in the judging path.
 - Sybil resistance is partial: the bond raises the cost of fake accounts but
   does not eliminate them.
+
+## Install the app
+
+The Android judgment client (built for Solana Seeker Mobile) is downloadable at
+`https://capture.magnumopus.ai/capture.apk` — a devnet build, test tokens only.
 
 ## Repository layout
 
