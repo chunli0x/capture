@@ -102,13 +102,25 @@ pub mod seeker_bounty {
 
     /// Close the config PDA so it can be re-initialized with a new layout.
     ///
-    /// Deployer-gated (the recorded admin). Used once, at upgrade time, when a
-    /// program layout change grows the Config account: close the stale config
-    /// (Anchor returns its lamports to ``admin`` and zeroes the account), then
-    /// call ``initialize`` again to recreate it at the new size and create the
-    /// penalty vault. The penalty vault must not exist yet, which holds on
-    /// devnet because it is introduced in the same upgrade.
-    pub fn close_config(_ctx: Context<CloseConfig>) -> Result<()> {
+    /// Deployer-gated (must be the program upgrade authority). Used once, at
+    /// upgrade time, when a program layout change grows the Config account: the
+    /// stale config may not deserialize into the new Config struct, so this
+    /// closes it raw (move lamports to the admin, shrink to zero, reassign to
+    /// the system program), then ``initialize`` recreates it at the new size
+    /// and creates the penalty vault.
+    pub fn close_config(ctx: Context<CloseConfig>) -> Result<()> {
+        let config = &ctx.accounts.config;
+        let admin = &ctx.accounts.admin;
+        let lamports = config.lamports();
+        **config.try_borrow_mut_lamports()? = 0;
+        **admin.try_borrow_mut_lamports()? = admin
+            .lamports()
+            .checked_add(lamports)
+            .ok_or(Error::Overflow)?;
+        // Zero the data and reassign to the system program. ``initialize`` will
+        // then re-allocate the account at the new size and take ownership again.
+        config.try_borrow_mut_data()?.fill(0);
+        config.assign(&ctx.accounts.system_program.key());
         Ok(())
     }
 
@@ -449,14 +461,20 @@ pub struct Warn<'info> {
 pub struct CloseConfig<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
+    /// CHECK: a stale config (pre-slash_authority layout) does NOT deserialize
+    /// into the current Config struct, so close it raw. The PDA seeds prove it
+    /// is the config; the upgrade-authority check below proves the caller.
     #[account(
         mut,
         seeds=[b"config"],
         bump,
-        close = admin,
-        constraint = config.admin == admin.key() @ Error::Unauthorized,
     )]
-    pub config: Account<'info, Config>,
+    pub config: AccountInfo<'info>,
+    pub system_program: Program<'info, System>,
+    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ Error::Unauthorized)]
+    pub program: Program<'info, crate::program::SeekerBounty>,
+    #[account(constraint = program_data.upgrade_authority_address == Some(admin.key()) @ Error::Unauthorized)]
+    pub program_data: Account<'info, ProgramData>,
 }
 
 #[derive(Accounts)]
