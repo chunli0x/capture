@@ -1356,14 +1356,17 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
     @app.post("/bond/deposit")
     def bond_deposit(actor: Auth):
         """Build + return the real ``deposit_bond`` prepare transaction. The
-        bond is marked ``bonded`` only when the client confirms the exact
-        message via /transactions/{id}/confirm (see record_confirmation)."""
+        bond is marked ``bonded`` (and the account enrolled as a worker) only
+        when the client confirms the exact message via
+        /transactions/{id}/confirm (see record_confirmation).
+
+        The deposit IS the self-serve enrollment: a fresh wallet needs no prior
+        ``worker`` flag, only test SKR, because bonding promotes it to a worker
+        on confirm."""
         with database.transaction() as db:
             actor = lock(db, Actor, actor.wallet)
             if not actor.skr_funded:
                 fail(409, "Get test SKR first")
-            if not actor.worker:
-                fail(403, "Worker enrollment required")
             return prepare(db, "deposit", actor.wallet, actor)
 
     @app.post("/bond/withdraw")
