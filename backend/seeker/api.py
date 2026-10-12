@@ -60,9 +60,9 @@ from .judge import JudgeUnavailable, StubJudge, build_judge
 from .payout import payout_units
 from . import taxonomy
 
-# Liveness sessions are self-contained (stdlib only) and shared with the old
-# Union app; reuse the same module so the wire shape and replay rules match.
-from tapfarm.liveness import (
+# Liveness sessions are self-contained (stdlib only). Reuse the same module so
+# the wire shape and replay rules match.
+from .liveness import (
     LivenessError,
     LivenessSessionStore,
     SessionAlreadyUsed,

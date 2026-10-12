@@ -83,7 +83,7 @@ def apply_nullability_migrations(engine):
 def main():
     settings = Settings()
     engine = connect(settings.database_url)
-    # Version 1 is additive only, idempotent, and never touches tapfarm tables.
+    # create_all is additive and idempotent; numbered migrations handle the rest.
     Base.metadata.create_all(engine)
     apply_migrations(engine)
     print("Seeker schema applied (create_all + numbered migrations)")

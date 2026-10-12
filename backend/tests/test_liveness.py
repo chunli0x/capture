@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from tapfarm.liveness import (
+from seeker.liveness import (
     PROOF_DOMAIN,
     Challenge,
     LivenessSessionStore,
