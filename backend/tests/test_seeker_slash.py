@@ -294,7 +294,7 @@ def test_withdraw_builds_prepare_and_confirm_clears_bonded(pilot):
 # ---- accepted settlement records the treasury signature ----
 
 
-def test_accept_records_treasury_settlement_signature(pilot):
+def test_accept_accrues_pending_payout_and_settles_in_batch(pilot):
     c, app, h, keys, chain, *_ = pilot
     wallet = str(keys[0].pubkey())
     ready_worker(c, h[0], wallet)
@@ -317,8 +317,27 @@ def test_accept_records_treasury_settlement_signature(pilot):
     body = r.json()
     assert body["status"] == "accepted"
     assert body["payout_usdc"] == 100_000
-    assert body["payout_signature"] is not None
+    # Fee minimization: accept accrues off-chain; no per-upload settle yet.
+    assert body["payout_signature"] is None
+    assert chain.settled == []
+
+    with app.state.database.transaction() as db:
+        actor = db.get(Actor, wallet)
+        assert actor.pending_usdc == 100_000
+
+    # /bond/settle drains the accrued balance in one on-chain transfer.
+    r = c.post("/bond/settle", headers=h[0])
+    assert r.status_code == 200, r.text
+    settled = r.json()
+    assert settled["settled"] == 100_000
+    assert settled["signature"] is not None
     assert chain.settled == [(wallet, 100_000)]
 
     with app.state.database.transaction() as db:
-        assert db.get(Submission, sid).payout_signature == body["payout_signature"]
+        assert db.get(Actor, wallet).pending_usdc == 0
+
+    # A second settle with nothing accrued is a no-op, no on-chain tx.
+    r = c.post("/bond/settle", headers=h[0])
+    assert r.status_code == 200, r.text
+    assert r.json()["settled"] == 0
+    assert len(chain.settled) == 1

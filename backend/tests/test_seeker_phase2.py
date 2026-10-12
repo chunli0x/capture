@@ -914,8 +914,9 @@ def test_migration_0002_adds_phase2_columns(tmp_path):
     # 0002 adds 3 columns; 0003 adds 2; 0004 adds 8 (actors.accepted_count +
     # 7 submission columns); 0005 adds 1 (actors.liveness_completed); 0006 adds
     # 3 (actors.bonded, quality_checks, skr_funded); 0007 adds 1
-    # (reviews.accepted); 0008 adds 1 (submissions.payout_signature).
-    assert apply_migrations(engine) == 19
+    # (reviews.accepted); 0008 adds 1 (submissions.payout_signature); 0009 adds
+    # 1 (actors.pending_usdc).
+    assert apply_migrations(engine) == 20
     assert apply_migrations(engine) == 0  # re-run is a no-op
 
     bounty_cols = {c["name"] for c in inspect(engine).get_columns("seeker_bounties")}
@@ -929,6 +930,7 @@ def test_migration_0002_adds_phase2_columns(tmp_path):
     assert "liveness_completed" in actor_cols
     assert "bonded" in actor_cols and "quality_checks" in actor_cols
     assert "skr_funded" in actor_cols
+    assert "pending_usdc" in actor_cols
     assert "capture_metadata" in sub_cols and "accepted" in sub_cols
     assert "judged_at" in sub_cols and "payout_usdc" in sub_cols
     assert "verdict_reason" in sub_cols and "level_after" in sub_cols

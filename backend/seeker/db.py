@@ -60,6 +60,11 @@ class Actor(Base):
     bonded: Mapped[bool] = mapped_column(Boolean, default=False)
     quality_checks: Mapped[int] = mapped_column(Integer, default=0)
     skr_funded: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Capture v2: accrued-but-unsettled payout in USDC base units. Accepted
+    # uploads credit this off-chain; a batched /bond/settle transfers the whole
+    # balance on-chain in one transaction (fee minimization: one treasury tx per
+    # settle, not one per accepted upload).
+    pending_usdc: Mapped[int] = mapped_column(BigInteger, default=0)
 
 
 class Challenge(Base):

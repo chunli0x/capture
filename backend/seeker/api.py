@@ -506,16 +506,13 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
         if verdict.accepted:
             complete = bool(secondary.get("postures")) and bool(secondary.get("environment"))
             payout = payout_units(level_before, s.kind, s.duration_ms, complete)
-            if payout > 0:
-                # Real on-chain settlement: transfer USDC from the treasury to
-                # the worker's ATA and record the signature. Fail closed — an
-                # accepted upload must never settle silently.
-                try:
-                    settle_signature = chain.settle_usdc(actor.wallet, payout)
-                except ChainUnavailable as exc:
-                    fail(503, f"Accepted, but treasury settlement unavailable: {exc}")
             worker = lock(db, Actor, actor.wallet)
             worker.accepted_count += 1
+            if payout > 0:
+                # Batched settlement (fee minimization): credit the worker's
+                # accrued off-chain balance instead of settling per upload. The
+                # single on-chain treasury transfer happens in /bond/settle.
+                worker.pending_usdc += payout
             s.status, s.accepted = "accepted", True
         else:
             s.status, s.accepted = "rejected", False
@@ -724,6 +721,7 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             "quality_checks": actor.quality_checks,
             "quality_checks_required": QUALITY_CHECKS_REQUIRED,
             "unlocked": actor.bonded,
+            "pending_usdc": actor.pending_usdc,
             **level,
         }
 
@@ -1378,6 +1376,27 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             if not actor.worker:
                 fail(403, "Worker enrollment required")
             return prepare(db, "withdraw", actor.wallet, actor)
+
+    @app.post("/bond/settle")
+    def bond_settle(actor: Auth):
+        """Settle the worker's accrued payout in a single on-chain transfer.
+
+        Accepted uploads credit ``pending_usdc`` off-chain; this endpoint drains
+        the whole balance to the worker's USDC ATA in one treasury transaction
+        (fee minimization: one tx per settle, not one per accepted upload)."""
+        with database.transaction() as db:
+            actor = lock(db, Actor, actor.wallet)
+            if not actor.worker:
+                fail(403, "Worker enrollment required")
+            amount = actor.pending_usdc
+            if amount <= 0:
+                return {"settled": 0, "signature": None, "pending_usdc": 0}
+            try:
+                signature = chain.settle_usdc(actor.wallet, amount)
+            except ChainUnavailable as exc:
+                fail(503, f"Settlement unavailable: {exc}")
+            actor.pending_usdc = 0
+        return {"settled": amount, "signature": signature, "pending_usdc": 0}
 
     @app.post("/bond/{action}/prepare")
     def prepare_bond(action: str, actor: Auth):
