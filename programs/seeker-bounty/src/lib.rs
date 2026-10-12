@@ -100,6 +100,18 @@ pub mod seeker_bounty {
         Ok(())
     }
 
+    /// Close the config PDA so it can be re-initialized with a new layout.
+    ///
+    /// Deployer-gated (the recorded admin). Used once, at upgrade time, when a
+    /// program layout change grows the Config account: close the stale config
+    /// (Anchor returns its lamports to ``admin`` and zeroes the account), then
+    /// call ``initialize`` again to recreate it at the new size and create the
+    /// penalty vault. The penalty vault must not exist yet, which holds on
+    /// devnet because it is introduced in the same upgrade.
+    pub fn close_config(_ctx: Context<CloseConfig>) -> Result<()> {
+        Ok(())
+    }
+
     pub fn slash(ctx: Context<Slash>, worker: Pubkey) -> Result<()> {
         require!(slashable(ctx.accounts.bond.warnings), Error::NotWarned);
         // Full slash: the entire bond vault is forfeit on the second strike.
@@ -431,6 +443,20 @@ pub struct Warn<'info> {
     pub config: Account<'info, Config>,
     #[account(mut, seeds=[b"bond", worker.as_ref()], bump)]
     pub bond: Account<'info, Bond>,
+}
+
+#[derive(Accounts)]
+pub struct CloseConfig<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(
+        mut,
+        seeds=[b"config"],
+        bump,
+        close = admin,
+        constraint = config.admin == admin.key() @ Error::Unauthorized,
+    )]
+    pub config: Account<'info, Config>,
 }
 
 #[derive(Accounts)]
