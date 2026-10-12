@@ -30,8 +30,8 @@ def _numbered_migrations():
 def apply_migrations(engine):
     """Idempotently apply every numbered migration. A column is added with
     ``ALTER TABLE … ADD COLUMN`` only when it is absent, so an existing phase-1
-    DB upgrades cleanly (duration_ms stops being silently NULL) and re-running
-    is a no-op. Works on both SQLite and PostgreSQL."""
+    DB upgrades cleanly and re-running is a no-op. Works on both SQLite and
+    PostgreSQL."""
     applied = 0
     for migration_id, columns in _numbered_migrations():
         for table, column, ddl in columns:
@@ -47,66 +47,7 @@ def apply_migrations(engine):
                     f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"
                 )
             applied += 1
-    applied += apply_nullability_migrations(engine)
-    applied += apply_index_migrations(engine)
     return applied
-
-
-def apply_index_migrations(engine):
-    """Create DB-enforced indexes the ADD COLUMN framework cannot express.
-
-    Finding 11: open (bounty_id IS NULL) uploads had no uniqueness constraint,
-    because ``UNIQUE(bounty_id, media_hash)`` treats every NULL bounty_id as
-    distinct. A PostgreSQL partial unique index on the exact media_hash (where
-    bounty_id IS NULL) closes the cross-wallet duplicate race at the database,
-    not just in application code. SQLite partial indexes are supported too but
-    the deployed backend is PostgreSQL; both paths are provided.
-    """
-    applied = 0
-    inspector = inspect(engine)
-    if not inspector.has_table("seeker_submissions"):
-        return 0
-    index_name = "uq_open_upload_media_hash"
-    existing = {ix["name"] for ix in inspector.get_indexes("seeker_submissions")}
-    if index_name in existing:
-        return 0
-    ddl = (
-        "CREATE UNIQUE INDEX uq_open_upload_media_hash "
-        "ON seeker_submissions (media_hash) "
-        "WHERE bounty_id IS NULL AND media_hash IS NOT NULL"
-    )
-    with engine.begin() as conn:
-        conn.exec_driver_sql(ddl)
-    return applied + 1
-
-
-def apply_nullability_migrations(engine):
-    """Drop NOT NULL constraints the v2 open-upload pivot made obsolete.
-
-    The numbered ADD COLUMN framework cannot express a nullability change
-    cross-dialect, so these live here. ``bounty_id`` must become nullable so an
-    open (no-bounty) upload can insert NULL. PostgreSQL: a plain
-    ``ALTER COLUMN … DROP NOT NULL``, idempotent. SQLite: a fresh DB already
-    gets the nullable column from ``create_all`` (the model declares
-    ``Mapped[str | None]``), and the deployed DB is PostgreSQL, so SQLite is a
-    no-op here.
-    """
-    if engine.dialect.name != "postgresql":
-        return 0
-    inspector = inspect(engine)
-    if not inspector.has_table("seeker_submissions"):
-        return 0
-    col = next(
-        (c for c in inspector.get_columns("seeker_submissions") if c["name"] == "bounty_id"),
-        None,
-    )
-    if col is None or col.get("nullable"):
-        return 0
-    with engine.begin() as conn:
-        conn.exec_driver_sql(
-            "ALTER TABLE seeker_submissions ALTER COLUMN bounty_id DROP NOT NULL"
-        )
-    return 1
 
 
 def main():

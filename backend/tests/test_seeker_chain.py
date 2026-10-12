@@ -32,46 +32,29 @@ def chain(tmp_path):
 
 
 @pytest.fixture
-def resources():
-    payer, worker = Keypair(), Keypair()
-    b = SimpleNamespace(
-        id="01" * 16, requester=str(payer.pubkey()), reward=23, slots=4, deadline=1234
-    )
-    s = SimpleNamespace(
-        worker=str(worker.pubkey()), media_hash="02" * 32, label_hash="03" * 32
-    )
-    return payer, worker, b, s
+def payer():
+    return Keypair()
 
 
-def test_instruction_layout_and_required_signers(chain, resources):
-    payer, worker, b, s = resources
-    ix = chain.build("fund", str(payer.pubkey()), b)[-1]
-    assert ix.data == discriminator("post_bounty") + bytes.fromhex(b.id) + struct.pack(
-        "<QIq", 23, 4, 1234
-    )
+def test_deposit_withdraw_instruction_layout(chain, payer):
+    ix = chain.build("deposit", str(payer.pubkey()))[-1]
+    assert ix.data == discriminator("deposit_bond") + struct.pack("<Q", 1_000_000)
     assert ix.accounts[0].pubkey == payer.pubkey() and ix.accounts[0].is_signer
-    ix = chain.build("fulfill", str(worker.pubkey()), b, s)[-1]
-    assert ix.data == discriminator("fulfill") + bytes.fromhex(
-        s.media_hash
-    ) + bytes.fromhex(s.label_hash)
-    assert ix.accounts[0].is_signer and ix.accounts[1].is_signer
-    assert ix.accounts[1].pubkey == chain.verifier.pubkey()
-    for action in ("accept", "reject", "expire"):
-        ix = chain.build(action, str(payer.pubkey()), b, s)[-1]
-        assert ix.accounts[0].is_signer and ix.accounts[4].pubkey == worker.pubkey()
-        assert ix.data == discriminator(action)
-    for action in ("refund", "deposit", "withdraw"):
-        assert (
-            chain.build(action, str(payer.pubkey()), b)[-1].program_id == chain.program
-        )
+    assert ix.accounts[0].is_writable
+    assert ix.accounts[3].pubkey == chain.pda(b"bond", bytes(payer.pubkey()))
+    assert ix.accounts[3].is_writable
+    assert ix.accounts[6].pubkey == TOKEN_PROGRAM_ID
+    ix = chain.build("withdraw", str(payer.pubkey()))[-1]
+    assert ix.data == discriminator("withdraw_bond")
+    assert ix.accounts[0].pubkey == payer.pubkey() and ix.accounts[0].is_signer
+    assert not ix.accounts[0].is_writable
     with pytest.raises(ChainUnavailable):
         chain.build("unknown", str(payer.pubkey()))
 
 
-def test_exact_signed_message_confirmation(chain, resources):
-    payer, _worker, b, _s = resources
+def test_exact_signed_message_confirmation(chain, payer):
     msg = Message.new_with_blockhash(
-        chain.build("fund", str(payer.pubkey()), b), payer.pubkey(), Hash.new_unique()
+        chain.build("deposit", str(payer.pubkey())), payer.pubkey(), Hash.new_unique()
     )
     tx = Transaction.new_unsigned(msg)
     tx.sign([payer], msg.recent_blockhash)
@@ -94,10 +77,9 @@ def test_exact_signed_message_confirmation(chain, resources):
         chain.confirm(p, str(tx.signatures[0]))
 
 
-def test_unsigned_or_other_signer_never_confirms(chain, resources):
-    payer, _worker, b, _s = resources
+def test_unsigned_or_other_signer_never_confirms(chain, payer):
     msg = Message.new_with_blockhash(
-        chain.build("fund", str(payer.pubkey()), b), payer.pubkey(), Hash.new_unique()
+        chain.build("deposit", str(payer.pubkey())), payer.pubkey(), Hash.new_unique()
     )
     tx = Transaction.new_unsigned(msg)
     p = SimpleNamespace(message_hash=hashlib.sha256(bytes(msg)).hexdigest())
@@ -107,28 +89,6 @@ def test_unsigned_or_other_signer_never_confirms(chain, resources):
     }
     with pytest.raises(ChainUnavailable):
         chain.confirm(p, str(tx.signatures[0]))
-
-
-def test_prepare_cosigns_only_fulfillment(chain, resources):
-    payer, worker, b, s = resources
-    chain.check_environment = lambda: None
-    block = Hash.new_unique()
-    chain.rpc = lambda *args: {
-        "value": {"blockhash": str(block), "lastValidBlockHeight": 300}
-    }
-    prepared = chain.prepare("fulfill", str(worker.pubkey()), b, s)
-    tx = Transaction.from_bytes(base64.b64decode(prepared["transaction"]))
-    checks = tx.verify_with_results()
-    assert checks == [
-        False,
-        True,
-    ]  # worker still must approve; only verifier has signed
-    tx.partial_sign([worker], block)
-    tx.verify()
-    prepared = chain.prepare("fund", str(payer.pubkey()), b)
-    assert Transaction.from_bytes(
-        base64.b64decode(prepared["transaction"])
-    ).verify_with_results() == [False]
 
 
 def test_environment_binds_config_mints_verifier_and_network(chain):
@@ -189,31 +149,29 @@ def test_environment_rejects_stale_144_byte_config(chain):
         chain.check_environment()
 
 
-def test_warn_slash_instruction_layout(chain, resources):
-    _payer, worker, _b, _s = resources
-    ix = chain.build("warn", str(worker.pubkey()))[-1]
-    assert ix.data == discriminator("warn") + bytes(worker.pubkey())
+def test_warn_slash_instruction_layout(chain, payer):
+    ix = chain.build("warn", str(payer.pubkey()))[-1]
+    assert ix.data == discriminator("warn") + bytes(payer.pubkey())
     assert len(ix.accounts) == 3
     assert ix.accounts[0].pubkey == chain.verifier.pubkey() and ix.accounts[0].is_signer
     assert ix.accounts[1].pubkey == chain.config and not ix.accounts[1].is_writable
-    assert ix.accounts[2].pubkey == chain.pda(b"bond", bytes(worker.pubkey()))
+    assert ix.accounts[2].pubkey == chain.pda(b"bond", bytes(payer.pubkey()))
     assert ix.accounts[2].is_writable
 
-    ix = chain.build("slash", str(worker.pubkey()))[-1]
-    assert ix.data == discriminator("slash") + bytes(worker.pubkey())
+    ix = chain.build("slash", str(payer.pubkey()))[-1]
+    assert ix.data == discriminator("slash") + bytes(payer.pubkey())
     assert len(ix.accounts) == 6
     assert ix.accounts[0].pubkey == chain.verifier.pubkey() and ix.accounts[0].is_signer
-    assert ix.accounts[2].pubkey == chain.pda(b"bond", bytes(worker.pubkey()))
-    assert ix.accounts[3].pubkey == chain.pda(b"bond-vault", bytes(worker.pubkey()))
+    assert ix.accounts[2].pubkey == chain.pda(b"bond", bytes(payer.pubkey()))
+    assert ix.accounts[3].pubkey == chain.pda(b"bond-vault", bytes(payer.pubkey()))
     assert ix.accounts[3].is_writable
     assert ix.accounts[4].pubkey == chain.penalty_vault and ix.accounts[4].is_writable
     assert ix.accounts[5].pubkey == TOKEN_PROGRAM_ID
 
 
-def test_find_signature_paginates_beyond_first_100(chain, resources):
-    payer, _worker, b, _s = resources
+def test_find_signature_paginates_beyond_first_100(chain, payer):
     msg = Message.new_with_blockhash(
-        chain.build("fund", str(payer.pubkey()), b), payer.pubkey(), Hash.new_unique()
+        chain.build("deposit", str(payer.pubkey())), payer.pubkey(), Hash.new_unique()
     )
     tx = Transaction.new_unsigned(msg)
     tx.sign([payer], msg.recent_blockhash)
@@ -244,7 +202,7 @@ def test_find_signature_paginates_beyond_first_100(chain, resources):
         raise AssertionError(f"unexpected rpc method: {method}")
 
     chain.rpc = fake_rpc
-    assert chain.find_signature(p, b) == target
+    assert chain.find_signature(p) == target
 
     sig_calls = [c for c in calls if c[0] == "getSignaturesForAddress"]
     assert len(sig_calls) == 2
@@ -255,13 +213,11 @@ def test_find_signature_paginates_beyond_first_100(chain, resources):
 def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
     # Regression: the treasury is a Keypair (not a Pubkey), and the SPL
     # instruction params take pubkeys while _sign_and_send signs with the
-    # Keypair. This exercises both paths end to end against a stub RPC.
+    # Keypair. This exercises both faucet and settle_skr end to end.
     treasury = Keypair()
     p = tmp_path / "treasury.json"
     p.write_text(json.dumps(list(bytes(treasury))))
     chain.treasury = treasury
-    chain.usdc_treasury = treasury
-    chain._load_key = lambda path: Keypair.from_bytes(bytes(json.loads(path.read_text())))
 
     worker = Keypair()
     sent = []
@@ -273,7 +229,7 @@ def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
         if method == "sendTransaction":
             return "sig_" + method
         if method == "getSignatureStatuses":
-            # confirm success so settle_usdc/post_batch _confirm_sent passes
+            # confirm success so settle_skr's _confirm_sent passes
             return {"value": [{"err": None, "confirmationStatus": "finalized"}]}
         raise AssertionError(f"unexpected rpc method: {method}")
 
@@ -281,8 +237,8 @@ def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
     # Faucet mints min_bond SKR to the worker (mint authority = treasury).
     sig = chain.faucet(str(worker.pubkey()))
     assert sig == "sig_sendTransaction"
-    # Settlement transfers USDC from the treasury to the worker.
-    sig = chain.settle_usdc(str(worker.pubkey()), 100_000)
+    # Settlement mints test SKR to the judge (mint authority = treasury).
+    sig = chain.settle_skr(str(worker.pubkey()), 100_000, memo="judgment-1")
     assert sig == "sig_sendTransaction"
 
     # Both produced exactly two sendTransaction calls (one each) and the

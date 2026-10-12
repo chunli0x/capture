@@ -49,6 +49,9 @@ class FakeChain:
         self.settled_skr.append((wallet, amount))
         return str(Keypair().sign_message(f"skr-{len(self.settled_skr)}".encode()))
 
+    def faucet(self, wallet):
+        return str(Keypair().sign_message(b"faucet"))
+
     def post_batch(self, batch_id, merkle_root):
         self.posted.append((batch_id, merkle_root))
         return str(Keypair().sign_message(b"batch"))
@@ -61,8 +64,6 @@ def pilot(tmp_path):
         database_url="sqlite:///" + str(tmp_path / "judge.db"),
         local_sqlite=True,
         domain="pilot.test",
-        operator_key="o" * 32,
-        media_key=base64.b64encode(b"k" * 32).decode(),
         program_id=str(Keypair().pubkey()),
         usdc_mint=str(Keypair().pubkey()),
         skr_mint=str(Keypair().pubkey()),
@@ -255,7 +256,7 @@ def test_withdraw_frozen_after_warn(pilot):
     w0 = str(keys[0].pubkey())
     with app.state.database.transaction() as db:
         a = db.get(Actor, w0)
-        a.worker = True
+        a.bonded = True
         a.warnings = 1
     r = c.post("/bond/withdraw", headers=h[0])
     assert r.status_code == 403

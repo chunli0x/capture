@@ -1,9 +1,7 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from solders.pubkey import Pubkey
-
-Kind = Literal["object", "place", "action"]
 
 
 class Strict(BaseModel):
@@ -26,118 +24,10 @@ class Verify(Strict):
     over_18: bool = False
 
 
-class Enrollment(Wallet):
-    worker: bool = False
-    reviewer: bool = False
-    over_18: bool = False
-
-
-class CreateBounty(Strict):
-    kind: Kind = "object"
-    title: str = Field(min_length=3, max_length=160)
-    category_ids: list[int] = Field(min_length=1, max_length=50)
-    reward_usdc_units: int = Field(strict=True, ge=1, le=1_000_000_000)
-    slots: int = Field(strict=True, ge=1, le=100)
-    deadline: int = Field(strict=True)
-
-    @model_validator(mode="after")
-    def coherent(self):
-        if len(set(self.category_ids)) != len(self.category_ids):
-            raise ValueError("Category IDs must be unique")
-        return self
-
-
-class Box(Strict):
-    category_id: int = Field(strict=True, ge=0)
-    x: float = Field(ge=0, lt=1)
-    y: float = Field(ge=0, lt=1)
-    w: float = Field(gt=0, le=1)
-    h: float = Field(gt=0, le=1)
-
-    @model_validator(mode="after")
-    def contained(self):
-        if self.x + self.w > 1.0000001 or self.y + self.h > 1.0000001:
-            raise ValueError("Box exceeds image")
-        return self
-
-
-class Scene(Strict):
-    """Exactly one scene class; a place label is never multi-label."""
-
-    category_id: int = Field(strict=True, ge=0)
-
-
-class ActionSpan(Strict):
-    """One action tag with a bounded, integer-millisecond trim. start < end."""
-
-    category_id: int = Field(strict=True, ge=0)
-    start_ms: int = Field(strict=True, ge=0)
-    end_ms: int = Field(strict=True, ge=0)
-
-    @model_validator(mode="after")
-    def ordered(self):
-        if self.start_ms >= self.end_ms:
-            raise ValueError("start_ms must be strictly less than end_ms")
-        return self
-
-
-class Labels(Strict):
-    media_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
-    boxes: list[Box] = Field(min_length=1, max_length=100)
-    expressions: list[int] = Field(default_factory=list, max_length=20)
-    postures: list[int] = Field(default_factory=list, max_length=21)
-    environment: list[int] = Field(default_factory=list, max_length=5)
-    # Capture v2 optional metadata (all optional; defaults empty/false).
-    surface_type: str | None = None
-    lighting: str | None = None
-    weather: str | None = None
-    ego_motion: bool = False
-
-
-class PlaceLabels(Strict):
-    media_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
-    scene: Scene
-    expressions: list[int] = Field(default_factory=list, max_length=20)
-    postures: list[int] = Field(default_factory=list, max_length=21)
-    environment: list[int] = Field(default_factory=list, max_length=5)
-    surface_type: str | None = None
-    lighting: str | None = None
-    weather: str | None = None
-    ego_motion: bool = False
-
-
-class ActionLabels(Strict):
-    media_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
-    action: ActionSpan
-    expressions: list[int] = Field(default_factory=list, max_length=20)
-    postures: list[int] = Field(default_factory=list, max_length=21)
-    environment: list[int] = Field(default_factory=list, max_length=5)
-    surface_type: str | None = None
-    lighting: str | None = None
-    weather: str | None = None
-    ego_motion: bool = False
-
-
-class OpenSubmission(Strict):
-    """Create an open (no-bounty) upload; the Capture v2 entry point."""
-
-    kind: Kind = "object"
-
-
-class OpenReview(Strict):
-    """A free peer-review verdict on an open (no-bounty) upload.
-
-    Free reviewers do a quick quality verdict (accept/reject) rather than a full
-    re-label, so this is a single boolean, not boxes/scene/action.
-    """
-
-    accepted: bool
-
-
 class LivenessSession(Strict):
     """Start a liveness session: a fresh motion challenge before the first
-    upload. ``contributor`` is the wallet; ``task_id`` binds the proof to a task
-    (the app uses a fixed ``capture-session`` label)."""
+    judgment. ``contributor`` is the wallet; ``task_id`` binds the proof to a
+    task."""
 
     contributor: str
     task_id: str = Field(min_length=1, max_length=64)
@@ -181,49 +71,3 @@ class JudgmentSubmit(Strict):
 
     choice: Literal["a", "b", "tie", "cant_tell"] | None = None
     rating: int | None = Field(default=None, ge=1, le=5)
-
-
-def iou(a, b):
-    intersection = max(
-        0, min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"])
-    ) * max(0, min(a["y"] + a["h"], b["y"] + b["h"]) - max(a["y"], b["y"]))
-    return intersection / (a["w"] * a["h"] + b["w"] * b["h"] - intersection)
-
-
-def agree(left, right):
-    """One-to-one category+IoU matching; ordering and duplicate boxes cannot pad votes."""
-    if len(left) != len(right):
-        return False
-    edges = [
-        [
-            j
-            for j, b in enumerate(right)
-            if a["category_id"] == b["category_id"] and iou(a, b) >= 0.7
-        ]
-        for a in left
-    ]
-    matched = {}
-
-    def augment(i, seen):
-        for j in edges[i]:
-            if j not in seen:
-                seen.add(j)
-                if j not in matched or augment(matched[j], seen):
-                    matched[j] = i
-                    return True
-        return False
-
-    return all(augment(i, set()) for i in range(len(left)))
-
-
-def labels_agree(kind, a, b):
-    """Reviewer consensus for the three kinds; `agree` covers object boxes."""
-    if kind == "place":
-        return a["scene"]["category_id"] == b["scene"]["category_id"]
-    if kind == "action":
-        return (
-            a["action"]["category_id"] == b["action"]["category_id"]
-            and a["action"]["start_ms"] == b["action"]["start_ms"]
-            and a["action"]["end_ms"] == b["action"]["end_ms"]
-        )
-    return agree(a, b)

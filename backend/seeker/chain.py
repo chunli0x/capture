@@ -16,8 +16,8 @@ from solders.pubkey import Pubkey
 from solders.signature import Signature
 from solders.transaction import Transaction, TransactionError
 from spl.token.constants import ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID
-from spl.token.instructions import get_associated_token_address, mint_to, transfer
-from spl.token.models import MintToParams, TransferParams
+from spl.token.instructions import get_associated_token_address, mint_to
+from spl.token.models import MintToParams
 
 SYSTEM = Pubkey.default()
 RENT = Pubkey.from_string("SysvarRent111111111111111111111111111111111")
@@ -64,14 +64,10 @@ class Chain:
         )
         self.config = self.pda(b"config")
         self.penalty_vault = self.pda(b"penalty-vault", bytes(self.config))
-        # Devnet treasuries (both optional). treasury == SKR mint authority
-        # (faucet); usdc_treasury == USDC payout wallet (accept settlement).
-        # Absent means the corresponding on-chain operation is unavailable and
-        # the backend fails closed instead of fabricating a transfer.
+        # Devnet treasury: holds the SKR mint authority (the /bond/faucet mint
+        # and the settle_skr payout). Absent means the on-chain mint is
+        # unavailable and the backend fails closed instead of fabricating it.
         self.treasury = self._load_key(getattr(settings, "treasury_key_file", None))
-        self.usdc_treasury = self._load_key(
-            getattr(settings, "usdc_treasury_key_file", None)
-        )
 
     @staticmethod
     def _load_key(path):
@@ -138,81 +134,15 @@ class Chain:
                 "Configured verifier, mints or bond differ from program"
             )
 
-    def build(self, action, wallet, bounty=None, submission=None, amount=None):
+    def build(self, action, wallet, amount=None):
+        """Build the instructions for a bond or slash action. ``amount`` is
+        unused for warn/slash (kept for the ``issue`` call signature)."""
         who = Pubkey.from_string(wallet)
-        b = (
-            self.pda(
-                b"bounty",
-                bytes(Pubkey.from_string(bounty.requester)),
-                bytes.fromhex(bounty.id),
-            )
-            if bounty
-            else None
-        )
-        worker = Pubkey.from_string(submission.worker) if submission else who
+        worker = who
         bond = self.pda(b"bond", bytes(worker))
         bond_vault = self.pda(b"bond-vault", bytes(worker))
-        common = [meta(self.config), meta(self.usdc)]
         prefix = []
-        if action == "fund":
-            prefix = [ata_instruction(who, who, self.usdc)]
-            accounts = [
-                meta(who, True, True),
-                *common,
-                meta(b, writable=True),
-                meta(self.pda(b"vault", bytes(b)), writable=True),
-                meta(get_associated_token_address(who, self.usdc), writable=True),
-                meta(TOKEN_PROGRAM_ID),
-                meta(SYSTEM),
-                meta(RENT),
-            ]
-            data = (
-                discriminator("post_bounty")
-                + bytes.fromhex(bounty.id)
-                + struct.pack("<QIq", bounty.reward, bounty.slots, bounty.deadline)
-            )
-        elif action == "fulfill":
-            accounts = [
-                meta(who, True, True),
-                meta(self.verifier.pubkey(), True),
-                meta(self.config),
-                meta(b, writable=True),
-                meta(self.pda(b"submission", bytes(b), bytes(worker)), writable=True),
-                meta(bond, writable=True),
-                meta(bond_vault),
-                meta(SYSTEM),
-            ]
-            data = (
-                discriminator("fulfill")
-                + bytes.fromhex(submission.media_hash)
-                + bytes.fromhex(submission.label_hash)
-            )
-        elif action in {"accept", "reject", "expire"}:
-            prefix = [ata_instruction(who, worker, self.usdc)]
-            accounts = [
-                meta(who, True),
-                *common,
-                meta(b, writable=True),
-                meta(worker),
-                meta(self.pda(b"submission", bytes(b), bytes(worker)), writable=True),
-                meta(bond, writable=True),
-                meta(self.pda(b"vault", bytes(b)), writable=True),
-                meta(get_associated_token_address(worker, self.usdc), writable=True),
-                meta(TOKEN_PROGRAM_ID),
-            ]
-            data = discriminator(action)
-        elif action == "refund":
-            prefix = [ata_instruction(who, who, self.usdc)]
-            accounts = [
-                meta(who, True),
-                *common,
-                meta(b),
-                meta(self.pda(b"vault", bytes(b)), writable=True),
-                meta(get_associated_token_address(who, self.usdc), writable=True),
-                meta(TOKEN_PROGRAM_ID),
-            ]
-            data = discriminator(action)
-        elif action in {"deposit", "withdraw"}:
+        if action in {"deposit", "withdraw"}:
             prefix = [ata_instruction(who, who, self.skr)]
             accounts = [
                 meta(who, True, action == "deposit"),
@@ -259,18 +189,16 @@ class Chain:
             raise ChainUnavailable("Unknown transaction action")
         return prefix + [Instruction(self.program, data, accounts)]
 
-    def prepare(self, action, wallet, bounty=None, submission=None):
+    def prepare(self, action, wallet):
         self.check_environment()
         result = self.rpc("getLatestBlockhash", [{"commitment": "finalized"}])["value"]
         blockhash = Hash.from_string(result["blockhash"])
         msg = Message.new_with_blockhash(
-            self.build(action, wallet, bounty, submission),
+            self.build(action, wallet),
             Pubkey.from_string(wallet),
             blockhash,
         )
         tx = Transaction.new_unsigned(msg)
-        if action == "fulfill":
-            tx.partial_sign([self.verifier], blockhash)
         return {
             "transaction": base64.b64encode(bytes(tx)).decode(),
             "message_hash": hashlib.sha256(bytes(msg)).hexdigest(),
@@ -298,9 +226,9 @@ class Chain:
         """Poll a just-broadcast signature until it finalizes or fails.
 
         ``sendTransaction`` returning a signature only means the RPC accepted
-        the submit — not that the transaction landed or executed (finding 10
-        #2). Reconcile here before any caller records a completed payment,
-        slash, or anchor. Raises ChainUnavailable if it does not confirm.
+        the submit — not that the transaction landed or executed. Reconcile
+        here before any caller records a completed payment, slash, or anchor.
+        Raises ChainUnavailable if it does not confirm.
         """
         deadline = time.monotonic() + deadline_s
         while True:
@@ -344,7 +272,7 @@ class Chain:
         verifier key), so it builds, signs and broadcasts the instruction
         itself — no client signature. Returns the signature. Confirms
         execution before returning so a slash is never recorded without
-        landing on-chain (finding 10 #2/#7)."""
+        landing on-chain."""
         instructions = self.build(action, wallet, amount=amount)
         sig = self._sign_and_send(instructions, self.verifier)
         self._confirm_sent(sig)
@@ -373,32 +301,6 @@ class Chain:
         )
         return self._sign_and_send(instructions, payer)
 
-    def settle_usdc(self, wallet, amount):
-        """Pay out ``amount`` USDC from the treasury to the worker's USDC ATA.
-        Server-signed by the treasury keypair. Returns the signature, or raises
-        ChainUnavailable when the treasury keypair is not configured."""
-        if self.usdc_treasury is None:
-            raise ChainUnavailable("USDC treasury (payout) is not configured")
-        worker = Pubkey.from_string(wallet)
-        payer = self.usdc_treasury
-        source = get_associated_token_address(payer.pubkey(), self.usdc)
-        instructions = [ata_instruction(payer.pubkey(), worker, self.usdc)]
-        instructions.append(
-            transfer(
-                TransferParams(
-                    program_id=TOKEN_PROGRAM_ID,
-                    source=source,
-                    dest=get_associated_token_address(worker, self.usdc),
-                    owner=payer.pubkey(),
-                    amount=amount,
-                    signers=[payer.pubkey()],
-                )
-            )
-        )
-        sig = self._sign_and_send(instructions, payer)
-        self._confirm_sent(sig)
-        return sig
-
     def settle_skr(self, wallet, amount, memo=None):
         """Pay ``amount`` test SKR to the judge's SKR ATA. The treasury keypair
         is the SKR mint authority, so settlement mints test SKR to the judge
@@ -409,7 +311,7 @@ class Chain:
         transactions: two equal mints to the same wallet within one blockhash
         window would otherwise be byte-identical and dedupe to a single
         execution. Callers pass a unique per-judgment id so each reward is its
-        own transaction (finding 10/#3)."""
+        own transaction."""
         if self.treasury is None:
             raise ChainUnavailable("SKR treasury (mint authority) is not configured")
         worker = Pubkey.from_string(wallet)
@@ -512,15 +414,8 @@ class Chain:
             raise ChainUnavailable("Invalid transaction confirmation") from exc
         return True
 
-    def find_signature(self, prepared, bounty=None, submission=None):
-        if bounty:
-            address = self.pda(
-                b"bounty",
-                bytes(Pubkey.from_string(bounty.requester)),
-                bytes.fromhex(bounty.id),
-            )
-        else:
-            address = self.pda(b"bond", bytes(Pubkey.from_string(prepared.wallet)))
+    def find_signature(self, prepared):
+        address = self.pda(b"bond", bytes(Pubkey.from_string(prepared.wallet)))
         page_size = 100
         max_pages = 20  # sane cap: walk at most 2000 signatures
         # Overall wall-clock bound on the whole walk, on top of the per-call

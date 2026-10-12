@@ -90,9 +90,9 @@ def runtime(tmp_path):
     return svm, chain, admin, worker, other, verifier
 
 
-def send(rt, action, who, b=None, s=None, extra=(), modify=None):
+def send(rt, action, who, extra=(), modify=None):
     svm, chain, *_ = rt
-    instructions = chain.build(action, str(who.pubkey()), b, s)
+    instructions = chain.build(action, str(who.pubkey()))
     if modify:
         instructions = modify(instructions)
     svm.expire_blockhash()
@@ -128,132 +128,20 @@ def balance(rt, wallet, mint):
     return struct.unpack("<Q", a.data[64:72])[0]
 
 
-def funded(rt, slots=2):
-    _, _, admin, worker, *_ = rt
-    b = SimpleNamespace(
-        id="01" * 16,
-        requester=str(admin.pubkey()),
-        reward=1000,
-        slots=slots,
-        deadline=1000,
-    )
-    s = SimpleNamespace(
-        worker=str(worker.pubkey()), media_hash="02" * 32, label_hash="03" * 32
-    )
-    ok(send(rt, "deposit", worker))
-    ok(send(rt, "fund", admin, b))
-    return b, s
-
-
-def test_actual_cpi_payout_once_and_bond_liability(runtime):
+def test_bond_deposit_withdraw_roundtrip(runtime):
     rt = runtime
-    svm, c, admin, worker, other, verifier = rt
-    b, s = funded(rt)
-    assert balance(rt, admin.pubkey(), c.usdc) == 8000
-    assert balance(rt, worker.pubkey(), c.skr) == 9900
+    svm, c, _admin, worker, _other, _verifier = rt
+    assert balance(rt, worker.pubkey(), c.skr) == 10_000
+    ok(send(rt, "deposit", worker))
+    # deposit escrows min_bond (100) SKR into the bond vault.
+    assert balance(rt, worker.pubkey(), c.skr) == 9_900
+    # Withdraw is locked until the cooldown elapses (unlock_at = deposit + 1 day).
     bad(send(rt, "withdraw", worker))
-
-    # Wrong verifier signature, even with a valid worker, cannot register media.
-    def wrong_verifier(ixs):
-        ix = ixs[-1]
-        accounts = list(ix.accounts)
-        accounts[1] = meta(other.pubkey(), True)
-        return [Instruction(ix.program_id, ix.data, accounts)]
-
-    bad(send(rt, "fulfill", worker, b, s, extra=[other], modify=wrong_verifier))
-    ok(send(rt, "fulfill", worker, b, s, extra=[verifier]))
-    bad(send(rt, "fulfill", worker, b, s, extra=[verifier]))
-    bad(send(rt, "accept", other, b, s))
-    assert balance(rt, worker.pubkey(), c.usdc) == 10_000
-
-    # A destination controlled by another wallet cannot receive the reward.
-    def wrong_destination(ixs):
-        ix = ixs[-1]
-        accounts = list(ix.accounts)
-        accounts[8] = meta(
-            get_associated_token_address(other.pubkey(), c.usdc), writable=True
-        )
-        return ixs[:-1] + [Instruction(ix.program_id, ix.data, accounts)]
-
-    bad(send(rt, "accept", admin, b, s, modify=wrong_destination))
-    ok(send(rt, "accept", admin, b, s))
-    assert balance(rt, worker.pubkey(), c.usdc) == 11_000
-    bad(send(rt, "accept", admin, b, s))
-    bad(send(rt, "reject", admin, b, s))
-    assert balance(rt, worker.pubkey(), c.usdc) == 11_000
     clock = svm.get_clock()
     clock.unix_timestamp = 86_501
     svm.set_clock(clock)
     ok(send(rt, "withdraw", worker))
     assert balance(rt, worker.pubkey(), c.skr) == 10_000
-    ok(send(rt, "refund", admin, b))
-    assert balance(rt, admin.pubkey(), c.usdc) == 9000
-    bad(send(rt, "refund", admin, b))
-
-
-def test_refund_preserves_pending_then_expiry_unlocks(runtime):
-    rt = runtime
-    svm, c, admin, worker, _other, verifier = rt
-    b, s = funded(rt)
-    ok(send(rt, "fulfill", worker, b, s, extra=[verifier]))
-    bad(send(rt, "refund", admin, b))
-    bad(send(rt, "expire", worker, b, s))
-    clock = svm.get_clock()
-    clock.unix_timestamp = 90_000
-    svm.set_clock(clock)
-    bad(send(rt, "withdraw", worker))
-    bad(send(rt, "accept", admin, b, s))
-    ok(send(rt, "refund", admin, b))
-    assert balance(rt, admin.pubkey(), c.usdc) == 9000
-    assert balance(rt, worker.pubkey(), c.usdc) == 10_000
-    # Finding F: expire requires the requester (admin) as authority; a worker
-    # (non-requester) cannot expire the submission post-deadline.
-    ok(send(rt, "expire", admin, b, s))
-    ok(send(rt, "refund", admin, b))
-    assert balance(rt, admin.pubkey(), c.usdc) == 10_000
-    ok(send(rt, "withdraw", worker))
-    assert balance(rt, worker.pubkey(), c.skr) == 10_000
-
-
-def test_reject_pays_nothing_and_oversubscription_blocked(runtime):
-    rt = runtime
-    _svm, c, admin, worker, other, verifier = rt
-    b, s = funded(rt, slots=1)
-    ok(send(rt, "fulfill", worker, b, s, extra=[verifier]))
-    ok(send(rt, "deposit", other))
-    s2 = SimpleNamespace(
-        worker=str(other.pubkey()), media_hash="04" * 32, label_hash="05" * 32
-    )
-    bad(send(rt, "fulfill", other, b, s2, extra=[verifier]))
-    ok(send(rt, "reject", admin, b, s))
-    assert balance(rt, worker.pubkey(), c.usdc) == 10_000
-    bad(send(rt, "accept", admin, b, s))
-    bad(send(rt, "fulfill", other, b, s2, extra=[verifier]))
-
-
-def test_wrong_mint_and_bond_identity_rejected(runtime):
-    rt = runtime
-    _svm, c, admin, worker, other, verifier = rt
-    b, s = funded(rt)
-
-    def other_bond(ixs):
-        ix = ixs[-1]
-        accounts = list(ix.accounts)
-        accounts[5] = meta(c.pda(b"bond", bytes(other.pubkey())), writable=True)
-        return [Instruction(ix.program_id, ix.data, accounts)]
-
-    ok(send(rt, "deposit", other))
-    bad(send(rt, "fulfill", worker, b, s, extra=[verifier], modify=other_bond))
-    ok(send(rt, "fulfill", worker, b, s, extra=[verifier]))
-
-    def wrong_mint(ixs):
-        ix = ixs[-1]
-        accounts = list(ix.accounts)
-        accounts[2] = meta(c.skr)
-        return ixs[:-1] + [Instruction(ix.program_id, ix.data, accounts)]
-
-    bad(send(rt, "accept", admin, b, s, modify=wrong_mint))
-    assert balance(rt, worker.pubkey(), c.usdc) == 10_000
 
 
 def test_warn_then_slash_ladder_drains_bond_to_penalty_vault(runtime):
