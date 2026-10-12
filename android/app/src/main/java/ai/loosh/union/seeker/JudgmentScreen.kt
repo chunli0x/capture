@@ -36,12 +36,12 @@ fun JudgmentScreen(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit) {
                 .fillMaxSize()
                 .safeDrawingPadding()
                 .verticalScroll(rememberScrollState())
-                .padding(20.dp),
+                .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             CaptureWordmark()
-            Text("Judge", style = MaterialTheme.typography.displaySmall)
+            EditorialHeading("JUDGE.")
             Text(
                 "Compare two model outputs and pick the better one. Consensus-aligned judges earn " +
                     "test \$SKR on devnet.",

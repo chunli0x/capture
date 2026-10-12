@@ -130,7 +130,15 @@ fun JudgeTierRow(tier: JudgeTier, active: Boolean, modifier: Modifier = Modifier
             )
             Text(requirement, style = MaterialTheme.typography.bodySmall, color = MutedGray)
         }
-        Text("×${"%.2f".format(tier.rateMultiplier)}", style = MaterialTheme.typography.titleSmall, color = CaptureAccentBright)
+        Text(
+            "×${"%.2f".format(tier.rateMultiplier)}",
+            style = MaterialTheme.typography.titleSmall,
+            color = CaptureInk,
+            modifier = Modifier
+                .background(CaptureSurface2, CaptureRadii.pill)
+                .border(1.dp, CaptureOutline, CaptureRadii.pill)
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+        )
     }
 }
 

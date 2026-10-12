@@ -61,10 +61,10 @@ fun ConstellationBackground(modifier: Modifier = Modifier) {
 
 @Composable
 fun CapturePanel(modifier: Modifier = Modifier, elevated: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
-    Column(modifier.clip(CaptureRadii.xl).background(if (elevated) CaptureSurface2 else CaptureSurface)
-        .border(1.dp, CaptureOutline, CaptureRadii.xl)) {
+    Column(modifier.clip(CaptureRadii.md).background(if (elevated) CaptureSurface2 else CaptureSurface)
+        .border(2.dp, CaptureOutline, CaptureRadii.md)) {
         if (elevated) Box(Modifier.fillMaxWidth().height(1.dp).background(CaptureInk.copy(alpha = .06f)))
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
     }
 }
 
@@ -98,7 +98,7 @@ fun CaptureMark(modifier: Modifier = Modifier) {
 @Composable
 fun CaptureWordmark() {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        CaptureMark(Modifier.size(28.dp))
+        CaptureMark(Modifier.size(36.dp))
         Text("CAPTURE", style = MaterialTheme.typography.displaySmall.copy(fontSize = 20.sp, lineHeight = 24.sp), color = CaptureInk)
     }
 }

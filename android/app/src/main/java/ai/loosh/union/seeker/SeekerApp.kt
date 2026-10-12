@@ -87,11 +87,11 @@ private fun SignInScreen(s: PilotState, vm: SeekerViewModel, sender: ActivityRes
                 .fillMaxSize()
                 .safeDrawingPadding()
                 .verticalScroll(rememberScrollState())
-                .padding(20.dp),
+                .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             CaptureWordmark()
-            Text("SIGN IN.", style = MaterialTheme.typography.displaySmall, color = CaptureInk)
+            EditorialHeading("SIGN IN.")
             Text(
                 "Compare two model outputs and pick the better one. Consensus-aligned judges " +
                     "earn test \$SKR on devnet.",
@@ -145,7 +145,7 @@ private fun SignInScreen(s: PilotState, vm: SeekerViewModel, sender: ActivityRes
             Button(
                 onClick = { vm.connect(sender, over18) },
                 enabled = !s.busy && over18,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
+                modifier = Modifier.fillMaxWidth().height(56.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = CaptureAction,
                     contentColor = Color.White,
