@@ -92,6 +92,9 @@ class FakeChain:
     def find_signature(self, p, *args):
         return str(Keypair().sign_message(p.id.encode()))
 
+    def settle_usdc(self, wallet, amount):
+        return str(Keypair().sign_message(b"settle"))
+
 
 class FakeModerator:
     async def scan(self, data):
@@ -167,7 +170,14 @@ def pg_pilot(tmp_path: Path):
     # Bond the worker so the open-upload label path runs the (judge) accept
     # path, not the bond gate / free peer-review path.
     assert c.post("/bond/faucet", headers=h).status_code == 200
-    assert c.post("/bond/deposit", headers=h).status_code == 200
+    tx = c.post("/bond/deposit", headers=h).json()
+    sig = str(Keypair().sign_message(tx["id"].encode()))
+    assert (
+        c.post(
+            f"/transactions/{tx['id']}/confirm", headers=h, json={"signature": sig}
+        ).status_code
+        == 200
+    )
     yield c, app, h, key
     app.state.database.engine.dispose()
 

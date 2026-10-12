@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     usdc_mint: str
     skr_mint: str
     verifier_key_file: Path
+    # Devnet treasuries (both optional, 0600, gitignored). treasury_key_file
+    # holds the SKR mint authority keypair (the /bond/faucet mint); the
+    # usdc_treasury_key_file holds the USDC payout wallet (accept settlement).
+    # Unset -> the corresponding on-chain operation is unavailable and the
+    # backend fails closed instead of fabricating a transfer.
+    treasury_key_file: Path | None = None
+    usdc_treasury_key_file: Path | None = None
     sightengine_user: str = ""
     sightengine_secret: str = ""
     max_upload_bytes: int = 15 * 1024 * 1024

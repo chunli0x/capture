@@ -16,7 +16,8 @@ from solders.pubkey import Pubkey
 from solders.signature import Signature
 from solders.transaction import Transaction, TransactionError
 from spl.token.constants import ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID
-from spl.token.instructions import get_associated_token_address
+from spl.token.instructions import get_associated_token_address, mint_to, transfer
+from spl.token.models import MintToParams, TransferParams
 
 SYSTEM = Pubkey.default()
 RENT = Pubkey.from_string("SysvarRent111111111111111111111111111111111")
@@ -61,6 +62,24 @@ class Chain:
             bytes(json.loads(settings.verifier_key_file.read_text()))
         )
         self.config = self.pda(b"config")
+        self.penalty_vault = self.pda(b"penalty-vault", bytes(self.config))
+        # Devnet treasuries (both optional). treasury == SKR mint authority
+        # (faucet); usdc_treasury == USDC payout wallet (accept settlement).
+        # Absent means the corresponding on-chain operation is unavailable and
+        # the backend fails closed instead of fabricating a transfer.
+        self.treasury = self._load_key(getattr(settings, "treasury_key_file", None))
+        self.usdc_treasury = self._load_key(
+            getattr(settings, "usdc_treasury_key_file", None)
+        )
+
+    @staticmethod
+    def _load_key(path):
+        if path is None:
+            return None
+        try:
+            return Keypair.from_bytes(bytes(json.loads(path.read_text())))
+        except (OSError, ValueError, TypeError):
+            return None
 
     def pda(self, *seeds):
         return Pubkey.find_program_address(list(seeds), self.program)[0]
@@ -98,14 +117,19 @@ class Chain:
         if not account or account["owner"] != str(self.program):
             raise ChainUnavailable("Escrow program has not been initialized")
         raw = base64.b64decode(account["data"][0], validate=True)
+        # Config layout (post slash_authority): discriminator(8) + admin(32) +
+        # verifier(32) + usdc_mint(32) + skr_mint(32) + min_bond(8) +
+        # slash_authority(32) == 176 bytes. slash_authority is the verifier key
+        # (the backend reuses it; no separate authority keypair).
         expected = (
             bytes(self.verifier.pubkey())
             + bytes(self.usdc)
             + bytes(self.skr)
             + struct.pack("<Q", self.settings.min_bond)
+            + bytes(self.verifier.pubkey())
         )
         if (
-            len(raw) != 144
+            len(raw) != 176
             or raw[:8] != discriminator("Config", "account")
             or raw[40:] != expected
         ):
@@ -113,7 +137,7 @@ class Chain:
                 "Configured verifier, mints or bond differ from program"
             )
 
-    def build(self, action, wallet, bounty=None, submission=None):
+    def build(self, action, wallet, bounty=None, submission=None, amount=None):
         who = Pubkey.from_string(wallet)
         b = (
             self.pda(
@@ -205,6 +229,31 @@ class Chain:
             )
             if action == "deposit":
                 data += struct.pack("<Q", self.settings.min_bond)
+        elif action == "warn":
+            # slash_authority (verifier) signs. Warn context (Anchor):
+            # slash_authority, config, bond (seeds=['bond', worker]). The worker
+            # pubkey travels in the instruction data (no separate account).
+            accounts = [
+                meta(self.verifier.pubkey(), True),
+                meta(self.config),
+                meta(bond, writable=True),
+            ]
+            data = discriminator("warn") + bytes(worker)
+        elif action == "slash":
+            # slash_authority (verifier) signs. Slash context (Anchor):
+            # slash_authority, config, bond (writable, seeds=['bond', worker]),
+            # bond_vault (writable, seeds=['bond-vault', worker]),
+            # penalty_vault (writable, seeds=['penalty-vault', config]),
+            # token_program. Full slash: data == discriminator + worker (no amount).
+            accounts = [
+                meta(self.verifier.pubkey(), True),
+                meta(self.config),
+                meta(bond, writable=True),
+                meta(bond_vault, writable=True),
+                meta(self.penalty_vault, writable=True),
+                meta(TOKEN_PROGRAM_ID),
+            ]
+            data = discriminator("slash") + bytes(worker)
         else:
             raise ChainUnavailable("Unknown transaction action")
         return prefix + [Instruction(self.program, data, accounts)]
@@ -226,6 +275,95 @@ class Chain:
             "message_hash": hashlib.sha256(bytes(msg)).hexdigest(),
             "last_valid_height": result["lastValidBlockHeight"],
         }
+
+    def _sign_and_send(self, instructions, payer):
+        """Serialize, fully sign with ``payer``, and broadcast. Returns the
+        transaction signature string. Raises ChainUnavailable on any RPC
+        failure — fail closed, never fabricate a settlement."""
+        result = self.rpc("getLatestBlockhash", [{"commitment": "finalized"}])["value"]
+        blockhash = Hash.from_string(result["blockhash"])
+        msg = Message.new_with_blockhash(instructions, payer.pubkey(), blockhash)
+        tx = Transaction.new_unsigned(msg)
+        tx.sign([payer], blockhash)
+        return self.rpc(
+            "sendTransaction",
+            [
+                base64.b64encode(bytes(tx)).decode(),
+                {"encoding": "base64", "preflightCommitment": "finalized"},
+            ],
+        )
+
+    def bond_warnings(self, wallet):
+        """Read the worker's on-chain bond ``warnings`` counter (0 = clean,
+        1 = warned once, >= 2 = slashed). Raises ChainUnavailable if the bond
+        cannot be read — fail closed, never fabricate bond state."""
+        bond = self.pda(b"bond", bytes(Pubkey.from_string(wallet)))
+        account = self.rpc(
+            "getAccountInfo",
+            [str(bond), {"encoding": "base64", "commitment": "finalized"}],
+        )["value"]
+        if not account or account["owner"] != str(self.program):
+            raise ChainUnavailable("Worker bond account is not initialized")
+        raw = base64.b64decode(account["data"][0], validate=True)
+        # Bond layout: discriminator(8) + worker(32) + pending(4) + unlock_at(8)
+        # + warnings(1). warnings is the trailing byte.
+        if len(raw) < 8 + 32 + 4 + 8 + 1:
+            raise ChainUnavailable("Worker bond account has unexpected layout")
+        return raw[-1]
+
+    def issue(self, action, wallet, amount=None):
+        """Server-side warn/slash: the backend is the slash_authority (the
+        verifier key), so it builds, signs and broadcasts the instruction
+        itself — no client signature. Returns the signature."""
+        instructions = self.build(action, wallet, amount=amount)
+        return self._sign_and_send(instructions, self.verifier)
+
+    def faucet(self, wallet):
+        """Mint the minimum test-SKR bond to a wallet (SKR mint authority is
+        the treasury). Returns the mint signature, or raises ChainUnavailable
+        when the treasury keypair is not configured."""
+        if self.treasury is None:
+            raise ChainUnavailable("SKR treasury (mint authority) is not configured")
+        worker = Pubkey.from_string(wallet)
+        payer = self.treasury.pubkey()
+        instructions = [ata_instruction(payer, worker, self.skr)]
+        instructions.append(
+            mint_to(
+                MintToParams(
+                    program_id=TOKEN_PROGRAM_ID,
+                    mint=self.skr,
+                    dest=get_associated_token_address(worker, self.skr),
+                    mint_authority=payer,
+                    amount=self.settings.min_bond,
+                    signers=[payer],
+                )
+            )
+        )
+        return self._sign_and_send(instructions, payer)
+
+    def settle_usdc(self, wallet, amount):
+        """Pay out ``amount`` USDC from the treasury to the worker's USDC ATA.
+        Server-signed by the treasury keypair. Returns the signature, or raises
+        ChainUnavailable when the treasury keypair is not configured."""
+        if self.usdc_treasury is None:
+            raise ChainUnavailable("USDC treasury (payout) is not configured")
+        worker = Pubkey.from_string(wallet)
+        payer = self.usdc_treasury.pubkey()
+        source = get_associated_token_address(payer, self.usdc)
+        instructions = [ata_instruction(payer, worker, self.usdc)]
+        instructions.append(
+            transfer(
+                TransferParams(
+                    program_id=TOKEN_PROGRAM_ID,
+                    source=source,
+                    dest=get_associated_token_address(worker, self.usdc),
+                    owner=payer,
+                    amount=amount,
+                    signers=[payer],
+                )
+            )
+        )
+        return self._sign_and_send(instructions, payer)
 
     def height(self):
         return self.rpc("getBlockHeight", [{"commitment": "finalized"}])

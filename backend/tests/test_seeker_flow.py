@@ -50,6 +50,13 @@ class FakeChain:
     def find_signature(self, p, *args):
         return str(Keypair().sign_message(p.id.encode()))
 
+    def bond_warnings(self, wallet):
+        # Clean bond: a moderation rejection here is the first strike -> warn.
+        return 0
+
+    def issue(self, action, wallet, amount=None):
+        return str(Keypair().sign_message(b"issue"))
+
 
 class FakeModerator:
     reject = False

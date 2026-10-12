@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from seeker.chain import SYSTEM, Chain, discriminator, meta
+from seeker.chain import RENT, SYSTEM, Chain, discriminator, meta
 from solders.account import Account
 from solders.instruction import Instruction
 from solders.keypair import Keypair
@@ -79,8 +79,11 @@ def runtime(tmp_path):
         + bytes(chain.usdc)
         + bytes(chain.skr)
         + struct.pack("<Q", 100)
+        + bytes(verifier.pubkey())  # slash_authority == verifier
     )
     svm.set_account(chain.config, Account(10_000_000, cfg, chain.program))
+    # penalty_vault: program-owned SKR token account (authority == config).
+    svm.set_account(chain.penalty_vault, token_account(chain.skr, chain.config, 0))
     clock = svm.get_clock()
     clock.unix_timestamp = 100
     svm.set_clock(clock)
@@ -96,6 +99,19 @@ def send(rt, action, who, b=None, s=None, extra=(), modify=None):
     msg = Message.new_with_blockhash(instructions, who.pubkey(), svm.latest_blockhash())
     tx = Transaction.new_unsigned(msg)
     tx.sign([who, *extra], msg.recent_blockhash)
+    return svm.send_transaction(tx)
+
+
+def send_server(rt, action, wallet, amount=None):
+    """Server-signed warn/slash: the verifier is slash_authority + fee payer."""
+    svm, chain, *_ = rt
+    instructions = chain.build(action, str(wallet), amount=amount)
+    svm.expire_blockhash()
+    msg = Message.new_with_blockhash(
+        instructions, chain.verifier.pubkey(), svm.latest_blockhash()
+    )
+    tx = Transaction.new_unsigned(msg)
+    tx.sign([chain.verifier], msg.recent_blockhash)
     return svm.send_transaction(tx)
 
 
@@ -238,11 +254,41 @@ def test_wrong_mint_and_bond_identity_rejected(runtime):
     assert balance(rt, worker.pubkey(), c.usdc) == 10_000
 
 
+def test_warn_then_slash_ladder_drains_bond_to_penalty_vault(runtime):
+    rt = runtime
+    svm, c, _admin, worker, _other, _verifier = rt
+    ok(send(rt, "deposit", worker))
+    bond = c.pda(b"bond", bytes(worker.pubkey()))
+
+    def warnings():
+        return svm.get_account(bond).data[52]
+
+    def penalty_balance():
+        return struct.unpack("<Q", svm.get_account(c.penalty_vault).data[64:72])[0]
+
+    assert warnings() == 0
+    ok(send_server(rt, "warn", worker.pubkey()))
+    assert warnings() == 1
+    ok(send_server(rt, "warn", worker.pubkey()))
+    assert warnings() == 2
+    # Slash takes the full bond into the penalty vault; the bond is terminal.
+    assert penalty_balance() == 0
+    ok(send_server(rt, "slash", worker.pubkey()))
+    assert warnings() == 255
+    assert penalty_balance() == 100
+    # A slashed bond can never withdraw.
+    clock = svm.get_clock()
+    clock.unix_timestamp = 86_501
+    svm.set_clock(clock)
+    bad(send(rt, "withdraw", worker))
+
+
 def test_initializer_requires_program_upgrade_authority(runtime):
     svm, c, admin, _worker, other, verifier = runtime
-    # Remove the fixture's initialized config and install an actual loader-v3
-    # ProgramData authority, retaining the same compiled code.
+    # Remove the fixture's initialized config and penalty vault and install an
+    # actual loader-v3 ProgramData authority, retaining the same compiled code.
     svm.set_account(c.config, Account(0, b"", SYSTEM))
+    svm.set_account(c.penalty_vault, Account(0, b"", SYSTEM))
     program = svm.get_account(c.program)
     data_address = Pubkey.from_bytes(program.data[4:36])
     data = svm.get_account(data_address)
@@ -254,15 +300,19 @@ def test_initializer_requires_program_upgrade_authority(runtime):
             c.program,
             discriminator("initialize")
             + bytes(verifier.pubkey())
+            + bytes(verifier.pubkey())  # slash_authority == verifier
             + struct.pack("<Q", 100),
             [
                 meta(who.pubkey(), True, True),
                 meta(c.config, writable=True),
                 meta(c.usdc),
                 meta(c.skr),
+                meta(c.penalty_vault, writable=True),
                 meta(c.program),
                 meta(data_address),
                 meta(SYSTEM),
+                meta(TOKEN_PROGRAM_ID),
+                meta(RENT),
             ],
         )
         svm.expire_blockhash()

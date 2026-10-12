@@ -343,6 +343,29 @@ def sightengine_nudity_pass(data):
     return True
 
 
+def sightengine_genai_pass(data):
+    """Reject AI-generated images from Sightengine's genai model.
+
+    The response nests the score under ``type.ai_generated`` (0..1), with an
+    optional per-generator breakdown under ``type.ai_generators``. A value at
+    or above the threshold means the frame is likely synthetic (Midjourney,
+    Stable Diffusion, DALL-E, etc.) — which Capture must exclude, since the
+    product is real ground-level capture. Fails closed on a missing or
+    malformed ``type`` object, mirroring the other moderation checks.
+    """
+    type_obj = data.get("type")
+    if not isinstance(type_obj, dict):
+        return False
+    raw = type_obj.get("ai_generated")
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return False
+    if isinstance(raw, bool) or not math.isfinite(v) or not (0.0 <= v <= 1.0):
+        return False
+    return v < 0.5
+
+
 def sightengine_video_pass(data):
     """Fail-closed for the Sightengine video contract (face-age + nudity-2.0).
 
@@ -370,6 +393,11 @@ def sightengine_video_pass(data):
         # frame with a sexual-content signal — the provider did not analyze it.
         if not sightengine_nudity_pass(frame):
             return False
+    # Reject AI-generated clips: a synthetic video is not real capture. genai
+    # scores sit at the top level of the sync-video response (not per frame);
+    # check once against the payload. Missing/absent -> fail closed.
+    if not sightengine_genai_pass(data):
+        return False
     return True
 
 
@@ -387,14 +415,18 @@ class Moderation:
                     "https://api.sightengine.com/1.0/check.json",
                     files={"media": ("image.png", data, "image/png")},
                     data={
-                        "models": "nudity-2.0,face-age",
+                        "models": "nudity-2.0,face-age,genai",
                         "api_user": s.sightengine_user,
                         "api_secret": s.sightengine_secret,
                     },
                 )
                 sight.raise_for_status()
                 payload = sight.json()
-                if not sightengine_pass(payload) or not sightengine_nudity_pass(payload):
+                if (
+                    not sightengine_pass(payload)
+                    or not sightengine_nudity_pass(payload)
+                    or not sightengine_genai_pass(payload)
+                ):
                     raise MediaRejected("Image did not pass moderation")
                 # No raw provider payloads or media URLs in logs or public APIs.
                 return {
@@ -418,7 +450,7 @@ class Moderation:
                     "https://api.sightengine.com/1.0/video/check-sync.json",
                     files={"media": ("video.mp4", data, "video/mp4")},
                     data={
-                        "models": "nudity-2.0,face-age",
+                        "models": "nudity-2.0,face-age,genai",
                         "api_user": s.sightengine_user,
                         "api_secret": s.sightengine_secret,
                     },

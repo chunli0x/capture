@@ -17,6 +17,7 @@ from seeker.media import (
     MediaRejected,
     Moderation,
     canonicalize_video,
+    sightengine_genai_pass,
     sightengine_nudity_pass,
     sightengine_video_pass,
 )
@@ -670,6 +671,7 @@ def test_video_pass_helpers_fail_closed():
     assert sightengine_video_pass(
         {
             "status": "success",
+            "type": {"ai_generated": 0.001},
             "data": {
                 "frames": [
                     {"faces": [], "nudity": {"sexual_activity": 0.001, "sexual_display": 0.001, "erotica": 0.001, "sextoy": 0.001, "suggestive": 0.001}},
@@ -701,10 +703,23 @@ def test_video_pass_helpers_fail_closed():
             },
         }
     )
-    # A clean frame (no faces, no nudity) passes.
+    # A clean frame (no faces, no nudity, not AI-generated) passes.
     assert sightengine_video_pass(
         {
             "status": "success",
+            "type": {"ai_generated": 0.001},
+            "data": {
+                "frames": [
+                    {"faces": [], "nudity": {"sexual_activity": 0.001, "sexual_display": 0.001, "erotica": 0.001, "sextoy": 0.001, "suggestive": 0.001}}
+                ]
+            },
+        }
+    )
+    # An AI-generated clip (genai at/above threshold) fails even with clean frames.
+    assert not sightengine_video_pass(
+        {
+            "status": "success",
+            "type": {"ai_generated": 0.95},
             "data": {
                 "frames": [
                     {"faces": [], "nudity": {"sexual_activity": 0.001, "sexual_display": 0.001, "erotica": 0.001, "sextoy": 0.001, "suggestive": 0.001}}
@@ -729,6 +744,21 @@ def test_sightengine_nudity_pass():
     # missing/malformed nudity object -> fail closed
     assert not sightengine_nudity_pass({})
     assert not sightengine_nudity_pass({"nudity": None})
+
+
+def test_sightengine_genai_pass():
+    assert sightengine_genai_pass({"type": {"ai_generated": 0.001}})
+    assert sightengine_genai_pass({"type": {"ai_generated": 0.49}})
+    # at/above threshold -> synthetic -> reject
+    assert not sightengine_genai_pass({"type": {"ai_generated": 0.5}})
+    assert not sightengine_genai_pass({"type": {"ai_generated": 0.999}})
+    # missing/malformed/non-finite/out-of-range type object -> fail closed
+    assert not sightengine_genai_pass({})
+    assert not sightengine_genai_pass({"type": None})
+    assert not sightengine_genai_pass({"type": {"ai_generated": None}})
+    assert not sightengine_genai_pass({"type": {"ai_generated": "nope"}})
+    assert not sightengine_genai_pass({"type": {"ai_generated": 1.7}})
+    assert not sightengine_genai_pass({"type": {"ai_generated": float("nan")}})
 
 
 # ---- offline keypoint job ----
@@ -884,8 +914,8 @@ def test_migration_0002_adds_phase2_columns(tmp_path):
     # 0002 adds 3 columns; 0003 adds 2; 0004 adds 8 (actors.accepted_count +
     # 7 submission columns); 0005 adds 1 (actors.liveness_completed); 0006 adds
     # 3 (actors.bonded, quality_checks, skr_funded); 0007 adds 1
-    # (reviews.accepted).
-    assert apply_migrations(engine) == 18
+    # (reviews.accepted); 0008 adds 1 (submissions.payout_signature).
+    assert apply_migrations(engine) == 19
     assert apply_migrations(engine) == 0  # re-run is a no-op
 
     bounty_cols = {c["name"] for c in inspect(engine).get_columns("seeker_bounties")}
@@ -902,5 +932,6 @@ def test_migration_0002_adds_phase2_columns(tmp_path):
     assert "capture_metadata" in sub_cols and "accepted" in sub_cols
     assert "judged_at" in sub_cols and "payout_usdc" in sub_cols
     assert "verdict_reason" in sub_cols and "level_after" in sub_cols
+    assert "payout_signature" in sub_cols
     assert "kind" in sub_cols  # v2 open-upload kind column
     engine.dispose()

@@ -44,6 +44,9 @@ class FakeChain:
     def find_signature(self, p, *args):
         return str(Keypair().sign_message(p.id.encode()))
 
+    def settle_usdc(self, wallet, amount):
+        return str(Keypair().sign_message(b"settle"))
+
 
 class FakeModerator:
     async def scan(self, data):
@@ -102,7 +105,14 @@ def pilot(tmp_path):
     # test_bond_gate.py.
     for hd in h:
         assert c.post("/bond/faucet", headers=hd).status_code == 200
-        assert c.post("/bond/deposit", headers=hd).status_code == 200
+        tx = c.post("/bond/deposit", headers=hd).json()
+        sig = str(Keypair().sign_message(tx["id"].encode()))
+        assert (
+            c.post(
+                f"/transactions/{tx['id']}/confirm", headers=hd, json={"signature": sig}
+            ).status_code
+            == 200
+        )
     yield c, app, h, keys, settings
     app.state.database.engine.dispose()
 
@@ -599,7 +609,14 @@ def test_open_submit_requires_liveness(pilot):
     do_liveness(c, hd, str(k.pubkey()))
     # Bond the fresh worker so the post-liveness open upload passes the gate.
     assert c.post("/bond/faucet", headers=hd).status_code == 200
-    assert c.post("/bond/deposit", headers=hd).status_code == 200
+    tx = c.post("/bond/deposit", headers=hd).json()
+    sig = str(Keypair().sign_message(tx["id"].encode()))
+    assert (
+        c.post(
+            f"/transactions/{tx['id']}/confirm", headers=hd, json={"signature": sig}
+        ).status_code
+        == 200
+    )
     assert c.post("/submissions", headers=hd, json={"kind": "object"}).status_code == 200
 
 

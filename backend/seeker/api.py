@@ -186,6 +186,7 @@ def submission_view(s, b, actor):
         result["accepted"] = s.accepted
         result["verdict_reason"] = s.verdict_reason
         result["payout_usdc"] = s.payout_usdc
+        result["payout_signature"] = s.payout_signature
         result["level_after"] = s.level_after
         result["judged_at"] = s.judged_at
         if actor.wallet == s.worker:
@@ -321,6 +322,36 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             fail(409, "Claim expired")
         return s, b.kind == "action"
 
+    def enforce_media_policy(wallet):
+        """Two-strike media-policy ladder, settled on-chain via the worker's
+        bond. Reads the on-chain warnings counter, then issues ``warn`` (first
+        strike -> 422) or ``slash`` (second strike -> 403) signed by the
+        verifier (slash_authority). Fails closed with 503 whenever the chain
+        read or the warn/slash write is unavailable — a rejected upload must
+        never pass, and bond state is never fabricated.
+
+        The program's ladder requires ``warnings >= 2`` before a slash is legal
+        (``warn`` advances 0 -> 1 -> 2), so a second strike issues one more
+        warn to reach the threshold, then slashes the bond. ``slashed`` is the
+        on-chain terminal state (warnings == 255); no separate DB flag."""
+        try:
+            warnings = chain.bond_warnings(wallet)
+        except ChainUnavailable as exc:
+            fail(503, f"Media rejected and bond state unavailable: {exc}")
+        if warnings == 0:
+            try:
+                chain.issue("warn", wallet)
+            except ChainUnavailable as exc:
+                fail(503, f"Media rejected and warning failed: {exc}")
+            fail(422, "Media policy violation: first warning issued on your bond")
+        try:
+            if warnings < 2:
+                chain.issue("warn", wallet)  # reach the slash threshold
+            chain.issue("slash", wallet)  # full vault forfeit
+        except ChainUnavailable as exc:
+            fail(503, f"Media rejected and slash failed: {exc}")
+        fail(403, "Media policy violation (second strike): bond slashed")
+
     def _check_category(kind, cid):
         try:
             taxonomy.resolve(kind, [cid])
@@ -397,13 +428,13 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
         return boxes, secondary, metadata
 
     def open_labels(db, sid, body, actor):
-        """Open-upload submit: judge -> accept/reject -> record auto-pay.
+        """Open-upload submit: judge -> accept/reject -> settle + record.
 
-        On accept the payout is recorded (base rate x level multiplier x label
-        premium, in USDC base units) and the worker's accepted_count advances;
-        on reject the bond is recorded as slashed (payout 0). The devnet
-        TEST-USDC treasury transfer and on-chain bond slash are settlement
-        seams behind this ledger record, matching the judge's env-gated design.
+        On accept the payout is computed (base rate x level multiplier x label
+        premium, in USDC base units), the treasury -> worker USDC transfer is
+        settled on-chain (fail closed if unavailable), the signature is
+        recorded, and the worker's accepted_count advances. On reject the payout
+        is 0 and no transfer is made.
         """
         s = own_open(db, sid, actor)
         if s.status in {"accepted", "rejected"}:
@@ -415,6 +446,7 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
                 "status": s.status,
                 "verdict": {"accepted": s.accepted, "reason": s.verdict_reason},
                 "payout_usdc": s.payout_usdc,
+                "payout_signature": s.payout_signature,
                 "level_after": s.level_after,
             }
         if s.status == "review":
@@ -470,9 +502,18 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
 
         level_before = contributor_level(db, actor.wallet)["level"]
         payout = 0
+        settle_signature = None
         if verdict.accepted:
             complete = bool(secondary.get("postures")) and bool(secondary.get("environment"))
             payout = payout_units(level_before, s.kind, s.duration_ms, complete)
+            if payout > 0:
+                # Real on-chain settlement: transfer USDC from the treasury to
+                # the worker's ATA and record the signature. Fail closed — an
+                # accepted upload must never settle silently.
+                try:
+                    settle_signature = chain.settle_usdc(actor.wallet, payout)
+                except ChainUnavailable as exc:
+                    fail(503, f"Accepted, but treasury settlement unavailable: {exc}")
             worker = lock(db, Actor, actor.wallet)
             worker.accepted_count += 1
             s.status, s.accepted = "accepted", True
@@ -486,6 +527,7 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
         s.judged_at = now()
         s.verdict_reason = verdict.reason
         s.payout_usdc = payout
+        s.payout_signature = settle_signature
         s.level_after = contributor_level(db, actor.wallet)["level"]
 
         return {
@@ -493,6 +535,7 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             "status": s.status,
             "verdict": {"accepted": verdict.accepted, "reason": verdict.reason},
             "payout_usdc": payout,
+            "payout_signature": settle_signature,
             "level_after": s.level_after,
         }
 
@@ -979,28 +1022,36 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
                 duration_ms = None
                 if len(data) > settings.max_upload_bytes:
                     fail(413, "Canonical image exceeds 15 MiB")
+        except MediaRejected as exc:
+            # Format/encoding rejection is not a media-policy violation: no
+            # strike is recorded against the worker's bond.
+            fail(422, str(exc))
 
-            def recheck_idempotent():
-                with database.transaction() as db:
-                    s, _ = own_media(db, sid, actor)
-                    if s.media_hash:
-                        if s.media_hash != media_hash:
-                            fail(409, "Approved media cannot be replaced")
-                        return s.media_hash
-                    return None
+        def recheck_idempotent():
+            with database.transaction() as db:
+                s, _ = own_media(db, sid, actor)
+                if s.media_hash:
+                    if s.media_hash != media_hash:
+                        fail(409, "Approved media cannot be replaced")
+                    return s.media_hash
+                return None
 
-            existing = await run_in_threadpool(recheck_idempotent)
-            if existing:
-                return {"media_hash": existing}
+        existing = await run_in_threadpool(recheck_idempotent)
+        if existing:
+            return {"media_hash": existing}
 
-            # Moderation is network I/O: no DB transaction is held across it.
+        # Moderation is network I/O: no DB transaction is held across it. A
+        # rejection here is a media-policy violation and enforces the two-strike
+        # warn/slash ladder on the worker's bond (not a plain 422).
+        try:
             verdict = (
                 await moderator.scan_video(data)
                 if is_video
                 else await moderator.scan(data)
             )
         except MediaRejected as exc:
-            fail(422, str(exc))
+            await run_in_threadpool(enforce_media_policy, actor.wallet)
+            fail(422, str(exc))  # unreachable: enforce_media_policy always fails
 
         def finalize():
             with database.transaction() as db:
@@ -1279,26 +1330,51 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
 
     @app.post("/bond/faucet")
     def bond_faucet(actor: Auth):
-        """Devnet test-SKR faucet ("Get test SKR"). Records funding server-side;
-        idempotent. On-chain settlement stays on the prepare seam."""
+        """Devnet test-SKR faucet ("Get test SKR"). Idempotent.
+
+        When ``SEEKER_TREASURY_KEY_FILE`` is configured, mints the minimum bond
+        on-chain (the treasury holds the SKR mint authority) and only then
+        records ``skr_funded``; a chain outage fails closed (503) so funding is
+        never recorded for a mint that did not land.
+
+        Residual DB-flag behavior: without the treasury keypair the backend has
+        no mint authority and cannot mint test SKR, so ``skr_funded`` is
+        recorded as a DB flag only — a documented dev-only fallback that moves
+        no tokens on-chain. The deposit prepare seam still requires the wallet
+        to actually hold SKR for the on-chain escrow to succeed.
+        """
         with database.transaction() as db:
             actor = lock(db, Actor, actor.wallet)
+            if not actor.skr_funded and settings.treasury_key_file is not None:
+                try:
+                    chain.faucet(actor.wallet)
+                except ChainUnavailable as exc:
+                    fail(503, f"Test-SKR faucet unavailable: {exc}")
             actor.skr_funded = True
         return {"funded": True}
 
     @app.post("/bond/deposit")
     def bond_deposit(actor: Auth):
-        """Devnet server-recorded bond deposit. Requires the test-SKR faucet to
-        have run first; idempotent. Does NOT touch /bond/{action}/prepare."""
+        """Build + return the real ``deposit_bond`` prepare transaction. The
+        bond is marked ``bonded`` only when the client confirms the exact
+        message via /transactions/{id}/confirm (see record_confirmation)."""
         with database.transaction() as db:
             actor = lock(db, Actor, actor.wallet)
             if not actor.skr_funded:
                 fail(409, "Get test SKR first")
-            actor.bonded = True
-            # Bonding is the self-serve worker enrollment: an unlocked account
-            # must be able to capture without the operator-key /operator/enroll.
-            actor.worker = True
-        return {"bonded": True}
+            if not actor.worker:
+                fail(403, "Worker enrollment required")
+            return prepare(db, "deposit", actor.wallet, actor)
+
+    @app.post("/bond/withdraw")
+    def bond_withdraw(actor: Auth):
+        """Build + return the real ``withdraw_bond`` prepare transaction.
+        ``bonded`` is cleared only on confirm."""
+        with database.transaction() as db:
+            actor = lock(db, Actor, actor.wallet)
+            if not actor.worker:
+                fail(403, "Worker enrollment required")
+            return prepare(db, "withdraw", actor.wallet, actor)
 
     @app.post("/bond/{action}/prepare")
     def prepare_bond(action: str, actor: Auth):
@@ -1374,6 +1450,15 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
                     "reject": "rejected",
                     "expire": "expired",
                 }[p.action]
+            elif p.action == "deposit":
+                # The bond escrow is on-chain now: bonding doubles as the
+                # self-serve worker enrollment (no operator key needed).
+                worker = lock(db, Actor, p.wallet)
+                worker.bonded = True
+                worker.worker = True
+            elif p.action == "withdraw":
+                worker = lock(db, Actor, p.wallet)
+                worker.bonded = False
             return tx_view(p)
 
     @app.post("/transactions/{pid}/confirm")

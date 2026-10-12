@@ -38,6 +38,9 @@ class FakeChain:
     def find_signature(self, p, *args):
         return str(Keypair().sign_message(p.id.encode()))
 
+    def settle_usdc(self, wallet, amount):
+        return str(Keypair().sign_message(b"settle"))
+
 
 class FakeModerator:
     async def scan(self, data):
@@ -157,6 +160,17 @@ def make_free(app, wallet):
         db.get(Actor, wallet).quality_checks = 3
 
 
+def bond(c, h):
+    """faucet -> deposit/prepare -> confirm, so ``bonded`` is set via the seam."""
+    assert c.post("/bond/faucet", headers=h).status_code == 200
+    tx = c.post("/bond/deposit", headers=h).json()
+    sig = str(Keypair().sign_message(tx["id"].encode()))
+    r = c.post(
+        f"/transactions/{tx['id']}/confirm", headers=h, json={"signature": sig}
+    )
+    assert r.status_code == 200, r.text
+
+
 # ---- bond flow ----
 
 
@@ -177,9 +191,17 @@ def test_faucet_then_deposit_unlocks(pilot):
     assert c.post("/bond/faucet", headers=h[0]).json() == {"funded": True}
     assert c.post("/bond/faucet", headers=h[0]).json() == {"funded": True}
 
-    # Deposit now works and is idempotent.
-    assert c.post("/bond/deposit", headers=h[0]).json() == {"bonded": True}
-    assert c.post("/bond/deposit", headers=h[0]).json() == {"bonded": True}
+    # Deposit now returns a prepare transaction; the bond is marked only on
+    # confirm.
+    tx = c.post("/bond/deposit", headers=h[0]).json()
+    assert tx["action"] == "deposit" and tx["confirmed"] is False
+    sig = str(Keypair().sign_message(tx["id"].encode()))
+    assert (
+        c.post(
+            f"/transactions/{tx['id']}/confirm", headers=h[0], json={"signature": sig}
+        ).status_code
+        == 200
+    )
 
     me = c.get("/me", headers=h[0]).json()
     assert me["bonded"] is True
@@ -194,8 +216,7 @@ def test_open_upload_gated_until_unlocked(pilot):
     assert "bond" in r.json()["detail"].lower()
 
     # Faucet + deposit unlocks; upload now allowed.
-    assert c.post("/bond/faucet", headers=h[1]).json() == {"funded": True}
-    assert c.post("/bond/deposit", headers=h[1]).json() == {"bonded": True}
+    bond(c, h[1])
     assert c.post("/submissions", headers=h[1], json={"kind": "object"}).status_code == 200
 
 
@@ -217,8 +238,7 @@ def test_quality_checks_do_not_unlock_without_bond(pilot):
     assert "bond" in r.json()["detail"].lower()
 
     # Deposit the bond and the same worker is now unlocked.
-    assert c.post("/bond/faucet", headers=h[3]).json() == {"funded": True}
-    assert c.post("/bond/deposit", headers=h[3]).json() == {"bonded": True}
+    bond(c, h[3])
     assert c.post("/submissions", headers=h[3], json={"kind": "object"}).status_code == 200
 
 
@@ -263,8 +283,7 @@ def test_review_queue_empty_when_no_free_tier(pilot):
 
 def test_bonded_worker_gets_judge_verdict(pilot):
     c, _app, h, *_ = pilot
-    assert c.post("/bond/faucet", headers=h[1]).json() == {"funded": True}
-    assert c.post("/bond/deposit", headers=h[1]).json() == {"bonded": True}
+    bond(c, h[1])
     sid = open_submission(c, h[1])
     mh = upload_media(c, h[1], sid)
     r = c.post(

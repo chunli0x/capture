@@ -143,6 +143,9 @@ class Submission(Base):
     judged_at: Mapped[int | None] = mapped_column(BigInteger)
     verdict_reason: Mapped[str | None] = mapped_column(String(512))
     payout_usdc: Mapped[int | None] = mapped_column(BigInteger)
+    # Base58 signature of the treasury -> worker USDC transfer recorded on
+    # accept (real on-chain settlement). NULL until settlement is recorded.
+    payout_signature: Mapped[str | None] = mapped_column(String(88))
     level_after: Mapped[int | None] = mapped_column(Integer)
 
 

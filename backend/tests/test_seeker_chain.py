@@ -10,6 +10,7 @@ from solders.hash import Hash
 from solders.keypair import Keypair
 from solders.message import Message
 from solders.transaction import Transaction
+from spl.token.constants import TOKEN_PROGRAM_ID
 
 
 @pytest.fixture
@@ -135,12 +136,14 @@ def test_environment_binds_config_mints_verifier_and_network(chain):
 
     raw = (
         discriminator("Config", "account")
-        + bytes(Keypair().pubkey())
+        + bytes(Keypair().pubkey())  # admin (not checked)
         + bytes(chain.verifier.pubkey())
         + bytes(chain.usdc)
         + bytes(chain.skr)
         + struct.pack("<Q", 1_000_000)
+        + bytes(chain.verifier.pubkey())  # slash_authority == verifier
     )
+    assert len(raw) == 176
     account = {
         "value": {
             "owner": str(chain.program),
@@ -159,6 +162,52 @@ def test_environment_binds_config_mints_verifier_and_network(chain):
     chain.rpc = lambda *args: "mainnet"
     with pytest.raises(ChainUnavailable):
         chain.check_environment()
+
+
+def test_environment_rejects_stale_144_byte_config(chain):
+    from seeker.chain import DEVNET_GENESIS
+
+    # The pre-slash layout (no slash_authority) must be rejected as a mismatch.
+    raw = (
+        discriminator("Config", "account")
+        + bytes(Keypair().pubkey())
+        + bytes(chain.verifier.pubkey())
+        + bytes(chain.usdc)
+        + bytes(chain.skr)
+        + struct.pack("<Q", 1_000_000)
+    )
+    account = {
+        "value": {
+            "owner": str(chain.program),
+            "data": [base64.b64encode(raw).decode(), "base64"],
+        }
+    }
+    chain.rpc = lambda method, params: (
+        DEVNET_GENESIS if method == "getGenesisHash" else account
+    )
+    with pytest.raises(ChainUnavailable):
+        chain.check_environment()
+
+
+def test_warn_slash_instruction_layout(chain, resources):
+    _payer, worker, _b, _s = resources
+    ix = chain.build("warn", str(worker.pubkey()))[-1]
+    assert ix.data == discriminator("warn") + bytes(worker.pubkey())
+    assert len(ix.accounts) == 3
+    assert ix.accounts[0].pubkey == chain.verifier.pubkey() and ix.accounts[0].is_signer
+    assert ix.accounts[1].pubkey == chain.config and not ix.accounts[1].is_writable
+    assert ix.accounts[2].pubkey == chain.pda(b"bond", bytes(worker.pubkey()))
+    assert ix.accounts[2].is_writable
+
+    ix = chain.build("slash", str(worker.pubkey()))[-1]
+    assert ix.data == discriminator("slash") + bytes(worker.pubkey())
+    assert len(ix.accounts) == 6
+    assert ix.accounts[0].pubkey == chain.verifier.pubkey() and ix.accounts[0].is_signer
+    assert ix.accounts[2].pubkey == chain.pda(b"bond", bytes(worker.pubkey()))
+    assert ix.accounts[3].pubkey == chain.pda(b"bond-vault", bytes(worker.pubkey()))
+    assert ix.accounts[3].is_writable
+    assert ix.accounts[4].pubkey == chain.penalty_vault and ix.accounts[4].is_writable
+    assert ix.accounts[5].pubkey == TOKEN_PROGRAM_ID
 
 
 def test_find_signature_paginates_beyond_first_100(chain, resources):

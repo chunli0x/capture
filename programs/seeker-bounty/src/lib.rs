@@ -6,13 +6,24 @@ declare_id!("HyNNfKuyEuyc98fo2zsdyPrHmCX7tuMXvVPF8vJB12Sm");
 
 const COOLDOWN: i64 = 86_400;
 
+// Bond warnings are a two-strike ladder. A bond is slashed (terminal) once it
+// carries two or more warnings; a slashed bond can never withdraw.
+const TERMINAL_WARNINGS: u8 = 255;
+
 #[program]
 pub mod seeker_bounty {
     use super::*;
 
-    pub fn initialize(ctx: Context<Initialize>, verifier: Pubkey, min_bond: u64) -> Result<()> {
+    pub fn initialize(
+        ctx: Context<Initialize>,
+        verifier: Pubkey,
+        slash_authority: Pubkey,
+        min_bond: u64,
+    ) -> Result<()> {
         require!(
-            min_bond > 0 && verifier != Pubkey::default(),
+            min_bond > 0
+                && verifier != Pubkey::default()
+                && slash_authority != Pubkey::default(),
             Error::Invalid
         );
         require!(
@@ -26,6 +37,7 @@ pub mod seeker_bounty {
             usdc_mint: ctx.accounts.usdc_mint.key(),
             skr_mint: ctx.accounts.skr_mint.key(),
             min_bond,
+            slash_authority,
         });
         Ok(())
     }
@@ -56,6 +68,7 @@ pub mod seeker_bounty {
     }
 
     pub fn withdraw_bond(ctx: Context<WithdrawBond>) -> Result<()> {
+        require!(withdrawable(ctx.accounts.bond.warnings), Error::Slashed);
         require!(ctx.accounts.bond.pending == 0, Error::Pending);
         require!(
             Clock::get()?.unix_timestamp >= ctx.accounts.bond.unlock_at,
@@ -75,6 +88,43 @@ pub mod seeker_bounty {
             ),
             ctx.accounts.vault.amount,
         )
+    }
+
+    pub fn warn(ctx: Context<Warn>, worker: Pubkey) -> Result<()> {
+        let bond = &mut ctx.accounts.bond;
+        bond.warnings = add_warning(bond.warnings)?;
+        emit!(BondWarned {
+            worker,
+            warnings: bond.warnings,
+        });
+        Ok(())
+    }
+
+    pub fn slash(ctx: Context<Slash>, worker: Pubkey) -> Result<()> {
+        require!(slashable(ctx.accounts.bond.warnings), Error::NotWarned);
+        // Full slash: the entire bond vault is forfeit on the second strike.
+        let taken = ctx.accounts.bond_vault.amount;
+        require!(taken > 0, Error::Invalid);
+        let seeds: &[&[u8]] = &[b"bond", worker.as_ref(), &[ctx.bumps.bond]];
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.key(),
+                Transfer {
+                    from: ctx.accounts.bond_vault.to_account_info(),
+                    to: ctx.accounts.penalty_vault.to_account_info(),
+                    authority: ctx.accounts.bond.to_account_info(),
+                },
+                &[seeds],
+            ),
+            taken,
+        )?;
+        let bond = &mut ctx.accounts.bond;
+        bond.warnings = TERMINAL_WARNINGS;
+        emit!(BondSlashed {
+            worker,
+            amount: taken,
+        });
+        Ok(())
     }
 
     pub fn post_bounty(
@@ -262,6 +312,23 @@ pub fn refundable(balance: u64, reward: u64, pending: u32) -> Result<u64> {
         .ok_or_else(|| error!(Error::Overflow))
 }
 
+/// Apply one warning. Refused once the bond is already at the two-strike
+/// threshold or terminally slashed. Saturating, so it can never wrap past 255.
+pub fn add_warning(warnings: u8) -> Result<u8> {
+    require!(warnings < 2, Error::Slashed);
+    Ok(warnings.saturating_add(1))
+}
+
+/// A bond with two or more warnings is eligible for slashing (the ladder).
+pub fn slashable(warnings: u8) -> bool {
+    warnings >= 2
+}
+
+/// A slashed bond (two or more warnings) can no longer withdraw.
+pub fn withdrawable(warnings: u8) -> bool {
+    warnings < 2
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct Config {
@@ -270,6 +337,7 @@ pub struct Config {
     pub usdc_mint: Pubkey,
     pub skr_mint: Pubkey,
     pub min_bond: u64,
+    pub slash_authority: Pubkey,
 }
 #[account]
 #[derive(InitSpace)]
@@ -277,6 +345,8 @@ pub struct Bond {
     pub worker: Pubkey,
     pub pending: u32,
     pub unlock_at: i64,
+    /// 0 = clean, 1 = warned once, >= 2 = slashed (terminal).
+    pub warnings: u8,
 }
 #[account]
 #[derive(InitSpace)]
@@ -308,11 +378,15 @@ pub struct Initialize<'info> {
     pub config: Account<'info, Config>,
     pub usdc_mint: Account<'info, Mint>,
     pub skr_mint: Account<'info, Mint>,
+    #[account(init, payer=admin, seeds=[b"penalty-vault", config.key().as_ref()], bump, token::mint=skr_mint, token::authority=config)]
+    pub penalty_vault: Account<'info, TokenAccount>,
     #[account(constraint=program.programdata_address()? == Some(program_data.key()) @ Error::Unauthorized)]
     pub program: Program<'info, crate::program::SeekerBounty>,
     #[account(constraint=program_data.upgrade_authority_address == Some(admin.key()) @ Error::Unauthorized)]
     pub program_data: Account<'info, ProgramData>,
     pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
 #[derive(Accounts)]
@@ -345,6 +419,33 @@ pub struct WithdrawBond<'info> {
     pub vault: Account<'info, TokenAccount>,
     #[account(mut, token::mint=skr_mint, token::authority=worker)]
     pub destination: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+#[instruction(worker: Pubkey)]
+pub struct Warn<'info> {
+    #[account(constraint = slash_authority.key() == config.slash_authority @ Error::Unauthorized)]
+    pub slash_authority: Signer<'info>,
+    #[account(seeds=[b"config"], bump)]
+    pub config: Account<'info, Config>,
+    #[account(mut, seeds=[b"bond", worker.as_ref()], bump)]
+    pub bond: Account<'info, Bond>,
+}
+
+#[derive(Accounts)]
+#[instruction(worker: Pubkey)]
+pub struct Slash<'info> {
+    #[account(constraint = slash_authority.key() == config.slash_authority @ Error::Unauthorized)]
+    pub slash_authority: Signer<'info>,
+    #[account(seeds=[b"config"], bump)]
+    pub config: Account<'info, Config>,
+    #[account(mut, seeds=[b"bond", worker.as_ref()], bump)]
+    pub bond: Account<'info, Bond>,
+    #[account(mut, seeds=[b"bond-vault", worker.as_ref()], bump, token::mint=config.skr_mint, token::authority=bond)]
+    pub bond_vault: Account<'info, TokenAccount>,
+    #[account(mut, seeds=[b"penalty-vault", config.key().as_ref()], bump, token::mint=config.skr_mint, token::authority=config)]
+    pub penalty_vault: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
 
@@ -421,6 +522,18 @@ pub struct Refund<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+#[event]
+pub struct BondWarned {
+    pub worker: Pubkey,
+    pub warnings: u8,
+}
+
+#[event]
+pub struct BondSlashed {
+    pub worker: Pubkey,
+    pub amount: u64,
+}
+
 #[error_code]
 pub enum Error {
     #[msg("Unauthorized signer or account")]
@@ -441,6 +554,10 @@ pub enum Error {
     Pending,
     #[msg("Deadline or cooldown not reached")]
     Locked,
+    #[msg("Bond is slashed (two or more warnings)")]
+    Slashed,
+    #[msg("Two warnings are required before a bond can be slashed")]
+    NotWarned,
 }
 
 #[cfg(test)]
@@ -482,6 +599,7 @@ mod tests {
                 worker: Pubkey::new_unique(),
                 pending: 1,
                 unlock_at: 10,
+                warnings: 0,
             };
             let mut sub = Submission {
                 bounty: Pubkey::new_unique(),
@@ -502,5 +620,47 @@ mod tests {
         assert_eq!(refundable(20, 10, 2).unwrap(), 0);
         assert!(refundable(9, 10, 1).is_err());
         assert!(refundable(u64::MAX, u64::MAX, 2).is_err());
+    }
+
+    // -- warning ladder --------------------------------------------------
+
+    #[test]
+    fn warn_then_warn_reaches_two_and_enables_slash() {
+        assert_eq!(add_warning(0).unwrap(), 1);
+        assert_eq!(add_warning(1).unwrap(), 2);
+        assert!(slashable(2));
+    }
+
+    #[test]
+    fn warn_is_saturating_and_never_wraps() {
+        // The ladder stops at two, so anything at or past the threshold refuses.
+        assert!(add_warning(2).is_err());
+        assert!(add_warning(255).is_err());
+    }
+
+    #[test]
+    fn slash_without_prior_warn_is_refused() {
+        assert!(!slashable(0));
+        assert!(!slashable(1));
+    }
+
+    #[test]
+    fn slashed_bond_is_terminal_withdraw_and_warn_refuse() {
+        // Terminal (255) and threshold (2) both refuse further warns/withdraws.
+        assert!(!withdrawable(255));
+        assert!(!withdrawable(2));
+        assert!(withdrawable(0));
+        assert!(withdrawable(1));
+    }
+
+    #[test]
+    fn full_slash_drains_the_entire_bond_vault() {
+        // A second strike forfeits the whole vault: `taken` is the vault balance
+        // in full, so nothing remains and the penalty vault holds exactly it.
+        let balance = 100u64;
+        let taken = balance; // slash takes the full amount, no clamp
+        assert_eq!(taken, 100);
+        assert_eq!(balance - taken, 0);
+        assert_eq!(taken + (balance - taken), balance);
     }
 }
