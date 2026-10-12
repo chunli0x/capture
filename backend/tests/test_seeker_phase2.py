@@ -305,7 +305,7 @@ def test_taxonomy_endpoint_returns_registry(pilot):
     # Spot-check the names the label pipeline relies on across namespaces.
     assert by[(1, "object")]["name"] == "bowls"
     assert by[(1, "place")]["name"] == "bed"
-    assert by[(1, "action")]["name"] == "sniff"
+    assert by[(1, "action")]["name"] == "look around"
     # v2 object/action additions are present.
     assert by[(14, "object")]["name"] == "stairs"
     assert by[(15, "object")]["name"] == "person"
