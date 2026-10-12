@@ -124,6 +124,16 @@ class OpenSubmission(Strict):
     kind: Kind = "object"
 
 
+class OpenReview(Strict):
+    """A free peer-review verdict on an open (no-bounty) upload.
+
+    Free reviewers do a quick quality verdict (accept/reject) rather than a full
+    re-label, so this is a single boolean, not boxes/scene/action.
+    """
+
+    accepted: bool
+
+
 class LivenessSession(Strict):
     """Start a liveness session: a fresh motion challenge before the first
     upload. ``contributor`` is the wallet; ``task_id`` binds the proof to a task

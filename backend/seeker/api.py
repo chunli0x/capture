@@ -48,6 +48,7 @@ from .schemas import (
     Labels,
     LivenessComplete,
     LivenessSession,
+    OpenReview,
     OpenSubmission,
     PlaceLabels,
     Verify,
@@ -70,6 +71,11 @@ from tapfarm.liveness import (
 )
 
 import functools
+
+
+# Capture bond gate (CAPTURE-BOND-SPEC): a new user must either deposit the SKR
+# bond OR complete this many free peer-reviews before their first upload.
+QUALITY_CHECKS_REQUIRED = 3
 
 
 @functools.lru_cache(maxsize=1)
@@ -411,11 +417,28 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
                 "payout_usdc": s.payout_usdc,
                 "level_after": s.level_after,
             }
+        if s.status == "review":
+            # Idempotent retry for a free-tier upload already dropped into the
+            # peer-review queue: return its state rather than a 409.
+            return {"id": s.id, "status": "review"}
         if s.expires <= now():
             fail(409, "Upload expired")
         if s.status != "claimed" or s.labels is not None:
             fail(409, "Submission is immutable")
         boxes, secondary, metadata = validate_open_labels(body, s)
+
+        worker = lock(db, Actor, actor.wallet)
+        if not worker.bonded:
+            # FREE tier (unlocked via quality checks, not bonded): no VLM judge,
+            # no tokens. Commit the labels and drop the upload into the
+            # peer-review queue; acceptance/payout are settled later by two peer
+            # reviews (see POST /submissions/{sid}/reviews).
+            s.labels = boxes
+            s.secondary = secondary
+            s.capture_metadata = metadata
+            s.label_hash = digest(canonical(boxes))
+            s.status = "review"
+            return {"id": s.id, "status": "review"}
 
         # Decode the stored media so the judge sees actual pixels, not just the
         # media-hash presence flag. For an action video, extract one frame.
@@ -652,6 +675,13 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             if actor.worker or actor.reviewer
             else "wallet-only",
             "bond_test_skr_units": settings.min_bond,
+            # Capture bond gate: bonded once the bond is deposited, quality_checks
+            # counts completed free peer-reviews, and unlocked is the submission
+            # gate (bonded OR enough free quality checks).
+            "bonded": actor.bonded,
+            "quality_checks": actor.quality_checks,
+            "quality_checks_required": QUALITY_CHECKS_REQUIRED,
+            "unlocked": actor.bonded or actor.quality_checks >= QUALITY_CHECKS_REQUIRED,
             **level,
         }
 
@@ -837,6 +867,12 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
                     "Liveness proof required; complete /liveness/session then "
                     "/liveness/complete first",
                 )
+            if not actor.bonded and actor.quality_checks < QUALITY_CHECKS_REQUIRED:
+                fail(
+                    403,
+                    "Bond required — deposit the SKR bond or complete "
+                    f"{QUALITY_CHECKS_REQUIRED} free quality checks",
+                )
             rate(db, "open-upload:" + actor.wallet, 60, 3600)
             s = Submission(
                 bounty_id=None,
@@ -874,11 +910,26 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
 
     @app.get("/review-queue")
     def queue(actor: Auth):
-        if not actor.reviewer:
-            fail(403, "Reviewer enrollment required")
         with database.transaction() as db:
             done = select(Review.submission_id).where(Review.reviewer == actor.wallet)
-            rows = db.execute(
+            # Open (no-bounty) uploads awaiting peer review: any authenticated
+            # user may review them (no operator reviewer enrollment needed), so
+            # they are listed regardless of the reviewer flag.
+            open_rows = db.execute(
+                select(Submission, Bounty)
+                .outerjoin(Bounty)
+                .where(
+                    Submission.bounty_id.is_(None),
+                    Submission.status == "review",
+                    Submission.worker != actor.wallet,
+                    Submission.id.not_in(done),
+                )
+                .limit(50)
+            ).all()
+            if not actor.reviewer:
+                return [submission_view(s, b, actor) for s, b in open_rows]
+            # Existing bounty review queue for operator-enrolled reviewers.
+            bounty_rows = db.execute(
                 select(Submission, Bounty)
                 .join(Bounty)
                 .where(
@@ -890,7 +941,9 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
                 )
                 .limit(50)
             ).all()
-            return [submission_view(s, b, actor) for s, b in rows]
+            result = [submission_view(s, b, actor) for s, b in open_rows]
+            result.extend(submission_view(s, b, actor) for s, b in bounty_rows)
+            return result
 
     @app.post("/submissions/{sid}/media")
     async def upload(sid: str, request: Request, actor: Auth):
@@ -1038,10 +1091,79 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             s.expires = b.deadline
             return submission_view(s, b, actor)
 
+    def review_open(db, sid, body, actor):
+        """Peer review an open (no-bounty) upload. Any authenticated user who is
+        not the worker may review (no operator reviewer enrollment); each new
+        review increments the reviewer's ``quality_checks``. A review is a simple
+        accept/reject verdict (``OpenReview``). Two reviews settle: both accept ->
+        accepted + payout (the judge accept path); otherwise rejected.
+        """
+        s = lock(db, Submission, sid)
+        if s.worker == actor.wallet:
+            fail(403, "Workers may not review their own upload")
+        if s.status != "review":
+            fail(409, "Review round is closed")
+        verdict = body.accepted
+        existing = db.scalar(
+            select(Review).where(
+                Review.submission_id == sid, Review.reviewer == actor.wallet
+            )
+        )
+        if existing:
+            if existing.accepted != verdict:
+                fail(409, "A review cannot be replaced")
+            return {"status": s.status}
+        db.add(
+            Review(
+                submission_id=sid,
+                reviewer=actor.wallet,
+                labels=[],
+                secondary=None,
+                accepted=verdict,
+            )
+        )
+        actor.quality_checks += 1
+        db.flush()
+        reviews = db.scalars(
+            select(Review).where(Review.submission_id == sid)
+        ).all()
+        if len(reviews) == 2:
+            if all(r.accepted for r in reviews):
+                # Both accept: settle like the judge accept path — record payout
+                # and advance the worker's accepted_count.
+                level_before = contributor_level(db, s.worker)["level"]
+                complete = bool((s.secondary or {}).get("postures")) and bool(
+                    (s.secondary or {}).get("environment")
+                )
+                payout = payout_units(level_before, s.kind, s.duration_ms, complete)
+                worker = lock(db, Actor, s.worker)
+                worker.accepted_count += 1
+                s.status, s.accepted = "accepted", True
+                s.judged_at = now()
+                s.verdict_reason = "peer-review consensus"
+                s.payout_usdc = payout
+                s.level_after = contributor_level(db, s.worker)["level"]
+            else:
+                s.status, s.accepted = "rejected", False
+                s.judged_at = now()
+                s.verdict_reason = "peer-review disagreement"
+                s.payout_usdc = 0
+                s.level_after = contributor_level(db, s.worker)["level"]
+        return {"status": s.status}
+
     @app.post("/submissions/{sid}/reviews")
-    def review(sid: str, body: Union[Labels, PlaceLabels, ActionLabels], actor: Auth):
+    def review(sid: str, body: Union[Labels, PlaceLabels, ActionLabels, OpenReview], actor: Auth):
         with database.transaction() as db:
             actor = lock(db, Actor, actor.wallet)
+            # Open (no-bounty) uploads are peer-reviewed without a bounty lock:
+            # branch BEFORE authorized_submission, which requires a bounty.
+            branch = db.execute(
+                select(Submission.id, Submission.bounty_id).where(Submission.id == sid)
+            ).first()
+            if branch is None:
+                fail(404, "Submission not found")
+            if branch.bounty_id is None:
+                return review_open(db, sid, body, actor)
             s, b = authorized_submission(db, sid, actor)
             if not actor.reviewer or actor.wallet in {s.worker, b.requester}:
                 fail(403, "Independent enrolled reviewer required")
@@ -1153,6 +1275,26 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             else:
                 fail(404, "Unknown action")
             return prepare(db, action, sid, actor, b, s)
+
+    @app.post("/bond/faucet")
+    def bond_faucet(actor: Auth):
+        """Devnet test-SKR faucet ("Get test SKR"). Records funding server-side;
+        idempotent. On-chain settlement stays on the prepare seam."""
+        with database.transaction() as db:
+            actor = lock(db, Actor, actor.wallet)
+            actor.skr_funded = True
+        return {"funded": True}
+
+    @app.post("/bond/deposit")
+    def bond_deposit(actor: Auth):
+        """Devnet server-recorded bond deposit. Requires the test-SKR faucet to
+        have run first; idempotent. Does NOT touch /bond/{action}/prepare."""
+        with database.transaction() as db:
+            actor = lock(db, Actor, actor.wallet)
+            if not actor.skr_funded:
+                fail(409, "Get test SKR first")
+            actor.bonded = True
+        return {"bonded": True}
 
     @app.post("/bond/{action}/prepare")
     def prepare_bond(action: str, actor: Auth):

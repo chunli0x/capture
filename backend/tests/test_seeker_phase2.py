@@ -17,7 +17,7 @@ from seeker.media import (
     MediaRejected,
     Moderation,
     canonicalize_video,
-    hive_video_pass,
+    sightengine_nudity_pass,
     sightengine_video_pass,
 )
 from seeker.schemas import ActionLabels, ActionSpan, PlaceLabels, Scene
@@ -640,7 +640,6 @@ def test_video_moderation_fail_closed(pilot, monkeypatch):
 
     settings.sightengine_user = "user"
     settings.sightengine_secret = "secret"
-    settings.hive_key = "test"
 
     async def image_only(*args, **kwargs):
         # A provider that returns an image verdict (cannot scan video) -> block.
@@ -679,70 +678,45 @@ def test_video_pass_helpers_fail_closed():
     assert not sightengine_video_pass(
         {"status": "success", "data": {"frames": [{}]}}
     )
-    # hive: a non-video verdict never passes.
-    assert not hive_video_pass({})
-    benign = {
-        "status": [
-            {
-                "status": {"code": 200},
-                "response": {
-                    "output": {
-                        "file": {
-                            "fileType": "video",
-                            "reasons": [],
-                            "frames": [{}],
-                            "classifierPrediction": {
-                                "csam_classifier": {
-                                    "csam": 0.001,
-                                    "pornography": 0.001,
-                                    "other": 0.998,
-                                }
-                            },
-                        },
-                        "hashes": [],
-                    }
-                },
-            }
-        ]
-    }
-    assert hive_video_pass(benign)
-    # fileType != video -> fail closed.
-    bad = __import__("copy").deepcopy(benign)
-    bad["status"][0]["response"]["output"]["file"]["fileType"] = "image"
-    assert not hive_video_pass(bad)
+    # A frame with a sexual-content signal fails closed (nudity-2.0 model).
+    assert not sightengine_video_pass(
+        {
+            "status": "success",
+            "data": {
+                "frames": [
+                    {"faces": [], "nudity": {"sexual_activity": 0.9, "sexual_display": 0.1, "erotica": 0.1, "sextoy": 0.1, "suggestive": 0.1}}
+                ]
+            },
+        }
+    )
+    # A clean frame (no faces, no nudity) passes.
+    assert sightengine_video_pass(
+        {
+            "status": "success",
+            "data": {
+                "frames": [
+                    {"faces": [], "nudity": {"sexual_activity": 0.001, "sexual_display": 0.001, "erotica": 0.001, "sextoy": 0.001, "suggestive": 0.001}}
+                ]
+            },
+        }
+    )
 
 
-def test_hive_video_pass_blocks_csam_hashes():
-    benign = {
-        "status": [
-            {
-                "status": {"code": 200},
-                "response": {
-                    "output": {
-                        "file": {
-                            "fileType": "video",
-                            "reasons": [],
-                            "frames": [{}],
-                            "classifierPrediction": {
-                                "csam_classifier": {
-                                    "csam": 0.001,
-                                    "pornography": 0.001,
-                                    "other": 0.998,
-                                }
-                            },
-                        },
-                        "hashes": [],
-                    }
-                },
-            }
-        ]
+def test_sightengine_nudity_pass():
+    clean = {
+        "sexual_activity": 0.001, "sexual_display": 0.001,
+        "erotica": 0.001, "sextoy": 0.001, "suggestive": 0.001,
     }
-    assert hive_video_pass(benign)
-    # A non-empty hashes list is Hive's known-CSAM hash match (PhotoDNA/MD5);
-    # it must never pass, matching the image path.
-    csam = __import__("copy").deepcopy(benign)
-    csam["status"][0]["response"]["output"]["hashes"] = [{"hash": "deadbeef"}]
-    assert not hive_video_pass(csam)
+    assert sightengine_nudity_pass({"nudity": clean})
+    assert not sightengine_nudity_pass(
+        {"nudity": {**clean, "sexual_display": 0.9}}
+    )
+    assert not sightengine_nudity_pass(
+        {"nudity": {**clean, "suggestive": 0.8}}
+    )
+    # missing/malformed nudity object -> fail closed
+    assert not sightengine_nudity_pass({})
+    assert not sightengine_nudity_pass({"nudity": None})
 
 
 # ---- offline keypoint job ----
@@ -891,11 +865,15 @@ def test_migration_0002_adds_phase2_columns(tmp_path):
     assert "secondary" not in sub_cols and "secondary" not in rev_cols
     assert "accepted_count" not in actor_cols
     assert "liveness_completed" not in actor_cols
+    assert "bonded" not in actor_cols and "quality_checks" not in actor_cols
+    assert "skr_funded" not in actor_cols
     assert "capture_metadata" not in sub_cols and "accepted" not in sub_cols
 
     # 0002 adds 3 columns; 0003 adds 2; 0004 adds 8 (actors.accepted_count +
-    # 7 submission columns); 0005 adds 1 (actors.liveness_completed).
-    assert apply_migrations(engine) == 14
+    # 7 submission columns); 0005 adds 1 (actors.liveness_completed); 0006 adds
+    # 3 (actors.bonded, quality_checks, skr_funded); 0007 adds 1
+    # (reviews.accepted).
+    assert apply_migrations(engine) == 18
     assert apply_migrations(engine) == 0  # re-run is a no-op
 
     bounty_cols = {c["name"] for c in inspect(engine).get_columns("seeker_bounties")}
@@ -907,6 +885,8 @@ def test_migration_0002_adds_phase2_columns(tmp_path):
     assert "secondary" in sub_cols and "secondary" in rev_cols
     assert "accepted_count" in actor_cols
     assert "liveness_completed" in actor_cols
+    assert "bonded" in actor_cols and "quality_checks" in actor_cols
+    assert "skr_funded" in actor_cols
     assert "capture_metadata" in sub_cols and "accepted" in sub_cols
     assert "judged_at" in sub_cols and "payout_usdc" in sub_cols
     assert "verdict_reason" in sub_cols and "level_after" in sub_cols

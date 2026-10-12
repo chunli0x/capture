@@ -20,7 +20,6 @@ class Settings(BaseSettings):
     verifier_key_file: Path
     sightengine_user: str = ""
     sightengine_secret: str = ""
-    hive_key: str = ""
     max_upload_bytes: int = 15 * 1024 * 1024
     max_video_bytes: int = 100 * 1024 * 1024
     session_seconds: int = 3600

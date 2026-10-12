@@ -101,6 +101,7 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
     var galleryReason by remember { mutableStateOf<String?>(null) }
     var showLevel by remember { mutableStateOf(false) }
     var showProfile by remember { mutableStateOf(false) }
+    var showReviewQueue by remember { mutableStateOf(false) }
     var captureKind by remember { mutableStateOf(KIND_OBJECT) }
     androidx.activity.compose.BackHandler(enabled = showProfile && s.selected == null) { showProfile = false }
     var previousLevel by remember { mutableIntStateOf(s.level) }
@@ -194,6 +195,22 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
 
     if (showLevel) {
         LevelScreen(s, onBack = { showLevel = false })
+        return
+    }
+
+    if (showReviewQueue) {
+        ReviewQueueScreen(s, vm, onBack = { showReviewQueue = false })
+        return
+    }
+
+    // Capture v2 bond gate: a new user cannot submit their first upload until
+    // they deposit the SKR bond or complete the free quality checks.
+    if (s.wallet.isNotEmpty() && s.selected == null && !s.unlocked) {
+        BondScreen(
+            s = s,
+            vm = vm,
+            onReviewQueue = { showReviewQueue = true },
+        )
         return
     }
 

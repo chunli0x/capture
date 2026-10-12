@@ -292,12 +292,6 @@ def canonicalize_video(raw, max_bytes=MAX_VIDEO_BYTES, max_seconds=MAX_VIDEO_SEC
     )
 
 
-def score(v):
-    if type(v) not in (float, int) or not math.isfinite(v) or not 0 <= v <= 1:
-        raise MediaRejected("Incomplete moderation result")
-    return v
-
-
 def sightengine_pass(data):
     if data["status"] != "success" or not isinstance(data["faces"], list):
         return False
@@ -306,37 +300,42 @@ def sightengine_pass(data):
     return len(data["faces"]) == 0
 
 
-def hive_pass(data):
-    entries = data["status"]
-    if (
-        not isinstance(entries, list)
-        or len(entries) != 1
-        or entries[0]["status"]["code"] != 200
-    ):
+def sightengine_nudity_pass(data):
+    """Reject any sexual-content signal from Sightengine's nudity-2.0 model.
+
+    Replaces the retired Hive CSAM classifier. Sightengine does not perform
+    known-CSAM hash matching (PhotoDNA/MD5) the way Hive did — this is a
+    classifier over nudity/sexual-content probabilities, not a known-abuse
+    database lookup. For the devnet pilot (ground-level egocentric capture)
+    that is an accepted, documented tradeoff. Fails closed on a missing or
+    malformed nudity object.
+    """
+    nudity = data.get("nudity")
+    if not isinstance(nudity, dict):
         return False
-    out = entries[0]["response"]["output"]
-    file = out["file"]
-    if file["fileType"] != "image" or file["reasons"] != [] or out["hashes"] != []:
-        return False
-    values = file["classifierPrediction"]["csam_classifier"]
-    csam, porn, other = (score(values[k]) for k in ("csam", "pornography", "other"))
-    return (
-        abs(csam + porn + other - 1) < 0.02
-        and csam < 0.01
-        and porn < 0.05
-        and other > 0.94
+    # Explicit sexual-content categories. A clean frame scores ~0.001 on each.
+    explicit = max(
+        float(nudity.get("sexual_activity", 1)),
+        float(nudity.get("sexual_display", 1)),
+        float(nudity.get("erotica", 1)),
+        float(nudity.get("sextoy", 1)),
     )
+    suggestive = float(nudity.get("suggestive", 0))
+    if explicit >= 0.5 or suggestive >= 0.7:
+        return False
+    return True
 
 
 def sightengine_video_pass(data):
-    """Fail-closed for the Sightengine face-age video contract.
+    """Fail-closed for the Sightengine video contract (face-age + nudity-2.0).
 
     The sync video endpoint nests per-frame results under ``data.frames``;
     each frame carries its own ``faces`` list (real faces, each with an
-    ``attributes.age.minor`` probability). A provider that did not analyze
-    frames (missing/empty ``data.frames``), any frame lacking a well-formed
-    ``faces`` list, or any real face detected in any frame, all fail closed —
-    mirroring the image path, which admits no faces.
+    ``attributes.age.minor`` probability) and a ``nudity`` object. A provider
+    that did not analyze frames (missing/empty ``data.frames``), any frame
+    lacking a well-formed ``faces`` list, any real face detected in any frame,
+    or any frame with a sexual-content signal, all fail closed — mirroring the
+    image path.
     """
     if data.get("status") != "success":
         return False
@@ -349,39 +348,11 @@ def sightengine_video_pass(data):
         faces = frame.get("faces")
         if not isinstance(faces, list) or len(faces) != 0:
             return False
+        # Enforce the nudity model per frame too, mirroring the image path.
+        nudity = frame.get("nudity")
+        if nudity is not None and not sightengine_nudity_pass({"nudity": nudity}):
+            return False
     return True
-
-
-def hive_video_pass(data):
-    """Fail-closed: only a clean video verdict (frames analyzed) may pass."""
-    entries = data.get("status")
-    if (
-        not isinstance(entries, list)
-        or len(entries) != 1
-        or entries[0]["status"]["code"] != 200
-    ):
-        return False
-    out = entries[0]["response"]["output"]
-    file = out["file"]
-    if (
-        file.get("fileType") != "video"
-        or file.get("reasons") != []
-        or out.get("hashes") != []
-    ):
-        # A non-empty hashes list is Hive's known-CSAM hash match (PhotoDNA/MD5)
-        # and must never pass, mirroring the image path.
-        return False
-    frames = file.get("frames")
-    if not isinstance(frames, list) or len(frames) == 0:
-        return False
-    values = file["classifierPrediction"]["csam_classifier"]
-    csam, porn, other = (score(values[k]) for k in ("csam", "pornography", "other"))
-    return (
-        abs(csam + porn + other - 1) < 0.02
-        and csam < 0.01
-        and porn < 0.05
-        and other > 0.94
-    )
 
 
 class Moderation:
@@ -390,35 +361,27 @@ class Moderation:
 
     async def scan(self, data: bytes):
         s = self.settings
-        if not (s.sightengine_user and s.sightengine_secret and s.hive_key):
+        if not (s.sightengine_user and s.sightengine_secret):
             raise MediaRejected("Moderation service is not configured")
         try:
             async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
-                sight, hive = await asyncio.gather(
-                    client.post(
-                        "https://api.sightengine.com/1.0/check.json",
-                        files={"media": ("image.png", data, "image/png")},
-                        data={
-                            "models": "face-age",
-                            "api_user": s.sightengine_user,
-                            "api_secret": s.sightengine_secret,
-                        },
-                    ),
-                    client.post(
-                        "https://api.thehive.ai/api/v2/task/sync",
-                        files={"media": ("image.png", data, "image/png")},
-                        headers={"Authorization": "Token " + s.hive_key},
-                    ),
+                sight = await client.post(
+                    "https://api.sightengine.com/1.0/check.json",
+                    files={"media": ("image.png", data, "image/png")},
+                    data={
+                        "models": "nudity-2.0,face-age",
+                        "api_user": s.sightengine_user,
+                        "api_secret": s.sightengine_secret,
+                    },
                 )
                 sight.raise_for_status()
-                hive.raise_for_status()
-                if not sightengine_pass(sight.json()) or not hive_pass(hive.json()):
+                payload = sight.json()
+                if not sightengine_pass(payload) or not sightengine_nudity_pass(payload):
                     raise MediaRejected("Image did not pass moderation")
                 # No raw provider payloads or media URLs in logs or public APIs.
                 return {
                     "policy": "object-pilot-v1",
                     "sightengine": "pass",
-                    "hive": "pass",
                     "sha256": hashlib.sha256(data).hexdigest(),
                 }
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
@@ -429,36 +392,26 @@ class Moderation:
         (unconfigured, error, or a non-video verdict), the submission is blocked —
         never default-PASS."""
         s = self.settings
-        if not (s.sightengine_user and s.sightengine_secret and s.hive_key):
+        if not (s.sightengine_user and s.sightengine_secret):
             raise MediaRejected("Video moderation service is not configured")
         try:
             async with httpx.AsyncClient(timeout=60, follow_redirects=False) as client:
-                sight, hive = await asyncio.gather(
-                    client.post(
-                        "https://api.sightengine.com/1.0/video/check-sync.json",
-                        files={"media": ("video.mp4", data, "video/mp4")},
-                        data={
-                            "models": "face-age",
-                            "api_user": s.sightengine_user,
-                            "api_secret": s.sightengine_secret,
-                        },
-                    ),
-                    client.post(
-                        "https://api.thehive.ai/api/v2/task/sync",
-                        files={"media": ("video.mp4", data, "video/mp4")},
-                        headers={"Authorization": "Token " + s.hive_key},
-                    ),
+                sight = await client.post(
+                    "https://api.sightengine.com/1.0/video/check-sync.json",
+                    files={"media": ("video.mp4", data, "video/mp4")},
+                    data={
+                        "models": "nudity-2.0,face-age",
+                        "api_user": s.sightengine_user,
+                        "api_secret": s.sightengine_secret,
+                    },
                 )
                 sight.raise_for_status()
-                hive.raise_for_status()
-                if not sightengine_video_pass(sight.json()) or not hive_video_pass(
-                    hive.json()
-                ):
+                payload = sight.json()
+                if not sightengine_video_pass(payload):
                     raise MediaRejected("Video did not pass moderation")
                 return {
                     "policy": "object-pilot-v1",
                     "sightengine": "pass",
-                    "hive": "pass",
                     "sha256": hashlib.sha256(data).hexdigest(),
                 }
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:

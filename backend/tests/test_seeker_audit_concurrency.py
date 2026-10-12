@@ -164,6 +164,10 @@ def pg_pilot(tmp_path: Path):
         == 200
     )
     _liveness(c, h, str(key.pubkey()))
+    # Bond the worker so the open-upload label path runs the (judge) accept
+    # path, not the bond gate / free peer-review path.
+    assert c.post("/bond/faucet", headers=h).status_code == 200
+    assert c.post("/bond/deposit", headers=h).status_code == 200
     yield c, app, h, key
     app.state.database.engine.dispose()
 

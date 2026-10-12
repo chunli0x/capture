@@ -17,7 +17,7 @@ from seeker.media import (
     MediaCipher,
     MediaRejected,
     canonicalize,
-    hive_pass,
+    sightengine_nudity_pass,
     sightengine_pass,
 )
 from seeker.schemas import Labels, agree
@@ -451,38 +451,18 @@ def test_matching_requires_every_box():
 
 
 def test_provider_contract_fail_closed():
-    benign = {
-        "status": [
-            {
-                "status": {"code": 200},
-                "response": {
-                    "output": {
-                        "file": {
-                            "fileType": "image",
-                            "reasons": [],
-                            "classifierPrediction": {
-                                "csam_classifier": {
-                                    "csam": 0.001,
-                                    "pornography": 0.001,
-                                    "other": 0.998,
-                                }
-                            },
-                        },
-                        "hashes": [],
-                    }
-                },
-            }
-        ]
-    }
-    assert hive_pass(benign)
-    benign["status"][0]["response"]["output"]["hashes"] = [{"matchTypes": ["CSAM"]}]
-    assert not hive_pass(benign)
     assert sightengine_pass({"status": "success", "faces": []})
     assert not sightengine_pass(
         {"status": "success", "faces": [{"attributes": {"age": {"minor": 0}}}]}
     )
-    with pytest.raises(KeyError):
-        hive_pass({})
+    # nudity-2.0: clean passes, sexual content fails closed
+    clean = {
+        "sexual_activity": 0.001, "sexual_display": 0.001,
+        "erotica": 0.001, "sextoy": 0.001, "suggestive": 0.001,
+    }
+    assert sightengine_nudity_pass({"nudity": clean})
+    assert not sightengine_nudity_pass({"nudity": {**clean, "erotica": 0.8}})
+    assert not sightengine_nudity_pass({})
     with pytest.raises(KeyError):
         sightengine_pass({"status": "success"})
     with pytest.raises(MediaRejected):
@@ -534,7 +514,11 @@ def test_revoked_worker_and_duplicate_upload(pilot):
         == 403
     )
     assert c.post("/bond/deposit/prepare", headers=h[4]).status_code == 403
-    assert c.get("/review-queue", headers=h[4]).status_code == 403
+    # Bond spec: any authenticated user may review open uploads (no reviewer
+    # enrollment). There are no open uploads here, so a revoked worker still
+    # gets 200 with an empty list rather than a reviewer-gate 403.
+    assert c.get("/review-queue", headers=h[4]).status_code == 200
+    assert c.get("/review-queue", headers=h[4]).json() == []
     assert (
         c.post(f"/submissions/{sid}/labels", headers=h[1], json=labels).status_code
         == 200
@@ -567,7 +551,6 @@ async def test_moderation_errors_do_not_pass(pilot, monkeypatch):
         await m.scan(png())
     settings.sightengine_user = "user"
     settings.sightengine_secret = "secret"
-    settings.hive_key = "test"
 
     async def unavailable(*args, **kwargs):
         raise httpx.ReadTimeout("timeout")

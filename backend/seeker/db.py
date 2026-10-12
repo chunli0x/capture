@@ -53,6 +53,13 @@ class Actor(Base):
     # refused until this is true, so liveness is enforced server-side rather
     # than being a client-only claim.
     liveness_completed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Capture bond gate (migration 0006, CAPTURE-BOND-SPEC). All server-recorded:
+    # bonded == the devnet bond was deposited; quality_checks == completed free
+    # peer-reviews; skr_funded == the devnet test-SKR faucet ran. The gate is
+    # ``bonded OR quality_checks >= QUALITY_CHECKS_REQUIRED`` (see api.py).
+    bonded: Mapped[bool] = mapped_column(Boolean, default=False)
+    quality_checks: Mapped[int] = mapped_column(Integer, default=0)
+    skr_funded: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class Challenge(Base):
@@ -147,6 +154,9 @@ class Review(Base):
     reviewer: Mapped[str] = mapped_column(ForeignKey(Actor.wallet))
     labels: Mapped[list] = mapped_column(JSON)
     secondary: Mapped[dict | None] = mapped_column(JSON)
+    # Open-upload peer reviews carry a boolean verdict (accept/reject) instead of
+    # full labels; NULL for the operator bounty-review path.
+    accepted: Mapped[bool | None] = mapped_column(Boolean)
 
 
 class Prepared(Base):

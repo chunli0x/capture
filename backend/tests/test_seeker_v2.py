@@ -97,6 +97,12 @@ def pilot(tmp_path):
     # exercise the real (post-gate) flow.
     for k, hd in zip(keys, h):
         do_liveness(c, hd, str(k.pubkey()))
+    # Capture bond gate: bond every worker so the open-upload tests exercise the
+    # bonded (instant-judge) path. The free peer-review path is covered in
+    # test_bond_gate.py.
+    for hd in h:
+        assert c.post("/bond/faucet", headers=hd).status_code == 200
+        assert c.post("/bond/deposit", headers=hd).status_code == 200
     yield c, app, h, keys, settings
     app.state.database.engine.dispose()
 
@@ -591,6 +597,9 @@ def test_open_submit_requires_liveness(pilot):
     assert r.status_code == 403
     assert "liveness" in r.json()["detail"].lower()
     do_liveness(c, hd, str(k.pubkey()))
+    # Bond the fresh worker so the post-liveness open upload passes the gate.
+    assert c.post("/bond/faucet", headers=hd).status_code == 200
+    assert c.post("/bond/deposit", headers=hd).status_code == 200
     assert c.post("/submissions", headers=hd, json={"kind": "object"}).status_code == 200
 
 

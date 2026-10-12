@@ -117,6 +117,13 @@ data class PilotState(
     val livenessVerified: Boolean = false,
     // --- Capture v2: judge verdict + payout ---
     val lastResult: SubmissionResult? = null,
+    // --- Capture v2: bond gate + free quality-check path ---
+    val bonded: Boolean = false,
+    val qualityChecks: Int = 0,
+    val qualityChecksRequired: Int = 0,
+    val unlocked: Boolean = true,
+    val bondFunded: Boolean = false,
+    val reviewQueue: List<JSONObject> = emptyList(),
 )
 
 class SeekerViewModel(application: Application) : AndroidViewModel(application) {
@@ -346,6 +353,14 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         val tx = list("/transactions")
         val taxonomy = parseTaxonomy(get("/taxonomy"))
         val parsedLevel = me.optInt("level", 0).coerceIn(0, MAX_LEVEL)
+        val bonded = me.optBoolean("bonded", false)
+        val qualityChecks = me.optInt("quality_checks", 0)
+        val qualityChecksRequired = me.optInt("quality_checks_required", 0)
+        // The backend owns `unlocked`; when it is absent (legacy server) derive it
+        // so a bond-capable backend never leaves a user gated by surprise.
+        val unlocked =
+            if (me.has("unlocked")) me.getBoolean("unlocked")
+            else (bonded || qualityChecksRequired <= 0 || qualityChecks >= qualityChecksRequired)
         mutable.update {
             it.copy(
                 worker = me.getBoolean("worker"),
@@ -362,6 +377,10 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
                 acceptanceRate = me.optDouble("acceptance_rate", 0.0),
                 rateMultiplier = me.optDouble("rate_multiplier", levelTier(parsedLevel).rateMultiplier),
                 bondMultiplier = me.optDouble("bond_multiplier", levelTier(parsedLevel).bondMultiplier),
+                bonded = bonded,
+                qualityChecks = qualityChecks,
+                qualityChecksRequired = qualityChecksRequired,
+                unlocked = unlocked,
             )
         }
     }
@@ -389,6 +408,36 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun refresh() = run("Refreshing", "Bounties refreshed") { refreshData() }
+
+    // --- Capture v2: bond gate + free quality-check path ---
+
+    /** Devnet test-SKR faucet — "Get test SKR". Idempotent; records funding server-side. */
+    fun faucet() =
+        run("Requesting test SKR", "Test SKR funded") {
+            post("/bond/faucet")
+            mutable.update { it.copy(bondFunded = true) }
+        }
+
+    /** Devnet server-recorded bond deposit. Does not touch the on-chain prepare seam. */
+    fun depositBond() =
+        run("Depositing bond", "Bond deposited") {
+            post("/bond/deposit")
+            refreshData()
+        }
+
+    /** Lists open uploads awaiting peer review (the token-saving path). */
+    fun loadReviewQueue() =
+        run("Loading review queue", "Review queue loaded") {
+            mutable.update { it.copy(reviewQueue = list("/review-queue")) }
+        }
+
+    /** Records an accept/reject review for an open submission, then refreshes state + queue. */
+    fun submitReview(sid: String, accept: Boolean) =
+        run("Submitting review", "Review recorded") {
+            post("/submissions/$sid/reviews", JSONObject().put("accepted", accept))
+            refreshData()
+            mutable.update { it.copy(reviewQueue = list("/review-queue")) }
+        }
 
     // --- Capture v2: liveness gate (once per session, before first upload) ---
 
