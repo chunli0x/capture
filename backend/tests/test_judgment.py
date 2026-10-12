@@ -247,6 +247,26 @@ def test_rating_median_alignment(pilot):
 # ---- agreement-floor slash trigger ----
 
 
+def test_withdraw_frozen_after_warn(pilot):
+    # Finding A (blockchain-dev): the on-chain program allows withdraw after the
+    # first warn, letting a worker drain the vault before the second-strike
+    # slash. The backend must refuse /bond/withdraw once warnings >= 1.
+    c, app, h, keys, chain, settings = pilot
+    w0 = str(keys[0].pubkey())
+    with app.state.database.transaction() as db:
+        a = db.get(Actor, w0)
+        a.worker = True
+        a.warnings = 1
+    r = c.post("/bond/withdraw", headers=h[0])
+    assert r.status_code == 403
+    assert "warning" in r.json()["detail"].lower()
+    # clean worker can still withdraw
+    with app.state.database.transaction() as db:
+        db.get(Actor, w0).warnings = 0
+    r = c.post("/bond/withdraw", headers=h[0])
+    assert r.status_code == 200
+
+
 def test_dissenter_below_floor_is_warned(pilot):
     c, app, h, keys, chain, settings = pilot
     ids = seed_calibration(app, settings.calibration_n)

@@ -272,6 +272,9 @@ def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
             return {"value": {"blockhash": str(Hash.new_unique())}}
         if method == "sendTransaction":
             return "sig_" + method
+        if method == "getSignatureStatuses":
+            # confirm success so settle_usdc/post_batch _confirm_sent passes
+            return {"value": [{"err": None, "confirmationStatus": "finalized"}]}
         raise AssertionError(f"unexpected rpc method: {method}")
 
     chain.rpc = fake_rpc

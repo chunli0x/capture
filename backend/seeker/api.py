@@ -1446,6 +1446,12 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             actor = lock(db, Actor, actor.wallet)
             if not actor.worker:
                 fail(403, "Worker enrollment required")
+            # Finding A (blockchain-dev review): the on-chain program allows
+            # withdraw after the first warn (withdrawable = warnings < 2), so a
+            # warned worker could drain the vault and leave the second-strike
+            # slash with nothing to forfeit. Freeze withdrawal once warned.
+            if actor.warnings >= 1:
+                fail(403, "Bond has an active warning; withdrawal is frozen")
             return prepare(db, "withdraw", actor.wallet, actor)
 
     @app.post("/bond/settle")

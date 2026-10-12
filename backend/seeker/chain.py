@@ -332,8 +332,10 @@ class Chain:
             raise ChainUnavailable("Worker bond account is not initialized")
         raw = base64.b64decode(account["data"][0], validate=True)
         # Bond layout: discriminator(8) + worker(32) + pending(4) + unlock_at(8)
-        # + warnings(1). warnings is the trailing byte.
-        if len(raw) < 8 + 32 + 4 + 8 + 1:
+        # + warnings(1). warnings is the trailing byte. Validate the discriminator
+        # and exact length so a version-skewed binary cannot silently misread
+        # raw[-1] (finding G, blockchain-dev review).
+        if len(raw) != 8 + 32 + 4 + 8 + 1 or raw[:8] != discriminator("Bond", "account"):
             raise ChainUnavailable("Worker bond account has unexpected layout")
         return raw[-1]
 
@@ -393,7 +395,9 @@ class Chain:
                 )
             )
         )
-        return self._sign_and_send(instructions, payer)
+        sig = self._sign_and_send(instructions, payer)
+        self._confirm_sent(sig)
+        return sig
 
     def settle_skr(self, wallet, amount, memo=None):
         """Pay ``amount`` test SKR to the judge's SKR ATA. The treasury keypair
@@ -459,7 +463,12 @@ class Chain:
                 ],
             )
         ]
-        return self._sign_and_send(instructions, self.verifier)
+        sig = self._sign_and_send(instructions, self.verifier)
+        # Finding C (blockchain-dev review): confirm before returning, so a
+        # broadcast-but-failed anchor raises ChainUnavailable and leaves
+        # anchored=False for the reconcile pass (migration 0013 contract).
+        self._confirm_sent(sig)
+        return sig
 
     def height(self):
         return self.rpc("getBlockHeight", [{"commitment": "finalized"}])
