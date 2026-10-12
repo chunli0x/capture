@@ -343,6 +343,54 @@ def test_astra_judge_fails_closed_when_codex_missing(monkeypatch):
         pass
 
 
+def test_astra_judge_scrubs_env_and_repo_from_subprocess(monkeypatch):
+    """Finding 10: the judge subprocess must NOT inherit SEEKER_* secrets and
+    must NOT use the repo (holding key files) as its working root."""
+    import seeker.judge as judge_mod
+    from seeker.judge import AstraJudge, Verdict
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        # The chown helper call has no `input`; only capture the codex exec.
+        if cmd[:1] == ["sudo"] and "chown" in cmd:
+            return None
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env")
+        class _Proc:
+            returncode = 0
+            stderr = b""
+            stdout = b'{"accepted": true, "reason": "ok"}\n'
+        return _Proc()
+
+    monkeypatch.setattr(judge_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(judge_mod.os.path, "exists", lambda p: True)
+
+    # Seed the parent env with secrets the judge must drop.
+    monkeypatch.setenv("SEEKER_OPERATOR_KEY", "super-secret-operator")
+    monkeypatch.setenv("SEEKER_MEDIA_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+    monkeypatch.setenv("SEEKER_SIGHTENGINE_SECRET", "sight-secret")
+    monkeypatch.setenv("SEEKER_VERIFIER_KEY_FILE", "/home/hermes/tap-ci/backend/verifier.json")
+
+    j = AstraJudge(codex_bin="/fake/codex", timeout_seconds=10)
+    v = j.judge("object", [{"x": 1}], {"postures": [{"id": 1}]}, {}, None, True, b"fakeimage")
+    assert v.accepted is True
+
+    env = captured["env"]
+    cmd = captured["cmd"]
+    # 1. No SEEKER_* secret is forwarded to the subprocess.
+    assert not any(k.startswith("SEEKER_") for k in env), env
+    # 2. The judge runs as the unprivileged capture-judge user (finding 10).
+    assert cmd[:4] == ["sudo", "-n", "-u", "capture-judge"], cmd
+    # 3. The working root is a fresh temp dir, never the repo.
+    cwd = cmd[cmd.index("-C") + 1]
+    assert cwd != "/home/hermes/tap-ci", cmd
+    assert "capture-judge-" in cwd, cmd
+    # 4. The env points Codex at the judge's own home, not the operator's.
+    assert env.get("CODEX_HOME") == "/var/lib/capture-judge/.codex", env
+    assert env.get("HOME") == "/var/lib/capture-judge", env
+
+
 def test_astra_judge_fails_closed_when_no_decodable_image():
     from seeker.judge import AstraJudge, JudgeUnavailable
 

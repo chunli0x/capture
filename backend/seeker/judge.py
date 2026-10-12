@@ -1,9 +1,11 @@
 """VLM judge behind a clean abstraction; deterministic stub is the default.
 
 The real judge is ChatGPT Astra (``gpt-6-astra``) on the founder's paid ChatGPT
-subscription, reached through the Codex CLI (``codex exec -i <image>``), which
-already holds the OAuth token on this box (``~/.codex/auth.json``, chatgpt
-auth mode). The direct ``chatgpt.com/backend-api/responses`` endpoint is
+subscription, reached through the Codex CLI (``codex-judge exec -i <image>``).
+The judge runs as a dedicated unprivileged user (``capture-judge``) whose own
+home holds the Codex OAuth token (``/var/lib/capture-judge/.codex/auth.json``,
+chatgpt auth mode) — it cannot read the operator's signing keys or secrets
+(finding 10). The direct ``chatgpt.com/backend-api/responses`` endpoint is
 Cloudflare-WAF'd behind an ``x-oai-attestation`` integrity header that cannot be
 cleanly reproduced outside the CLI, so the CLI subprocess is the supported
 transport.
@@ -125,16 +127,24 @@ def _is_indoor(environment) -> bool:
 class AstraJudge(Judge):
     """Real gpt-6-astra judgment via the Codex CLI, fail-closed.
 
-    Spawns ``codex exec -m gpt-6-astra -s read-only -i <image>`` with a rubric
-    prompt on stdin and reads the JSON verdict from the ``-o`` output file. The
-    model sees the actual pixels and enforces the data-spec reject rules the
-    stub cannot (blur, exposure, ground-level horizon, screen/watermark,
+    Spawns ``codex-judge exec -m gpt-6-astra -s read-only -i <image>`` with a
+    rubric prompt on stdin and reads the JSON verdict from the ``-o`` output
+    file. The model sees the actual pixels and enforces the data-spec reject
+    rules the stub cannot (blur, exposure, ground-level horizon, screen/watermark,
     not-a-photo). On any failure it raises :class:`JudgeUnavailable`.
+
+    Isolation (finding 10): the judge runs as the dedicated unprivileged
+    ``capture-judge`` user, not ``hermes``. Its working root is a fresh empty
+    temp dir (never the repo, which holds the verifier/treasury keypairs and
+    ``.env``), its environment is a scrubbed allowlist (never the backend's
+    ``SEEKER_*`` secrets), and its Codex auth lives in that user's own home —
+    so an image prompt injection cannot reach the operator's signing keys or
+    other secrets.
     """
 
     def __init__(
         self,
-        codex_bin: str = "/home/hermes/.local/bin/codex",
+        codex_bin: str = "/usr/local/bin/codex-judge",
         model: str = "gpt-6-astra",
         timeout_seconds: int = 90,
     ):
@@ -155,36 +165,50 @@ class AstraJudge(Judge):
 
         prompt = _rubric_prompt(kind, labels, secondary, metadata, duration_ms)
 
-        # Write the decoded image to a temp file so `codex -i` can attach it.
-        # The file is deleted on exit; a stale file is never left behind.
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        # Temp files go under /tmp explicitly (world-traversable), never the
+        # backend's own TMPDIR: the judge subprocess drops to `capture-judge`,
+        # which cannot traverse a 0700 private scratch dir. /tmp is 1777 so the
+        # chown'd image/out/workdir are reachable by that user (finding 10).
+        tmp_root = "/tmp"
+        with tempfile.NamedTemporaryFile(suffix=".png", dir=tmp_root, delete=False) as f:
             f.write(image)
             image_path = f.name
-        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
-            out_path = f.name
+        # The judge's working root is a fresh EMPTY directory, never the repo:
+        # the repo holds the 0600 verifier/treasury keypairs and backend/.env,
+        # and the judge has no business with them. An empty cwd removes those
+        # from the model's reach via the repo tree (finding 10).
+        workdir = tempfile.mkdtemp(prefix="capture-judge-", dir=tmp_root)
         try:
+            # The image + workdir are chowned to the judge user (it must read
+            # the image and use the cwd). The verdict is read from STDOUT, not
+            # the `-o` file: codex prints the final message to stdout, and the
+            # `-o` file-write fails under the dropped-privilege user anyway.
+            _make_readable_by_judge(image_path, workdir)
             cmd = [
+                "sudo", "-n", "-u", "capture-judge",
                 self.codex_bin, "exec",
                 "-m", self.model,
                 "-s", "read-only",
-                "-C", "/home/hermes/tap-ci",
-                "-o", out_path,
+                "-C", workdir,
+                "--skip-git-repo-check",
+                "--ephemeral",
+                "--ignore-user-config",
                 "-i", image_path,
             ]
             proc = subprocess.run(
                 cmd,
                 input=prompt.encode(),
-                stdout=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=self.timeout_seconds,
-                env={**os.environ, "HOME": os.path.expanduser("~")},
+                env=_judge_environment(),
             )
             if proc.returncode != 0:
                 raise JudgeUnavailable(
                     f"judge exited {proc.returncode}: "
                     f"{(proc.stderr or b'').decode(errors='replace')[-200:]}"
                 )
-            raw = open(out_path, "rb").read().decode(errors="replace")
+            raw = (proc.stdout or b"").decode(errors="replace")
             verdict = _parse_verdict(raw)
             if verdict is None:
                 raise JudgeUnavailable("judge returned no parseable verdict")
@@ -194,11 +218,62 @@ class AstraJudge(Judge):
         except OSError as exc:
             raise JudgeUnavailable(f"judge failed to launch: {exc}")
         finally:
-            for p in (image_path, out_path):
-                try:
-                    os.unlink(p)
-                except OSError:
-                    pass
+            try:
+                os.unlink(image_path)
+            except OSError:
+                pass
+            try:
+                os.rmdir(workdir)
+            except OSError:
+                pass
+
+
+def _make_readable_by_judge(*paths: str) -> None:
+    """Make the judge's temp inputs/outputs accessible to ``capture-judge``.
+
+    The backend runs as ``hermes`` and creates temp files 0600 under /tmp
+    (0700). The judge subprocess drops to ``capture-judge``, which cannot read
+    those files otherwise. Chown the temp files/dir to the judge user so the
+    image can be attached and the verdict written, while the parent still owns
+    and later deletes them.
+    """
+    try:
+        subprocess.run(
+            ["sudo", "-n", "chown", "-R", "capture-judge:capture-judge", *paths],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # If chown is unavailable the judge will simply fail closed (the
+        # subprocess cannot read its inputs); never mask that as success.
+        pass
+
+
+def _judge_environment() -> dict:
+    """A minimal environment for the judge subprocess.
+
+    The backend runs under a systemd ``EnvironmentFile`` that loads every
+    ``SEEKER_*`` secret into the process environment — operator key, media key,
+    Sightengine credentials, and the paths to the verifier/treasury key files.
+    Inheriting ``os.environ`` forwards all of them to an untrusted subprocess,
+    where a prompt-injected model could read them out (finding 10). The judge
+    only needs PATH (to resolve node), the judge's own Codex home (for its
+    ChatGPT auth), and locale/color knobs. Everything else is dropped.
+    """
+    env = {
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "HOME": "/var/lib/capture-judge",
+        "CODEX_HOME": "/var/lib/capture-judge/.codex",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+    }
+    # Preserve a few harmless knobs the CLI may read (never SEEKER_*).
+    for key in ("TZ", "NO_COLOR", "TERM"):
+        if key in os.environ:
+            env[key] = os.environ[key]
+    return env
 
 
 def _rubric_prompt(kind, labels, secondary, metadata, duration_ms) -> str:
@@ -269,7 +344,7 @@ def build_judge(settings=None) -> Judge:
     if driver == "astra":
         codex = (
             getattr(settings, "judge_codex_bin", "") if settings else ""
-        ) or os.environ.get("SEEKER_JUDGE_CODEX_BIN", "/home/hermes/.local/bin/codex")
+        ) or os.environ.get("SEEKER_JUDGE_CODEX_BIN", "/usr/local/bin/codex-judge")
         timeout = int(
             (getattr(settings, "judge_timeout_seconds", "") if settings else "")
             or os.environ.get("SEEKER_JUDGE_TIMEOUT_SECONDS", "90")
