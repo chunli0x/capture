@@ -22,6 +22,7 @@ from spl.token.models import MintToParams, TransferParams
 SYSTEM = Pubkey.default()
 RENT = Pubkey.from_string("SysvarRent111111111111111111111111111111111")
 DEVNET_GENESIS = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
+MEMO_PROGRAM = Pubkey.from_string("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr")
 
 
 class ChainUnavailable(ValueError):
@@ -293,6 +294,31 @@ class Chain:
             ],
         )
 
+    def _confirm_sent(self, signature, deadline_s=20.0):
+        """Poll a just-broadcast signature until it finalizes or fails.
+
+        ``sendTransaction`` returning a signature only means the RPC accepted
+        the submit — not that the transaction landed or executed (finding 10
+        #2). Reconcile here before any caller records a completed payment,
+        slash, or anchor. Raises ChainUnavailable if it does not confirm.
+        """
+        deadline = time.monotonic() + deadline_s
+        while True:
+            r = self.rpc(
+                "getSignatureStatuses",
+                [[signature], {"searchTransactionHistory": True}],
+            )
+            statuses = r.get("value") or []
+            st = statuses[0] if statuses else None
+            if st is not None:
+                if st.get("err") is not None:
+                    raise ChainUnavailable("Transaction failed to execute")
+                if st.get("confirmationStatus") in ("finalized", "confirmed"):
+                    return True
+            if time.monotonic() > deadline:
+                raise ChainUnavailable("Transaction did not confirm in time")
+            time.sleep(0.5)
+
     def bond_warnings(self, wallet):
         """Read the worker's on-chain bond ``warnings`` counter (0 = clean,
         1 = warned once, >= 2 = slashed). Raises ChainUnavailable if the bond
@@ -314,9 +340,13 @@ class Chain:
     def issue(self, action, wallet, amount=None):
         """Server-side warn/slash: the backend is the slash_authority (the
         verifier key), so it builds, signs and broadcasts the instruction
-        itself — no client signature. Returns the signature."""
+        itself — no client signature. Returns the signature. Confirms
+        execution before returning so a slash is never recorded without
+        landing on-chain (finding 10 #2/#7)."""
         instructions = self.build(action, wallet, amount=amount)
-        return self._sign_and_send(instructions, self.verifier)
+        sig = self._sign_and_send(instructions, self.verifier)
+        self._confirm_sent(sig)
+        return sig
 
     def faucet(self, wallet):
         """Mint the minimum test-SKR bond to a wallet (SKR mint authority is
@@ -364,6 +394,72 @@ class Chain:
             )
         )
         return self._sign_and_send(instructions, payer)
+
+    def settle_skr(self, wallet, amount, memo=None):
+        """Pay ``amount`` test SKR to the judge's SKR ATA. The treasury keypair
+        is the SKR mint authority, so settlement mints test SKR to the judge
+        (devnet faucet-equivalent; no separate SKR funding step to deadlock on).
+        Server-signed. Fail closed when the treasury is not configured.
+
+        ``memo`` (optional) makes distinct logical payments produce distinct
+        transactions: two equal mints to the same wallet within one blockhash
+        window would otherwise be byte-identical and dedupe to a single
+        execution. Callers pass a unique per-judgment id so each reward is its
+        own transaction (finding 10/#3)."""
+        if self.treasury is None:
+            raise ChainUnavailable("SKR treasury (mint authority) is not configured")
+        worker = Pubkey.from_string(wallet)
+        payer = self.treasury
+        instructions = [ata_instruction(payer.pubkey(), worker, self.skr)]
+        instructions.append(
+            mint_to(
+                MintToParams(
+                    program_id=TOKEN_PROGRAM_ID,
+                    mint=self.skr,
+                    dest=get_associated_token_address(worker, self.skr),
+                    mint_authority=payer.pubkey(),
+                    amount=amount,
+                    signers=[payer.pubkey()],
+                )
+            )
+        )
+        if memo is not None:
+            instructions.append(
+                Instruction(
+                    MEMO_PROGRAM,
+                    (memo.encode() if isinstance(memo, str) else bytes(memo)),
+                    [],
+                )
+            )
+        sig = self._sign_and_send(instructions, payer)
+        self._confirm_sent(sig)
+        return sig
+
+    def post_batch(self, batch_id: str, merkle_root: str) -> str:
+        """Anchor a resolved batch's Merkle root on-chain (append-only PDA).
+
+        ``batch_id`` is 32 hex chars (16 bytes); ``merkle_root`` is 64 hex
+        chars (32 bytes). Server-signed by the verifier (slash_authority), which
+        is the anchor authority. The ``init`` batch account makes it append-only:
+        re-anchoring the same batch_id fails preflight (RPC error -> closed).
+        """
+        batch_bytes = bytes.fromhex(batch_id)
+        root_bytes = bytes.fromhex(merkle_root)
+        batch_pda = self.pda(b"batch", batch_bytes)
+        instructions = [
+            Instruction(
+                self.program,
+                discriminator("post_batch") + batch_bytes + root_bytes,
+                [
+                    meta(self.verifier.pubkey(), True, True),  # payer (init)
+                    meta(self.config),
+                    meta(batch_pda, writable=True),
+                    meta(SYSTEM),
+                    meta(RENT),
+                ],
+            )
+        ]
+        return self._sign_and_send(instructions, self.verifier)
 
     def height(self):
         return self.rpc("getBlockHeight", [{"commitment": "finalized"}])

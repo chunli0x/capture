@@ -13,7 +13,7 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import JSONResponse
 from solders.pubkey import Pubkey
 from solders.signature import Signature
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
@@ -23,8 +23,13 @@ from .config import Settings
 from .db import (
     Actor,
     Bounty,
+    CalibrationAnswer,
+    CalibrationPair,
     Challenge,
     Database,
+    Judgment,
+    JudgmentBatch,
+    JudgmentPair,
     Login,
     Prepared,
     Rate,
@@ -47,6 +52,7 @@ from .schemas import (
     Confirm,
     CreateBounty,
     Enrollment,
+    JudgmentSubmit,
     Labels,
     LivenessComplete,
     LivenessSession,
@@ -60,6 +66,10 @@ from .schemas import (
 from .leveling import ROLLING_WINDOW, level_info
 from .judge import JudgeUnavailable, StubJudge, build_judge
 from .payout import payout_units
+from .judge_leveling import level_info as judge_level_info
+from .judge_leveling import level_for as judge_level_for
+from .judge_leveling import rate_multiplier as judge_rate_multiplier
+from . import judgment as judgment_mod
 from . import taxonomy
 
 # Liveness sessions are self-contained (stdlib only). Reuse the same module so
@@ -366,6 +376,9 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             if media_hash:
                 with database.transaction() as db:
                     db.add(Violation(worker=wallet, media_hash=media_hash, created=now()))
+            with database.transaction() as db:
+                actor = lock(db, Actor, wallet)
+                actor.warnings = 1
             fail(422, "Media policy violation: first warning issued on your bond")
         try:
             if warnings < 2:
@@ -382,6 +395,8 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             actor = lock(db, Actor, wallet)
             actor.bonded = False
             actor.worker = False
+            actor.warnings = 2
+            actor.staked_skr = 0
         fail(403, "Media policy violation (second strike): bond slashed")
 
     def _check_category(kind, cid):
@@ -676,6 +691,24 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
                 "network": settings.cluster,
                 "production_ready": status == 200,
                 "checks": checks,
+                # Judgment product honesty (test tokens + provenance anchors).
+                "test_tokens": True,
+                "dataset_bias": "majority-preference",
+                "skr_mint": settings.skr_mint,
+                "program_id": settings.program_id,
+                "treasury": (
+                    str(chain.treasury.pubkey())
+                    if getattr(chain, "treasury", None) is not None
+                    else None
+                ),
+                "slash_authority": (
+                    str(chain.verifier.pubkey())
+                    if getattr(chain, "verifier", None) is not None
+                    else None
+                ),
+                "skr_payout": (
+                    "ready" if getattr(chain, "treasury", None) is not None else "unavailable"
+                ),
             },
         )
 
@@ -1401,6 +1434,8 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             actor = lock(db, Actor, actor.wallet)
             if not actor.skr_funded:
                 fail(409, "Get test SKR first")
+            if not actor.calibrated:
+                fail(403, "Complete calibration before staking")
             return prepare(db, "deposit", actor.wallet, actor)
 
     @app.post("/bond/withdraw")
@@ -1468,6 +1503,577 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
             if not actor.worker:
                 fail(403, "Worker enrollment required")
             return prepare(db, action, actor.wallet, actor)
+
+    # ---- Judgment product (RLHF preference judging) ----
+
+    def rolling_agreement(db, wallet):
+        """Rolling agreement rate (fraction) over the last ``judge_window``
+        resolved judgments this wallet aligned on. 0.0 when there are none."""
+        rows = db.scalars(
+            select(Judgment.aligned)
+            .where(Judgment.wallet == wallet, Judgment.aligned.is_not(None))
+            .order_by(Judgment.submitted_at.desc())
+            .limit(settings.judge_window)
+        ).all()
+        if not rows:
+            return 0.0
+        return sum(1 for a in rows if a) / len(rows)
+
+    def calibration_progress(db, wallet):
+        answered = db.scalar(
+            select(func.count())
+            .select_from(CalibrationAnswer)
+            .where(CalibrationAnswer.wallet == wallet)
+        )
+        correct = db.scalar(
+            select(func.count())
+            .select_from(CalibrationAnswer)
+            .where(CalibrationAnswer.wallet == wallet, CalibrationAnswer.correct.is_(True))
+        )
+        return answered, correct
+
+    def _pair_view(p):
+        return {
+            "pair_id": p.pair_id,
+            "task_type": p.task_type,
+            "media_type": p.media_type,
+            "output_a_url": p.output_a_url,
+            "output_b_url": p.output_b_url,
+            "rubric": p.rubric,
+        }
+
+    def _validate_against_task(task_type, body):
+        if task_type == "rating":
+            if body.choice == "cant_tell":
+                return "cant_tell", None
+            if body.rating is None:
+                fail(422, "Rating task requires a rating 1-5 (or 'cant_tell')")
+            return "rating", body.rating
+        if body.rating is not None:
+            fail(422, "Preference task requires a choice, not a rating")
+        if body.choice is None:
+            fail(422, "Preference task requires a choice (a/b/tie/cant_tell)")
+        return body.choice, None
+
+    def _calibration_status(actor, answered, correct):
+        # Mid-gate we do NOT reveal the running correct count: a judge who can
+        # see per-answer correctness can binary-search the known answer of each
+        # calibration pair (finding #6). Correctness is disclosed only once the
+        # gate resolves (pass or fail-and-reset).
+        in_progress = (not actor.calibrated) and 0 < answered < settings.calibration_n
+        return {
+            "kind": "calibration",
+            "status": (
+                "calibrated"
+                if actor.calibrated
+                else ("retry" if answered == 0 else "in_progress")
+            ),
+            "calibrated": actor.calibrated,
+            "calibration_progress": {
+                "completed": answered,
+                "required": settings.calibration_n,
+                "correct": None if in_progress else correct,
+            },
+        }
+
+    def _resolve(pair, js):
+        """Pure resolution. Returns ``(winner, aligned_wallets, agreement,
+        confidence)`` on a clean resolve, or a ``(reason, None, None, None)``
+        sentinel — ``reason`` is ``"neutral"`` when a ``cant_tell``/``tie`` vote
+        is present (it must re-route WITHOUT inflating the quorum), or ``"tie"``
+        when substantive votes are an even split (needs one tiebreaker judge).
+
+        Neutral votes never count as dissent: they are excluded from the
+        winner, the aligned set, the agreement denominator, and the quorum
+        (findings #5 and #8)."""
+        substantive = [
+            j for j in js
+            if (pair.task_type == "rating" and j.rating is not None)
+            or (pair.task_type != "rating" and j.choice in ("a", "b"))
+        ]
+        neutral = [
+            j for j in js
+            if (pair.task_type == "rating" and j.rating is None)
+            or (pair.task_type != "rating" and j.choice in ("cant_tell", "tie"))
+        ]
+        if neutral:
+            return "neutral", None, None, None
+        if pair.task_type == "rating":
+            if not substantive:
+                return "tie", None, None, None
+            ratings = [j.rating for j in substantive]
+            median = judgment_mod.median_rating(ratings)
+            aligned = [
+                j.wallet
+                for j in substantive
+                if judgment_mod.is_aligned_rating(j.rating, median)
+            ]
+            winner = str(median)
+        else:
+            winner, _votes = judgment_mod.majority_choice(
+                [j.choice for j in substantive]
+            )
+            if winner is None:
+                return "tie", None, None, None
+            aligned = [j.wallet for j in substantive if j.choice == winner]
+        denom = len(substantive)
+        agreement = len(aligned) / denom if denom else 0.0
+        confidence = agreement * min(1.0, denom / pair.k)
+        return winner, aligned, agreement, confidence
+
+    def _flat_payments_recent(db, wallet, limit):
+        """Count flat "can't tell" payouts this wallet has already earned, to
+        bound abstention farming (finding #12)."""
+        if limit <= 0:
+            return 0
+        return db.scalar(
+            select(func.count())
+            .select_from(Judgment)
+            .where(
+                Judgment.wallet == wallet,
+                Judgment.choice == "cant_tell",
+                Judgment.earned_skr > 0,
+            )
+        ) or 0
+
+    def _substantive_judgments(db, pair_id, task_type):
+        """Non-consumed substantive judgments for ``pair_id``: a/b votes for a
+        preference task, or a 1-5 rating for a rating task. Neutral
+        ``cant_tell``/``tie`` votes are excluded — they never advance or inflate
+        the quorum (finding #8)."""
+        rows = db.scalars(
+            select(Judgment).where(
+                Judgment.pair_id == pair_id, Judgment.consumed.is_(False)
+            )
+        ).all()
+        if task_type == "rating":
+            return [j for j in rows if j.rating is not None]
+        return [j for j in rows if j.choice in ("a", "b")]
+
+    def _settle_judgment_obligation(j, pair_id):
+        """Mint ``j.earned_skr`` to ``j.wallet`` and confirm it, then clear the
+        settling flag. Idempotent: the memo is the judgment_id, so a retry of
+        the same obligation produces a distinct transaction from any other
+        obligation (finding #3), and a successful confirm clears settling so the
+        next reconciliation does not re-mint (finding #1). Returns True on
+        settle, False on a transport failure (obligation stays settling=True).
+        """
+        try:
+            sig = chain.settle_skr(j.wallet, j.earned_skr, memo=j.judgment_id)
+        except ChainUnavailable:
+            return False
+        with database.transaction() as db:
+            row = db.get(Judgment, j.judgment_id)
+            if row is not None:
+                row.payout_signature = sig
+                row.settling = False
+        return True
+
+    def _maybe_anchor_batch(pair_id):
+        """When a batch is fully resolved, compute its Merkle root and commit it
+        on-chain via ``post_batch``. The root is always recorded; ``anchored`` is
+        set only after a confirmed on-chain write so a failed final anchor is
+        durably retried by the next resolution (finding #10)."""
+        anchor = None
+        with database.transaction() as db:
+            pair = db.get(JudgmentPair, pair_id)
+            if pair is None or pair.batch_id is None:
+                return
+            batch = db.get(JudgmentBatch, pair.batch_id)
+            if batch is None:
+                return
+            unresolved = db.scalar(
+                select(func.count())
+                .select_from(JudgmentPair)
+                .where(
+                    JudgmentPair.batch_id == pair.batch_id,
+                    JudgmentPair.status != "resolved",
+                )
+            )
+            if unresolved:
+                return
+            resolved = db.scalars(
+                select(JudgmentPair).where(
+                    JudgmentPair.batch_id == pair.batch_id,
+                    JudgmentPair.status == "resolved",
+                ).order_by(JudgmentPair.pair_id)
+            ).all()
+            root = judgment_mod.merkle_root(
+                [
+                    (p.pair_id, p.preference or "", p.agreement or 0.0, p.confidence or 0.0)
+                    for p in resolved
+                ]
+            )
+            if root is None:
+                return
+            batch.merkle_root = root
+            anchor = (batch.batch_id, root)
+        try:
+            chain.post_batch(anchor[0], anchor[1])
+        except ChainUnavailable:
+            # Leave anchored=False: the root is recorded and the anchor is
+            # retried on the next resolution/reconcile (finding #10).
+            return
+        with database.transaction() as db:
+            b = db.get(JudgmentBatch, anchor[0])
+            if b is not None:
+                b.anchored = True
+
+    def _enforce_agreement_slash(wallet):
+        """Two-strike warn/slash for systematic disagreement (agreement rate
+        below the floor). Mirrors the media-policy ladder; idempotent via the
+        on-chain bond.warnings counter and the Actor.warnings mirror."""
+        try:
+            warnings = chain.bond_warnings(wallet)
+        except ChainUnavailable:
+            return
+        if warnings == 0:
+            try:
+                chain.issue("warn", wallet)
+            except ChainUnavailable:
+                return
+            with database.transaction() as db:
+                a = lock(db, Actor, wallet)
+                a.warnings = 1
+        else:
+            try:
+                if warnings < 2:
+                    chain.issue("warn", wallet)
+                chain.issue("slash", wallet)
+            except ChainUnavailable:
+                return
+            with database.transaction() as db:
+                a = lock(db, Actor, wallet)
+                a.warnings = 2
+                a.bonded = False
+                a.calibrated = False
+                a.staked_skr = 0
+
+    def _maybe_slash_agreement_farmers(judges):
+        for wallet, _choice, _rating in judges:
+            with database.transaction() as db:
+                a = lock(db, Actor, wallet)
+                if a is None:
+                    continue
+                rate_, count = a.agreement_rate, a.judged_count
+            if count < settings.judge_slash_min_judged or rate_ >= settings.judge_slash_floor:
+                continue
+            _enforce_agreement_slash(wallet)
+
+    @app.get("/judge/next")
+    def judge_next(actor: Auth):
+        with database.transaction() as db:
+            actor = lock(db, Actor, actor.wallet)
+            if not actor.calibrated:
+                q = select(CalibrationPair)
+                answered = set(
+                    db.scalars(
+                        select(CalibrationAnswer.pair_id).where(
+                            CalibrationAnswer.wallet == actor.wallet
+                        )
+                    ).all()
+                )
+                if answered:
+                    q = q.where(CalibrationPair.pair_id.not_in(answered))
+                cp = db.scalars(q.order_by(CalibrationPair.pair_id).limit(1)).first()
+                remaining = max(0, settings.calibration_n - len(answered))
+                if cp is None:
+                    return {
+                        "kind": "none",
+                        "calibrated": False,
+                        "calibration_remaining": remaining,
+                    }
+                view = _pair_view(cp)
+                view.update(
+                    {
+                        "kind": "calibration",
+                        "calibrated": False,
+                        "calibration_remaining": remaining,
+                    }
+                )
+                return view
+            if not actor.bonded:
+                return {"kind": "none", "calibrated": True, "reason": "deposit the SKR bond to judge"}
+            done = select(Judgment.pair_id).where(Judgment.wallet == actor.wallet)
+            pair = db.scalars(
+                select(JudgmentPair)
+                .where(
+                    JudgmentPair.status.in_(["open", "collecting", "rerouted"]),
+                    JudgmentPair.pair_id.not_in(done),
+                )
+                .order_by(JudgmentPair.created_at)
+                .limit(1)
+            ).first()
+            if pair is None:
+                return {"kind": "none", "calibrated": True}
+            view = _pair_view(pair)
+            view.update({"kind": "judgment", "calibrated": True, "calibration_remaining": 0})
+            return view
+
+    @app.post("/judge/{pair_id}")
+    def judge_submit(pair_id: str, body: JudgmentSubmit, actor: Auth):
+        with database.transaction() as db:
+            is_calibration = db.get(CalibrationPair, pair_id) is not None
+        if is_calibration:
+            with database.transaction() as db:
+                return _submit_calibration(db, pair_id, body, actor.wallet)
+        return _submit_judgment(pair_id, body, actor.wallet)
+
+    def _submit_calibration(db, pair_id, body, wallet):
+        actor = lock(db, Actor, wallet)
+        cp = lock(db, CalibrationPair, pair_id)
+        existing = db.scalar(
+            select(CalibrationAnswer).where(
+                CalibrationAnswer.pair_id == pair_id, CalibrationAnswer.wallet == wallet
+            )
+        )
+        if existing:
+            answered, correct = calibration_progress(db, wallet)
+            return _calibration_status(actor, answered, correct)
+        choice, rating = _validate_against_task(cp.task_type, body)
+        correct = judgment_mod.calibration_correct(cp.task_type, cp.known_choice, choice, rating)
+        db.add(
+            CalibrationAnswer(
+                pair_id=pair_id, wallet=wallet, choice=choice or "rating",
+                rating=rating, correct=correct,
+            )
+        )
+        db.flush()
+        answered, ncorrect = calibration_progress(db, wallet)
+        if answered >= settings.calibration_n:
+            threshold = max(1, round(settings.calibration_n * 0.8))
+            if ncorrect >= threshold:
+                actor.calibrated = True
+            else:
+                db.execute(delete(CalibrationAnswer).where(CalibrationAnswer.wallet == wallet))
+                answered, ncorrect = 0, 0
+        return _calibration_status(actor, answered, ncorrect)
+
+    def _submit_judgment(pair_id, body, wallet):
+        claim = None
+        with database.transaction() as db:
+            actor = lock(db, Actor, wallet)
+            if not actor.calibrated:
+                fail(403, "Complete calibration before judging")
+            if not actor.bonded:
+                fail(403, "Deposit the SKR bond to judge")
+            pair = lock(db, JudgmentPair, pair_id)
+            if pair.status == "resolved":
+                return {"status": "resolved", "preference": pair.preference}
+            if pair.status == "resolving":
+                fail(409, "Pair is resolving; retry shortly")
+            # Finding #4: the local `actor.bonded` is a callback-maintained mirror.
+            # A wallet that withdrew its bond on-chain (bypassing the backend
+            # confirm endpoint) would otherwise keep judging with an empty,
+            # unslashable vault. Re-verify the on-chain bond is live before every
+            # judgment: `bond_warnings` raises if the bond account is gone.
+            try:
+                if chain.bond_warnings(wallet) >= 2:
+                    fail(403, "Bond is slashed; deposit a fresh SKR bond to judge")
+            except ChainUnavailable:
+                fail(403, "Bond is not active on-chain; deposit the SKR bond to judge")
+            choice, rating = _validate_against_task(pair.task_type, body)
+            existing = db.scalar(
+                select(Judgment).where(
+                    Judgment.pair_id == pair_id, Judgment.wallet == wallet
+                )
+            )
+            if existing:
+                fail(409, "You already judged this pair")
+            db.add(Judgment(pair_id=pair_id, wallet=wallet, choice=choice, rating=rating))
+            db.flush()
+            # Quorum counts SUBSTANTIVE votes only (a/b or a rating). Neutral
+            # "cant_tell"/"tie" votes never advance or inflate the quorum
+            # (finding #8): they are consumed and the pair simply keeps
+            # collecting substantive votes toward k.
+            substantive = _substantive_judgments(db, pair_id, pair.task_type)
+            if len(substantive) < pair.k:
+                if pair.status == "open":
+                    pair.status = "collecting"
+                # Consume a neutral vote immediately: it earns its flat rate
+                # (best-effort, journaled) and does not hold the pair open.
+                if choice in ("cant_tell", "tie") or (pair.task_type == "rating" and rating is None):
+                    jj = db.scalar(
+                        select(Judgment).where(
+                            Judgment.pair_id == pair_id, Judgment.wallet == wallet
+                        )
+                    )
+                    jj.consumed = True
+                    claim = {"type": "neutral", "flat": [wallet] if choice == "cant_tell" else []}
+                else:
+                    return {"status": "submitted"}
+            else:
+                js = db.scalars(
+                    select(Judgment).where(
+                        Judgment.pair_id == pair_id, Judgment.consumed.is_(False)
+                    )
+                ).all()
+                resolution = _resolve(pair, js)
+                reason = resolution[0] if isinstance(resolution[0], str) else None
+                if reason == "neutral":
+                    for j in js:
+                        if j.choice in ("cant_tell", "tie") or (pair.task_type == "rating" and j.rating is None):
+                            j.consumed = True
+                    pair.status = "collecting"
+                    # Do NOT increment k: neutral votes are replaced by more
+                    # substantive votes toward the SAME target (finding #8).
+                    claim = {"type": "neutral", "flat": [j.wallet for j in js if j.choice == "cant_tell"]}
+                elif reason == "tie":
+                    # Genuine even split: add exactly one tiebreaker judge.
+                    pair.status = "rerouted"
+                    pair.k += 1
+                    claim = {"type": "tie"}
+                else:
+                    winner, aligned, agreement, confidence = resolution
+                    payouts = []
+                    for w in aligned:
+                        lvl = judge_level_for(rolling_agreement(db, w))
+                        payouts.append((w, int(settings.judge_base_skr * judge_rate_multiplier(lvl))))
+                    # Persist the consensus + per-judge payout OBLIGATION before
+                    # any broadcast (finding #1): each aligned judgment gets its
+                    # earned amount and a settling flag so a partial payout can
+                    # be reconciled, never lost or double-paid.
+                    payout_map = dict(payouts)
+                    for j in db.scalars(
+                        select(Judgment).where(
+                            Judgment.pair_id == pair_id, Judgment.consumed.is_(False)
+                        )
+                    ).all():
+                        j.aligned = j.wallet in aligned
+                        if j.aligned:
+                            j.earned_skr = payout_map[j.wallet]
+                            j.settling = True
+                    pair.status = "resolving"
+                    claim = {
+                        "type": "resolve",
+                        "winner": winner,
+                        "aligned": aligned,
+                        "agreement": agreement,
+                        "confidence": confidence,
+                        "payouts": payouts,
+                        "judges": [(j.wallet, j.choice, j.rating) for j in js],
+                    }
+        if claim["type"] == "neutral":
+            # Flat pay for "can't tell" — journaled + confirmed, never silently
+            # dropped on failure (findings #1, #12). Bounded per judge by
+            # judge_flat_cap so a colluding trio cannot farm abstention forever.
+            for w in claim["flat"]:
+                j = None
+                with database.transaction() as db:
+                    j = db.scalar(
+                        select(Judgment).where(Judgment.pair_id == pair_id, Judgment.wallet == w)
+                    )
+                    if j is not None and not j.settling:
+                        earned = _flat_payments_recent(db, w, settings.judge_flat_cap)
+                        if settings.judge_flat_cap > 0 and earned >= settings.judge_flat_cap:
+                            # Cap reached: record 0 earned, still consumed (the
+                            # vote stays neutral but earns nothing further).
+                            j.consumed = True
+                            continue
+                        j.earned_skr = settings.judge_flat_skr
+                        j.settling = True
+                if j is not None and j.settling:
+                    _settle_judgment_obligation(j, pair_id)
+            return {"status": "rerouted"}
+        if claim["type"] == "tie":
+            return {"status": "rerouted"}
+        # Resolve: settle each persisted obligation independently (idempotent
+        # per judgment_id memo). A single failed settle leaves its obligation
+        # settling=True for the retry path; the pair is only finalized when all
+        # obligations are confirmed.
+        failed = []
+        with database.transaction() as db:
+            obligations = db.scalars(
+                select(Judgment).where(
+                    Judgment.pair_id == pair_id, Judgment.settling.is_(True)
+                )
+            ).all()
+        for j in obligations:
+            ok = _settle_judgment_obligation(j, pair_id)
+            if not ok:
+                failed.append(j.wallet)
+        if failed:
+            fail(
+                503,
+                "SKR payout pending for some judges; retry to reconcile",
+            )
+        with database.transaction() as db:
+            pair = lock(db, JudgmentPair, pair_id)
+            # The pair may already be resolved by a concurrent submit; do not
+            # double-finalize.
+            if pair.status != "resolved":
+                pair.status = "resolved"
+                pair.preference = claim["winner"]
+                pair.agreement = claim["agreement"]
+                pair.confidence = claim["confidence"]
+                for w, _ch, _r in claim["judges"]:
+                    a = lock(db, Actor, w)
+                    if a is not None:
+                        a.judged_count += 1
+                        a.agreement_rate = rolling_agreement(db, w)
+        _maybe_anchor_batch(pair_id)
+        _maybe_slash_agreement_farmers(claim["judges"])
+        return {
+            "status": "resolved",
+            "preference": claim["winner"],
+            "agreement": claim["agreement"],
+            "confidence": claim["confidence"],
+        }
+
+    @app.get("/judge/stats")
+    def judge_stats(actor: Auth):
+        with database.transaction() as db:
+            actor = lock(db, Actor, actor.wallet)
+            answered, correct = calibration_progress(db, actor.wallet)
+            level = judge_level_info(actor.agreement_rate)
+            in_progress = (not actor.calibrated) and 0 < answered < settings.calibration_n
+            return {
+                "calibrated": actor.calibrated,
+                "calibration_progress": {
+                    "completed": answered,
+                    "required": settings.calibration_n,
+                    "correct": None if in_progress else correct,
+                },
+                "agreement_rate": actor.agreement_rate,
+                "judged_count": actor.judged_count,
+                "level": level["level"],
+                "level_name": level["level_name"],
+                "rate_multiplier": level["rate_multiplier"],
+                "staked_skr": actor.staked_skr,
+                "warnings": actor.warnings,
+            }
+
+    @app.get("/batch/{batch_id}/dataset")
+    def batch_dataset(batch_id: str, actor: Auth):
+        with database.transaction() as db:
+            batch = db.get(JudgmentBatch, batch_id)
+            if batch is None:
+                fail(404, "Batch not found")
+            pairs = db.scalars(
+                select(JudgmentPair)
+                .where(JudgmentPair.batch_id == batch_id, JudgmentPair.status == "resolved")
+                .order_by(JudgmentPair.pair_id)
+            ).all()
+            entries = [
+                {
+                    "pair_id": p.pair_id,
+                    "output_a_url": p.output_a_url,
+                    "output_b_url": p.output_b_url,
+                    "preference": p.preference,
+                    "agreement": p.agreement,
+                    "confidence": p.confidence,
+                    "media_type": p.media_type,
+                    "task_type": p.task_type,
+                    "rubric": p.rubric,
+                }
+                for p in pairs
+            ]
+            return {
+                "batch_id": batch_id,
+                "merkle_root": batch.merkle_root,
+                "anchored": batch.anchored,
+                "entries": entries,
+            }
 
     @app.get("/transactions")
     def transactions(actor: Auth):
@@ -1539,9 +2145,11 @@ def create_app(settings: Settings, *, chain=None, moderator=None, judge=None):
                 worker = lock(db, Actor, p.wallet)
                 worker.bonded = True
                 worker.worker = True
+                worker.staked_skr = settings.min_bond
             elif p.action == "withdraw":
                 worker = lock(db, Actor, p.wallet)
                 worker.bonded = False
+                worker.staked_skr = 0
             return tx_view(p)
 
     @app.post("/transactions/{pid}/confirm")

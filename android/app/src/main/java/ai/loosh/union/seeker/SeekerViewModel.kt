@@ -126,6 +126,19 @@ data class PilotState(
     val unlocked: Boolean = true,
     val bondFunded: Boolean = false,
     val reviewQueue: List<JSONObject> = emptyList(),
+    // --- Judgment product (RLHF preference judging) ---
+    val judgeCalibrated: Boolean = false,
+    val judgeAgreementRate: Double = 0.0,
+    val judgeJudgedCount: Int = 0,
+    val judgeLevel: Int = 0,
+    val judgeLevelName: String = "Scout",
+    val judgeRateMultiplier: Double = 1.0,
+    val judgeStakedSkr: Long = 0,
+    val judgeWarnings: Int = 0,
+    val calibrationCompleted: Int = 0,
+    val calibrationRequired: Int = 10,
+    val calibrationCorrect: Int = 0,
+    val judgePair: JSONObject? = null,
 )
 
 class SeekerViewModel(application: Application) : AndroidViewModel(application) {
@@ -477,6 +490,47 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
             refreshData()
             mutable.update { it.copy(reviewQueue = list("/review-queue")) }
         }
+
+    // --- Judgment product (RLHF preference judging) ---
+
+    /** Fetches the next calibration/judgment pair plus the judge's stats. */
+    fun judgeNext() = run("Loading next pair", "Pair loaded") { refreshJudgment() }
+
+    /** Submits a preference choice (a/b/tie/cant_tell) or a 1-5 rating. */
+    fun submitJudgment(choice: String? = null, rating: Int? = null) =
+        run("Submitting judgment", "Judgment recorded") {
+            val pair = mutable.value.judgePair ?: error("No pair to judge")
+            val id = pair.getString("pair_id")
+            val body = JSONObject()
+            if (choice != null) body.put("choice", choice)
+            else body.put("rating", rating ?: error("A rating is required"))
+            post("/judge/$id", body)
+            refreshJudgment()
+        }
+
+    private suspend fun refreshJudgment() {
+        val next = get("/judge/next")
+        val stats = get("/judge/stats")
+        val level = stats.optInt("level", 0).coerceIn(0, MAX_JUDGE_LEVEL)
+        val progress = stats.optJSONObject("calibration_progress")
+        val pair = if (next.optString("kind", "none") == "none") null else next
+        mutable.update {
+            it.copy(
+                judgePair = pair,
+                judgeCalibrated = stats.optBoolean("calibrated", false),
+                judgeAgreementRate = stats.optDouble("agreement_rate", 0.0),
+                judgeJudgedCount = stats.optInt("judged_count", 0),
+                judgeLevel = level,
+                judgeLevelName = stats.optString("level_name", judgeLevelName(level)),
+                judgeRateMultiplier = stats.optDouble("rate_multiplier", judgeRateMultiplier(level)),
+                judgeStakedSkr = stats.optLong("staked_skr", 0),
+                judgeWarnings = stats.optInt("warnings", 0),
+                calibrationCompleted = progress?.optInt("completed", 0) ?: 0,
+                calibrationRequired = progress?.optInt("required", 10) ?: 10,
+                calibrationCorrect = progress?.optInt("correct", 0) ?: 0,
+            )
+        }
+    }
 
     // --- Capture v2: liveness gate (once per session, before first upload) ---
 

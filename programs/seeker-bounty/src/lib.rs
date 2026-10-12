@@ -155,6 +155,22 @@ pub mod seeker_bounty {
         Ok(())
     }
 
+    /// Anchor a resolved batch's Merkle root on-chain. Append-only: the batch
+    /// account is ``init``, so a batch_id can only be anchored once.
+    pub fn post_batch(
+        ctx: Context<PostBatch>,
+        batch_id: [u8; 16],
+        merkle_root: [u8; 32],
+    ) -> Result<()> {
+        require!(valid_merkle_root(merkle_root), Error::Invalid);
+        ctx.accounts.batch.set_inner(Batch { merkle_root });
+        emit!(BatchAnchored {
+            batch_id,
+            merkle_root,
+        });
+        Ok(())
+    }
+
     pub fn post_bounty(
         ctx: Context<PostBounty>,
         id: [u8; 16],
@@ -357,6 +373,11 @@ pub fn withdrawable(warnings: u8) -> bool {
     warnings < 2
 }
 
+/// A zeroed Merkle root is rejected (it would anchor an empty/unresolved batch).
+pub fn valid_merkle_root(root: [u8; 32]) -> bool {
+    root != [0u8; 32]
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct Config {
@@ -396,6 +417,13 @@ pub struct Submission {
     pub label_hash: [u8; 32],
     // 0=pending, 1=paid, 2=rejected, 3=expired. Never closed/reinitialized.
     pub state: u8,
+}
+#[account]
+#[derive(InitSpace)]
+pub struct Batch {
+    /// Merkle root of the batch's resolved preference entries. Append-only: a
+    /// batch_id can be anchored exactly once (``init``).
+    pub merkle_root: [u8; 32],
 }
 
 #[derive(Accounts)]
@@ -498,6 +526,19 @@ pub struct Slash<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(batch_id: [u8; 16])]
+pub struct PostBatch<'info> {
+    #[account(mut, constraint = authority.key() == config.slash_authority @ Error::Unauthorized)]
+    pub authority: Signer<'info>,
+    #[account(seeds=[b"config"], bump)]
+    pub config: Account<'info, Config>,
+    #[account(init, payer=authority, space=8+Batch::INIT_SPACE, seeds=[b"batch", batch_id.as_ref()], bump)]
+    pub batch: Account<'info, Batch>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
 #[instruction(id: [u8; 16])]
 pub struct PostBounty<'info> {
     #[account(mut)]
@@ -580,6 +621,12 @@ pub struct BondWarned {
 pub struct BondSlashed {
     pub worker: Pubkey,
     pub amount: u64,
+}
+
+#[event]
+pub struct BatchAnchored {
+    pub batch_id: [u8; 16],
+    pub merkle_root: [u8; 32],
 }
 
 #[error_code]
@@ -710,5 +757,12 @@ mod tests {
         assert_eq!(taken, 100);
         assert_eq!(balance - taken, 0);
         assert_eq!(taken + (balance - taken), balance);
+    }
+
+    #[test]
+    fn merkle_root_rejects_zero_and_accepts_nonzero() {
+        // A zeroed root would anchor an empty/unresolved batch; refuse it.
+        assert!(!valid_merkle_root([0u8; 32]));
+        assert!(valid_merkle_root([1u8; 32]));
     }
 }

@@ -100,6 +100,12 @@ def pilot(tmp_path):
     # exercise the real (post-gate) flow.
     for k, hd in zip(keys, h):
         do_liveness(c, hd, str(k.pubkey()))
+    # Judgment product: the bond deposit is now gated on the calibration gate.
+    # Mark the capture-test workers calibrated so the (dormant) capture bond
+    # path still exercises the real deposit seam.
+    with app.state.database.transaction() as db:
+        for k in keys:
+            db.get(Actor, str(k.pubkey())).calibrated = True
     # Capture bond gate: bond every worker so the open-upload tests exercise the
     # bonded (instant-judge) path. The free peer-review path is covered in
     # test_bond_gate.py.
@@ -632,7 +638,7 @@ def test_open_submission_expiry_blocks_late_label(pilot):
 
 def test_open_submit_requires_liveness(pilot):
     """POST /submissions must refuse a worker without a completed liveness proof."""
-    c, _app, _h, _keys, *_ = pilot
+    c, app, _h, _keys, *_ = pilot
     k = Keypair()
     ch = c.post("/auth/challenge", json={"wallet": str(k.pubkey())}).json()
     token = c.post(
@@ -656,6 +662,8 @@ def test_open_submit_requires_liveness(pilot):
     assert "liveness" in r.json()["detail"].lower()
     do_liveness(c, hd, str(k.pubkey()))
     # Bond the fresh worker so the post-liveness open upload passes the gate.
+    with app.state.database.transaction() as db:
+        db.get(Actor, str(k.pubkey())).calibrated = True
     assert c.post("/bond/faucet", headers=hd).status_code == 200
     tx = c.post("/bond/deposit", headers=hd).json()
     sig = str(Keypair().sign_message(tx["id"].encode()))

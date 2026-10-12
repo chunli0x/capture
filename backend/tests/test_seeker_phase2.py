@@ -896,9 +896,10 @@ def test_migration_0002_adds_phase2_columns(tmp_path):
     # 7 submission columns); 0005 adds 1 (actors.liveness_completed); 0006 adds
     # 3 (actors.bonded, quality_checks, skr_funded); 0007 adds 1
     # (reviews.accepted); 0008 adds 1 (submissions.payout_signature); 0009 adds
-    # 1 (actors.pending_usdc); 0010 adds 1 (actors.settling_usdc); the partial
-    # unique index (open-upload dedup) adds 1 more.
-    assert apply_migrations(engine) == 22
+    # 1 (actors.pending_usdc); 0010 adds 1 (actors.settling_usdc); 0011 adds 5
+    # (actors.calibrated, agreement_rate, judged_count, staked_skr, warnings);
+    # the partial unique index (open-upload dedup) adds 1 more.
+    assert apply_migrations(engine) == 27
     assert apply_migrations(engine) == 0  # re-run is a no-op
 
     bounty_cols = {c["name"] for c in inspect(engine).get_columns("seeker_bounties")}

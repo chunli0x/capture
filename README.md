@@ -1,16 +1,40 @@
 # Capture
 
-**Labeled ground-level data, human-captured.**
+**Decentralized RLHF — humans judge model outputs, consensus decides who gets paid.**
 
-Capture is a mobile data-labeling network for **ground-level egocentric
-capture** — a photo or short video shot six to twelve inches off the ground,
-angled forward or up. Anyone with a phone can prove they are human, capture
-physical-world media, and label it against a structured taxonomy in exchange
-for devnet **test-USDC**, backed by a slashable **test-SKR** quality bond. It
-is built for the CLOCK IN hackathon (Solana Mobile × RadiantsDAO) and runs on
-**Solana Seeker Mobile**.
+Capture is a mobile RLHF preference-judging network for the CLOCK IN hackathon
+(Solana Mobile × RadiantsDAO), built for **Solana Seeker Mobile**. A judge sees
+two vision-model outputs and picks the better one (A/B preference) or rates a
+single output 1–5. Aggregated preferences become an RLHF preference dataset,
+with trust priced into every judgment through a slashable **test-SKR** stake.
 
 ![Capture screens](docs/screens.png)
+
+## The judgment product
+
+Capture pivoted from "people shoot ground-level footage" to "people judge a
+vision model's outputs for RLHF." The incentive is **consensus-gated pay in
+test $SKR**: every pair goes to K=3 judges; the majority pick wins, aligned
+judges are paid (`base_skr × level multiplier`), dissenters earn nothing, and
+**"can't tell" is a first-class answer** that re-routes the pair instead of
+forcing a guess. New judges pass a 10-pair calibration gate before they can
+stake, and a judge-accuracy ladder (agreement-rate driven) raises their rate
+multiplier. Systematic disagreement below a floor runs the two-strike bond
+warn/slash ladder on-chain, and each resolved batch commits a Merkle root
+on-chain as provenance.
+
+Honest notes (state, do not hide):
+
+- **Test tokens.** $SKR here is **devnet/test $SKR** for the hackathon. It is not
+  real value. The UI and `/health` both say so.
+- **Majority-preference bias.** RLHF on majority preference flattens minority and
+  edge preferences. This is fine for a first pass, but the dataset does **not**
+  represent all humans. Do not claim it does.
+- K, thresholds, and rates are starting hypotheses — tune against real agreement
+  data, not once.
+
+The original capture-collection flow (ground-level media) is **dormant** — the
+code remains but is not part of the judging path.
 
 ## How it works
 
@@ -66,14 +90,14 @@ with level and is waived at Pathfinder.
 
 ## Tokens & settlement
 
-- **test-USDC** — payroll. A devnet test token, never real USDC.
-- **test-SKR** — the slashable quality bond, escrowed on-chain in a real
-  staking contract. A devnet fixture mint.
+- **test-SKR** — one token, three jobs: **stake** (deposit to unlock paid
+  judging), **reward** (consensus-aligned judgments earn SKR), **slash** (lose
+  stake for systematic disagreement). A devnet fixture mint.
 
 Settlement is **real on-chain transfer**: the SKR bond escrows on-chain at
-deposit, and accepted payouts transfer test-USDC from the treasury in a batched
-settle (`POST /bond/settle`). A media-policy violation warns, and a second
-violation slashes the entire bond to a penalty vault.
+deposit, aligned judges are paid test-SKR on agreement, and a systematic
+disagreement warns then slashes the bond to a penalty vault. Each resolved batch
+commits a Merkle root on-chain as provenance.
 
 ## The judge
 
@@ -87,7 +111,7 @@ reached — an accepted upload must never settle silently.
 October 12 2026:
 
 - Deployed to **Solana devnet**; backend live at `https://capture.magnumopus.ai`.
-- **119 backend tests** and **114 Android tests** pass.
+- **133 backend tests** and **105 Android tests** pass.
 - The SKR bond is a real on-chain staking contract with full slash, live on
   devnet.
 - Everything here runs on **devnet test tokens**.

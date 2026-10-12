@@ -171,6 +171,18 @@ class Confirm(Strict):
     signature: str = Field(min_length=64, max_length=88)
 
 
+class JudgmentSubmit(Strict):
+    """One judgment: a preference choice or a 1-5 rating.
+
+    ``choice`` is "a" | "b" | "tie" | "cant_tell" for preference tasks; "tie"
+    and "cant_tell" are neutral (non-voting). ``rating`` is 1..5 for rating
+    tasks. The endpoint validates the right field against the pair's task type;
+    here only bounds are enforced."""
+
+    choice: Literal["a", "b", "tie", "cant_tell"] | None = None
+    rating: int | None = Field(default=None, ge=1, le=5)
+
+
 def iou(a, b):
     intersection = max(
         0, min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"])

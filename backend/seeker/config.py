@@ -42,6 +42,24 @@ class Settings(BaseSettings):
     # the judge budget. 0 disables.
     judge_daily_cap: int = 50
 
+    # ---- Judgment product (RLHF preference judging) ----
+    # Consensus-gated pay in test $SKR. All are starting hypotheses (incentive
+    # spec §8): tune against real agreement data, not once.
+    judge_k: int = Field(default=3, gt=0)
+    calibration_n: int = Field(default=10, gt=0)
+    judge_window: int = Field(default=100, gt=0)
+    judge_slash_floor: float = 0.45
+    judge_slash_min_judged: int = Field(default=20, gt=0)
+    # Payout in SKR base units. The treasury keypair is the SKR mint authority;
+    # settlement mints test SKR to the judge (devnet faucet-equivalent).
+    judge_base_skr: int = Field(default=1_000_000, gt=0)
+    judge_flat_skr: int = Field(default=100_000, gt=0)
+    # Cap on flat "can't tell" payments a judge can earn per rolling window,
+    # to bound abstention farming (finding #12): three colluding judges can
+    # otherwise send "can't tell" on every fresh pair and collect flat without
+    # ever resolving a task. 0 disables the cap.
+    judge_flat_cap: int = Field(default=10, ge=0)
+
     @model_validator(mode="after")
     def safe_environment(self):
         if self.cluster not in {"devnet", "localnet"}:

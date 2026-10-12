@@ -96,6 +96,12 @@ def pilot(tmp_path):
             ).status_code
             == 200
         )
+    # Judgment product: bond deposit is gated on calibration. Mark the
+    # capture-test workers calibrated so the (dormant) capture bond path still
+    # exercises the real deposit seam.
+    with app.state.database.transaction() as db:
+        for k in keys:
+            db.get(Actor, str(k.pubkey())).calibrated = True
     for k, hd in zip(keys, h):
         do_liveness(c, hd, str(k.pubkey()))
     yield c, app, h, keys, settings
