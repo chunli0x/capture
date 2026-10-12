@@ -55,17 +55,32 @@ fun BondScreen(
             CaptureWordmark()
             Text("Unlock Capture", style = MaterialTheme.typography.displaySmall)
             Text(
-                "Before your first capture, deposit the minimum TEST-SKR bond. It is a real " +
+                "Submitting content requires posting a \$SKR Bond. On devnet, deposit the minimum TEST-SKR bond. It is a real " +
                     "on-chain escrow — the tokens are transferred out of your wallet and can be " +
                     "slashed for invalid submissions.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MutedGray,
                 textAlign = TextAlign.Center,
             )
+            CapturePanel(Modifier.fillMaxWidth()) {
+                PolicyRow(CaptureSymbol.PERSON, "You must be 18 or older.")
+                PolicyRow(CaptureSymbol.CAMERA, "No faces, nudity or illegal content.")
+            }
             if (s.unlocked) UnlockedBanner()
             BondCard(s, vm, sender)
             QualityCheckCard(s, vm, onReviewQueue)
         }
+    }
+}
+
+@Composable
+private fun PolicyRow(symbol: CaptureSymbol, text: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        CaptureIcon(symbol, Modifier.size(20.dp), CaptureInk)
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = CaptureInk)
     }
 }
 

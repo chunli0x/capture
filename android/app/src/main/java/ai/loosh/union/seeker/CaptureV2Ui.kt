@@ -134,7 +134,8 @@ fun LevelCard(s: PilotState, modifier: Modifier = Modifier) {
     CapturePanel(modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column {
-                Text("LEVEL ${s.level}", style = MaterialTheme.typography.labelMedium, color = MutedGray)
+                Text("LEVEL ${s.level}", style = MaterialTheme.typography.labelMedium, color = CaptureInk,
+                    modifier = Modifier.background(CaptureCoral, CaptureRadii.pill).padding(horizontal = 10.dp, vertical = 6.dp))
                 Text(s.levelName, style = MaterialTheme.typography.headlineSmall)
             }
             LevelBadge(s.level, Modifier.size(64.dp))
@@ -244,7 +245,7 @@ fun ConstellationLadder(currentLevel: Int? = null, compact: Boolean = false) {
                         (tier.rateThresholdPercent?.let { ", accuracy at least $it percent" } ?: "")
                 }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Box(contentAlignment = Alignment.Center) {
-                        if (tier.level == currentLevel) Box(Modifier.size(nodeSize).blur(14.dp).background(CaptureAccentBright.copy(alpha = glow), CaptureRadii.pill))
+                        if (tier.level == currentLevel) Box(Modifier.size(nodeSize).blur(14.dp).background(CaptureCoral.copy(alpha = glow), CaptureRadii.pill))
                         LevelBadge(tier.level, Modifier.size(nodeSize), unlocked = currentLevel == null || tier.level <= currentLevel)
                     }
                     Text("${tier.acceptedThreshold} · ×${decimal(tier.rateMultiplier)}", style = MaterialTheme.typography.labelSmall,
@@ -384,7 +385,8 @@ fun LevelUpOverlay(level: Int, onDismiss: () -> Unit) {
                 LevelBadge(level, Modifier.size(180.dp).scale(pop.value).align(Alignment.CenterHorizontally), cascade, halo)
                 AnimatedVisibility(showCopy, enter = fadeIn(tween(CaptureMotion.base))) {
                     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Text("NEW RANK", style = MaterialTheme.typography.labelMedium, color = MutedGray)
+                        Text("NEW RANK", style = MaterialTheme.typography.labelMedium, color = CaptureInk,
+                            modifier = Modifier.background(CaptureCoral, CaptureRadii.pill).padding(horizontal = 10.dp, vertical = 6.dp))
                         Text(levelName(level), style = MaterialTheme.typography.displaySmall.copy(fontSize = if (level == 4) 30.sp else 40.sp))
                         val tier = levelTier(level)
                         Text("RATE ×${decimal(tier.rateMultiplier)} · BOND ${if (tier.bondMultiplier == 0.0) "WAIVED" else "×${decimal(tier.bondMultiplier, 1)}"}", color = CaptureAccent, style = MaterialTheme.typography.labelMedium)

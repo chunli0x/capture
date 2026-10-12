@@ -15,45 +15,45 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 
-// Capture "POP EDITORIAL" identity — the progression + access screen system.
-// Palette from the design: cream #FDFBF7 ground, royal blue #2563EB accent,
-// black #111111 editorial ink, grey #6B7280 secondary, and red/yellow as
-// SEMANTIC colors (error bg #FECDD3 / text #BE123C; warning bg #FDE047 /
-// text #854D0E). No decorative red/yellow in the chrome.
+// Capture "POP EDITORIAL": cream canvas, ink outlines, blue actions,
+// coral highlights and yellow feature-availability badges.
 
-val CaptureBaseDeep = Color(0xFFF4EDDD)
-val CaptureBase = Color(0xFFFDFBF7)
+val CaptureBaseDeep = Color(0xFFF6E9C7)
+val CaptureBase = Color(0xFFFFF3D6)
 val CaptureSurface = Color(0xFFFFFFFF)
-val CaptureSurface2 = Color(0xFFF4EDDD)
-val CaptureSurface3 = Color(0xFFEAE0C8)
-val CaptureInk = Color(0xFF111111)
+val CaptureSurface2 = Color(0xFFFFF8E8)
+val CaptureSurface3 = CaptureBaseDeep
+val CaptureInk = Color(0xFF181626)
 val CaptureOnBase = CaptureInk
 val MutedGray = Color(0xFF6B7280)
 val CaptureInkFaint = Color(0xFF9CA3AF)
-val CaptureOutline = Color(0xFFE5E7EB)
-val CaptureOutlineVariant = Color(0xFFD1D5DB)
-val CaptureAccent = Color(0xFF2563EB)
-val CaptureAccentBright = Color(0xFF2563EB)
+val CaptureOutline = CaptureInk
+val CaptureOutlineVariant = CaptureInk.copy(alpha = .25f)
+val CaptureAccent = Color(0xFF3B82F6)
+val CaptureAccentBright = CaptureAccent
+val CaptureAction = Color(0xFF0066FF)
 val CaptureAccentDeep = Color(0xFF1D4ED8)
 val CaptureAccentTint = CaptureAccent.copy(alpha = .12f)
 val CaptureAccentBorder = CaptureAccent.copy(alpha = .35f)
-// Semantic: red = error, yellow = warning.
-val CaptureRed = Color(0xFFBE123C)
-val CaptureRedBg = Color(0xFFFECDD3)
-val CaptureYellow = Color(0xFFFDE047)
-val CaptureYellowInk = Color(0xFF854D0E)
-val SuccessGreen = Color(0xFF15803D)
-val ErrorRed = Color(0xFFBE123C)
-val ErrorRedBg = Color(0xFFFECDD3)
+val CaptureCoral = Color(0xFFF26762)
+val CaptureYellow = Color(0xFFFFD75E)
+val CaptureYellowInk = CaptureInk
+val SuccessGreen = Color(0xFF147D42)
+val SuccessGreenBg = Color(0xFFE8F5EC)
+val ErrorRed = Color(0xFFB42318)
+val ErrorRedBg = Color(0xFFFEE4E2)
+val CaptureRed = ErrorRed
+val CaptureRedBg = ErrorRedBg
+// Warnings have an amber treatment separate from feature availability.
 val WarnAmber = Color(0xFF854D0E)
-val WarnAmberBg = Color(0xFFFDE047)
+val WarnAmberBg = Color(0xFFFEF3C7)
 // Button grey (secondary / disabled CTA).
 val ButtonGrey = Color(0xFFE5E7EB)
 val ButtonGreyInk = Color(0xFF374151)
 
 object CaptureGradients {
     val navy = Brush.verticalGradient(listOf(CaptureBaseDeep, CaptureBase))
-    val action = Brush.verticalGradient(listOf(CaptureAccent, CaptureAccentDeep))
+    val action = Brush.verticalGradient(listOf(CaptureAction, CaptureAccentDeep))
     val actionGlow = Brush.radialGradient(listOf(CaptureAccentBright.copy(alpha = .18f), CaptureAccent.copy(alpha = .02f)))
     val ring = Brush.sweepGradient(listOf(CaptureAccentBright, CaptureAccent, CaptureAccentDeep, CaptureAccentBright))
     val glass = Brush.verticalGradient(listOf(CaptureInk.copy(alpha = .05f), CaptureInk.copy(alpha = .02f)))
@@ -74,7 +74,7 @@ object CaptureRadii {
     val pill = RoundedCornerShape(50)
 }
 val CaptureColors = lightColorScheme(
-    primary = CaptureAccent, onPrimary = Color.White,
+    primary = CaptureAction, onPrimary = Color.White,
     primaryContainer = CaptureAccentTint, onPrimaryContainer = CaptureInk,
     secondary = CaptureAccentDeep, onSecondary = Color.White,
     secondaryContainer = CaptureSurface2, onSecondaryContainer = CaptureInk,
@@ -89,7 +89,9 @@ val CaptureColors = lightColorScheme(
     surfaceContainerHighest = CaptureSurface3,
     outline = CaptureOutline, outlineVariant = CaptureOutlineVariant,
     error = ErrorRed, onError = Color.White,
+    errorContainer = ErrorRedBg, onErrorContainer = ErrorRed,
 )
+val Anton = FontFamily(Font(R.font.anton_regular, FontWeight.Normal))
 val Inter = FontFamily(
     Font(R.font.inter_400, FontWeight.Normal),
     Font(R.font.inter_500, FontWeight.Medium),
@@ -103,10 +105,10 @@ private fun inter(size: Int, line: Float, weight: FontWeight = FontWeight.Normal
 )
 val CaptureNumeric = inter(28, 1f, FontWeight.Bold).copy(fontFeatureSettings = "tnum")
 val CaptureTypography = Typography(
-    displayLarge = inter(40, 1f, FontWeight.ExtraBold, -.01f),
-    displayMedium = inter(34, 1.05f, FontWeight.ExtraBold, -.01f),
-    displaySmall = inter(28, 1.1f, FontWeight.ExtraBold, -.005f),
-    headlineLarge = inter(28, 1.1f, FontWeight.ExtraBold, -.005f),
+    displayLarge = inter(40, 1f, tracking = -.01f).copy(fontFamily = Anton),
+    displayMedium = inter(34, 1.05f, tracking = -.01f).copy(fontFamily = Anton),
+    displaySmall = inter(28, 1.1f, tracking = -.005f).copy(fontFamily = Anton),
+    headlineLarge = inter(28, 1.1f, tracking = -.005f).copy(fontFamily = Anton),
     headlineMedium = inter(22, 1.15f, FontWeight.Bold),
     headlineSmall = inter(17, 1.25f, FontWeight.Bold),
     titleLarge = inter(16, 1.3f, FontWeight.SemiBold),

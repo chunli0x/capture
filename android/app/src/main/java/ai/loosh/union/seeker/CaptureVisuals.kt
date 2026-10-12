@@ -26,6 +26,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -164,7 +165,7 @@ fun FloatingBottomBar(profile: Boolean, enabled: Boolean, onGallery: () -> Unit,
                 Box(Modifier.matchParentSize().blur(12.dp).background(CaptureGradients.actionGlow, CaptureRadii.pill))
                 Box(Modifier.size(56.dp).clip(CaptureRadii.pill).background(CaptureGradients.action)
                     .clickable(enabled = enabled, onClick = onCapture).semantics { contentDescription = "Capture" }, contentAlignment = Alignment.Center) {
-                    CaptureIcon(CaptureSymbol.CAMERA, Modifier.size(26.dp), CaptureInk)
+                    CaptureIcon(CaptureSymbol.CAMERA, Modifier.size(26.dp), Color.White)
                 }
             }
             Column(Modifier.clip(CaptureRadii.pill).background(if (profile) CaptureAccentTint else Color.Transparent)
@@ -183,9 +184,23 @@ fun ActionButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifi
         modifier = modifier.fillMaxWidth().heightIn(min = 56.dp)
             .clip(CaptureRadii.pill).background(CaptureGradients.action, alpha = if (enabled) 1f else .35f),
         enabled = enabled, shape = CaptureRadii.pill,
-        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent, contentColor = CaptureOnBase, disabledContainerColor = Color.Transparent)) {
+        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent, contentColor = Color.White, disabledContainerColor = Color.Transparent)) {
         Text(label, style = MaterialTheme.typography.titleMedium)
     }
+}
+
+@Composable
+fun ComingSoonBadge(text: String = "Coming Soon") {
+    Text(
+        text,
+        color = CaptureInk,
+        style = MaterialTheme.typography.labelMedium,
+        modifier = Modifier.clearAndSetSemantics { contentDescription = text }
+            .clip(CaptureRadii.pill)
+            .background(CaptureYellow)
+            .border(2.dp, CaptureInk, CaptureRadii.pill)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    )
 }
 
 @Composable
@@ -216,7 +231,7 @@ fun ConfettiCanvas(modifier: Modifier = Modifier, startDelay: Int = 0) {
             val angle = i * 2.39996f
             val speed = size.minDimension * (.3f + (i % 7) * .07f)
             val p = center + Offset(cos(angle) * speed * t, sin(angle) * speed * t + size.height * .4f * t * t)
-            val color = listOf(CaptureAccent, CaptureAccentBright, CaptureAccentDeep, SuccessGreen, CaptureInk)[i % 5].copy(alpha = 1f - t)
+            val color = listOf(CaptureAccent, CaptureCoral, CaptureAccentDeep, SuccessGreen, CaptureInk)[i % 5].copy(alpha = 1f - t)
             rotate(i * 31f + t * 180f, p) { drawRect(color, p, Size(5.dp.toPx(), 9.dp.toPx())) }
         }
     }

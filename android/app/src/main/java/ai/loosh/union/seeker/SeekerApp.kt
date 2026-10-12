@@ -319,7 +319,7 @@ private fun TestnetBanner() {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(CaptureYellow)
+            .background(CaptureSurface2)
             .border(1.dp, CaptureInk)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.Center,
@@ -439,11 +439,16 @@ private fun WalletGate(
             Checkbox(checked = over18, onCheckedChange = { over18 = it }, enabled = !busy)
             Text("I confirm I am 18 or older", style = MaterialTheme.typography.bodyMedium, color = CaptureInk)
         }
+        Text(
+            "Designed for the Solana Seeker Mobile",
+            style = MaterialTheme.typography.bodyMedium,
+            color = CaptureInk,
+        )
         Button(
             onClick = { onConnect(over18) },
             enabled = !busy && over18,
             modifier = Modifier.fillMaxWidth().height(52.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = CaptureAccent, contentColor = Color.White, disabledContainerColor = ButtonGrey, disabledContentColor = ButtonGreyInk),
+            colors = ButtonDefaults.buttonColors(containerColor = CaptureAction, contentColor = Color.White, disabledContainerColor = ButtonGrey, disabledContentColor = ButtonGreyInk),
             shape = CaptureRadii.pill,
         ) {
             Text("Sign in with Seeker Wallet", style = MaterialTheme.typography.titleMedium)
@@ -549,6 +554,19 @@ private fun CaptureHome(
                     SettleEarnings(s, vm)
                     Text("DEVNET · TEST-USDC REWARDS · TEST-SKR BOND", style = MaterialTheme.typography.labelSmall, color = MutedGray)
                     WalletActions(s, vm)
+                    CapturePanel(Modifier.fillMaxWidth()) {
+                        Text("Albums and teams", style = MaterialTheme.typography.titleLarge)
+                        ComingSoonBadge()
+                        Text("Album collections and team participation are planned for a future release.",
+                            style = MaterialTheme.typography.bodyMedium, color = CaptureInk)
+                    }
+                    CapturePanel(Modifier.fillMaxWidth()) {
+                        Text("Leaderboard", style = MaterialTheme.typography.titleLarge)
+                        ComingSoonBadge()
+                        Text("Increase your payout bonus", style = MaterialTheme.typography.titleMedium)
+                        Text("Rankings and leaderboard rewards are planned for a future release.",
+                            style = MaterialTheme.typography.bodyMedium, color = CaptureInk)
+                    }
                     Dashboard(s, creating, onCreatingChange, vm, sender)
                 }
             }

@@ -90,7 +90,7 @@ fun LivenessScreen(
         Text("Are you human?", style = MaterialTheme.typography.headlineSmall)
         Text(
             "A quick on-device motion check (e.g. blink or turn your head). " +
-                "Nothing is recorded or uploaded — your face never leaves your phone.",
+                "Images are processed on-device and not retained.",
             style = MaterialTheme.typography.bodyMedium,
         )
 
