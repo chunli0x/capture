@@ -138,7 +138,7 @@ private fun SignInScreen(s: PilotState, vm: SeekerViewModel, sender: ActivityRes
                 )
             }
             Text(
-                "Designed for the Solana Seeker Mobile",
+                "Designed for Android",
                 style = MaterialTheme.typography.bodyMedium,
                 color = CaptureInk,
             )
@@ -154,7 +154,7 @@ private fun SignInScreen(s: PilotState, vm: SeekerViewModel, sender: ActivityRes
                 ),
                 shape = CaptureRadii.pill,
             ) {
-                Text("Sign in with Seeker Wallet", style = MaterialTheme.typography.titleMedium)
+                Text("Sign in with wallet", style = MaterialTheme.typography.titleMedium)
             }
         }
     }

@@ -2,8 +2,7 @@
 
 **Decentralized RLHF — humans judge vision-model outputs, consensus decides who gets paid.**
 
-Capture is a mobile RLHF preference-judging network for the CLOCK IN hackathon
-(Solana Mobile × RadiantsDAO), built for **Solana Seeker Mobile**. A judge sees
+Capture is a mobile RLHF preference-judging network. A judge sees
 two vision-model outputs and picks the better one (A/B preference) or rates a
 single output 1–5. Aggregated preferences become an RLHF preference dataset,
 with trust priced into every judgment through a slashable **test-SKR** stake.
@@ -120,14 +119,14 @@ Not done / honest caveats:
 
 ## Install the app
 
-The Android judgment client (built for Solana Seeker Mobile) is downloadable at
+The Android judgment client is downloadable at
 `https://capture.magnumopus.ai/capture.apk` — a devnet build, test tokens only.
 
 ## Repository layout
 
 ```
 .
-├── android/            Solana Seeker Mobile app (Kotlin / Gradle)
+├── android/            Android app (Kotlin / Gradle)
 ├── backend/            FastAPI service
 │   ├── seeker/         judgment API, consensus, calibration, bond, chain, DB
 │   ├── migrations/     database migrations

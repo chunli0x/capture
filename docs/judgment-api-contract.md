@@ -4,7 +4,7 @@ Status: 2026-10-12. PM-authored. Every builder (backend, blockchain-dev, front-e
 reads THIS file and implements to it. Do not invent different field names or paths.
 If a field here is wrong, change it HERE and re-read; do not fork the contract.
 
-Product = Capture. Device = Solana Seeker Mobile. Currency = test $SKR (devnet only).
+Product = Capture. Device = Android. Currency = test $SKR (devnet only).
 Public copy stays strictly product-focused ("judge a vision model's outputs for
 RLHF"); do not disclose the underlying training use. Majority-preference bias
 must be stated, never hidden. "can't tell" is first-class and never penalized.
