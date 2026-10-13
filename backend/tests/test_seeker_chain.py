@@ -26,6 +26,7 @@ def chain(tmp_path):
             cluster="localnet",
             rpc_url="http://127.0.0.1:8899",
             min_bond=1_000_000,
+            faucet_sol_lamports=50_000_000,
         )
     )
 

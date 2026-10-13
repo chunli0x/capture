@@ -14,6 +14,7 @@ from solders.keypair import Keypair
 from solders.message import Message
 from solders.pubkey import Pubkey
 from solders.signature import Signature
+from solders.system_program import transfer, TransferParams
 from solders.transaction import Transaction, TransactionError
 from spl.token.constants import ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID
 from spl.token.instructions import get_associated_token_address, mint_to
@@ -295,9 +296,10 @@ class Chain:
         return sig
 
     def faucet(self, wallet):
-        """Mint the minimum test-USDC bond to a wallet (USDC mint authority is
-        the treasury). Returns the mint signature, or raises ChainUnavailable
-        when the treasury keypair is not configured."""
+        """Mint the minimum test-USDC bond and drop a little SOL so the worker
+        can pay the deposit fee + bond/vault rent. The treasury is the USDC
+        mint authority AND the SOL funder. Raises ChainUnavailable when the
+        treasury keypair is not configured."""
         if self.treasury is None:
             raise ChainUnavailable("USDC treasury (mint authority) is not configured")
         worker = Pubkey.from_string(wallet)
@@ -312,6 +314,17 @@ class Chain:
                     mint_authority=payer.pubkey(),
                     amount=self.settings.min_bond,
                     signers=[payer.pubkey()],
+                )
+            )
+        )
+        # The deposit is client-signed with payer=worker, so the worker needs
+        # lamports to pay the transaction fee and the bond/vault rent.
+        instructions.append(
+            transfer(
+                TransferParams(
+                    from_pubkey=payer.pubkey(),
+                    to_pubkey=worker,
+                    lamports=self.settings.faucet_sol_lamports,
                 )
             )
         )

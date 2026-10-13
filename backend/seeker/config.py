@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     treasury_key_file: Path | None = None
     session_seconds: int = 3600
     min_bond: int = Field(default=1_000_000, gt=0, le=1_000_000_000_000)
+    # The devnet faucet also drops a little SOL so the worker can pay the
+    # deposit transaction fee and the bond/vault rent (the deposit is
+    # client-signed with payer=worker, so the worker needs lamports). 0.05 SOL.
+    faucet_sol_lamports: int = Field(default=50_000_000, gt=0)
 
     # ---- Judgment product (RLHF preference judging) ----
     # Consensus-gated pay in test USDC (1:1 USD, 6 decimals). All are starting
