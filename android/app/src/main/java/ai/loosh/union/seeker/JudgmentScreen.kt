@@ -21,6 +21,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import coil3.compose.AsyncImage
 
 /**
  * The judgment product screen: a judge compares two model outputs (A/B) or rates
@@ -109,6 +114,7 @@ private fun PairChoice(s: PilotState, vm: SeekerViewModel) {
     val taskType = pair.optString("task_type", "preference")
     if (taskType == "rating") {
         Text("Rate this output (1–5)", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
+        OutputImage(pair.optString("output_a_url", ""), "Output", Modifier.fillMaxWidth())
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (r in 1..5) {
                 Button(
@@ -124,6 +130,10 @@ private fun PairChoice(s: PilotState, vm: SeekerViewModel) {
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Can't tell") }
     } else {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutputImage(pair.optString("output_a_url", ""), "A", Modifier.weight(1f))
+            OutputImage(pair.optString("output_b_url", ""), "B", Modifier.weight(1f))
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = { vm.submitJudgment(choice = "a") },
@@ -142,10 +152,24 @@ private fun PairChoice(s: PilotState, vm: SeekerViewModel) {
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Can't tell") }
     }
-    pair.optString("output_a_url", "").takeIf { it.isNotBlank() }?.let {
-        Text("A: $it", style = MaterialTheme.typography.labelSmall, color = MutedGray)
-    }
-    pair.optString("output_b_url", "").takeIf { it.isNotBlank() }?.let {
-        Text("B: $it", style = MaterialTheme.typography.labelSmall, color = MutedGray)
+}
+
+@Composable
+private fun OutputImage(url: String, label: String, modifier: Modifier = Modifier) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = CaptureAccentBright)
+        if (url.isBlank()) {
+            Text("No output", style = MaterialTheme.typography.bodySmall, color = MutedGray)
+        } else {
+            AsyncImage(
+                model = url,
+                contentDescription = "Output $label",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(12.dp)),
+            )
+        }
     }
 }

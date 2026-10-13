@@ -8,9 +8,9 @@ inserts, idempotently:
   pass the calibration gate),
 - a set of judgment pairs (A/B preference + 1-5 rating) across the batch.
 
-Output URLs are placeholders — the real vision-model outputs are loaded by
-Lisa's training pipeline (batch commissioning is out of scope for the hackathon
-API). Run from the backend dir:
+Output URLs point at served demo images (natural vs degraded) at a fixed
+768x768 resolution, so a judge sees real, resolvable content. Run from the
+backend dir:
 
     .venv/bin/python ../scripts/seed_judgment.py
 """
@@ -45,7 +45,11 @@ from seeker.migrate import apply_migrations  # noqa: E402
 
 
 def placeholder(batch_id, side, i):
-    return f"https://capture.magnumopus.ai/seed/{batch_id}/{side}-{i}.png"
+    # Real served demo images (shared across batches). "a" = natural, "b" =
+    # degraded, cycling the 6 images. Replace with the real vision-model outputs
+    # when Lisa's pipeline commissions a batch.
+    kind = "natural" if side == "a" else "degraded"
+    return f"https://capture.magnumopus.ai/seed/{kind}-{i % 6}.png"
 
 
 def count(db, model):
