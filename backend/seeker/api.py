@@ -349,8 +349,6 @@ def create_app(settings: Settings, *, chain=None):
             actor = lock(db, Actor, actor.wallet)
             if not actor.skr_funded:
                 fail(409, "Get test SKR first")
-            if not actor.calibrated:
-                fail(403, "Complete calibration before staking")
             return prepare(db, "deposit", actor.wallet, actor)
 
     @app.post("/bond/withdraw")
@@ -376,8 +374,6 @@ def create_app(settings: Settings, *, chain=None):
             if action == "deposit":
                 if not actor.skr_funded:
                     fail(409, "Get test SKR first")
-                if not actor.calibrated:
-                    fail(403, "Complete calibration before staking")
             else:
                 if not actor.bonded:
                     fail(403, "Bond deposit required")
@@ -643,34 +639,6 @@ def create_app(settings: Settings, *, chain=None):
     def judge_next(actor: Auth):
         with database.transaction() as db:
             actor = lock(db, Actor, actor.wallet)
-            if not actor.calibrated:
-                q = select(CalibrationPair)
-                answered = set(
-                    db.scalars(
-                        select(CalibrationAnswer.pair_id).where(
-                            CalibrationAnswer.wallet == actor.wallet
-                        )
-                    ).all()
-                )
-                if answered:
-                    q = q.where(CalibrationPair.pair_id.not_in(answered))
-                cp = db.scalars(q.order_by(CalibrationPair.pair_id).limit(1)).first()
-                remaining = max(0, settings.calibration_n - len(answered))
-                if cp is None:
-                    return {
-                        "kind": "none",
-                        "calibrated": False,
-                        "calibration_remaining": remaining,
-                    }
-                view = _pair_view(cp)
-                view.update(
-                    {
-                        "kind": "calibration",
-                        "calibrated": False,
-                        "calibration_remaining": remaining,
-                    }
-                )
-                return view
             if not actor.bonded:
                 return {"kind": "none", "calibrated": True, "reason": "deposit the SKR bond to judge"}
             done = select(Judgment.pair_id).where(Judgment.wallet == actor.wallet)
@@ -732,8 +700,6 @@ def create_app(settings: Settings, *, chain=None):
         claim = None
         with database.transaction() as db:
             actor = lock(db, Actor, wallet)
-            if not actor.calibrated:
-                fail(403, "Complete calibration before judging")
             if not actor.bonded:
                 fail(403, "Deposit the SKR bond to judge")
             pair = lock(db, JudgmentPair, pair_id)

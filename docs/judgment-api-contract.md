@@ -26,7 +26,6 @@ Real mainnet token (NOT used on devnet; do not wire into the demo):
 ## 1. Constants (tunable; these are the devnet defaults)
 
 - K = 3 (judges per A/B pair). Config `judge_k`.
-- CALIBRATION_N = 10; pass threshold = 8/10 correct. Config `calibration_n`.
 - Agreement rolling window = 100 resolved judgments. Config `judge_window`.
 - Judge ladder thresholds (agreement_rate): 0.80 / 0.88 / 0.93 / 0.97
   (levels 1..4). See §6.
@@ -75,7 +74,7 @@ Auth = Bearer token from /auth/challenge -> /auth/verify (unchanged).
 GET /judge/next
   -> 200 if a task is available; 404 if none. Body:
   {
-    "kind": "calibration" | "judgment",   // calibration until calibrated
+    "kind": "judgment",                    // judgment pairs only (calibration removed)
     "pair_id": "...",
     "task_type": "preference" | "rating",
     "media_type": "image" | "video",
@@ -140,12 +139,11 @@ On judgment submit, when a pair reaches K judgments:
    agreement * min(1.0, voting/k). Mark pair "resolved".
 agreement_rate = rolling window (last 100 resolved) fraction aligned.
 
-## 5. Calibration gate (backend owns)
+## 5. Calibration (removed as a gate)
 
-Serve N=10 calibration_pair before staking/earning. Pass if >= 8/10 match
-known_choice. Pass -> calibrated=true. Fail -> reset progress, retry. Calibration
-pays judge_flat_skr only (or nothing). A wallet cannot /bond/deposit or earn until
-calibrated (enforce server-side: /bond/deposit returns 403 until calibrated).
+The calibration gate is removed: a wallet can /bond/deposit and judge without
+passing calibration. The calibration_pair/calibration_answer tables and the
+`calibrated` field remain dormant (kept for data continuity, not enforced).
 
 ## 6. Judge ladder (new module judge_leveling.py; DO NOT touch leveling.py)
 

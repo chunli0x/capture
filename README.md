@@ -17,21 +17,18 @@ a first-class answer** that re-routes the pair instead of forcing a guess.
 
 The full loop:
 
-1. **Calibrate.** A new judge passes a 10-pair calibration gate against
-   known-consensus pairs before they can stake. Correctness is only revealed at
-   the pass/fail boundary, never per-answer mid-gate.
-2. **Stake.** The judge deposits a test-SKR bond on-chain. The bond is the
+1. **Stake.** The judge deposits a test-SKR bond on-chain. The bond is the
    slashable trust layer.
-3. **Judge.** The judge answers A/B or 1–5 pairs. One judge cannot answer the
+2. **Judge.** The judge answers A/B or 1–5 pairs. One judge cannot answer the
    same pair twice.
-4. **Resolve.** K substantive votes resolve the pair. Neutral votes ("can't
+3. **Resolve.** K substantive votes resolve the pair. Neutral votes ("can't
    tell"/"tie") never count as dissent and never inflate the quorum. A genuine
    split adds one tiebreaker judge.
-5. **Pay or slash.** Aligned judges earn test-SKR (journaled before broadcast,
+4. **Pay or slash.** Aligned judges earn test-SKR (journaled before broadcast,
    idempotent per judgment). A judge whose rolling agreement rate stays below a
    floor runs the two-strike warn/slash ladder on-chain (full bond forfeit on
    the second strike).
-6. **Anchor.** Each fully-resolved batch records a Merkle root and commits it
+5. **Anchor.** Each fully-resolved batch records a Merkle root and commits it
    on-chain via `post_batch` as dataset provenance (append-only per batch; a
    failed final anchor is retried idempotently).
 
@@ -128,7 +125,7 @@ The Android judgment client is downloadable at
 .
 ├── android/            Android app (Kotlin / Gradle)
 ├── backend/            FastAPI service
-│   ├── seeker/         judgment API, consensus, calibration, bond, chain, DB
+│   ├── seeker/         judgment API, consensus, bond, chain, DB
 │   ├── migrations/     database migrations
 │   └── tests/          backend test suite
 ├── programs/           Anchor workspaces

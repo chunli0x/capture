@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -25,8 +24,7 @@ import androidx.compose.ui.unit.dp
 
 /**
  * The judgment product screen: a judge compares two model outputs (A/B) or rates
- * one 1-5, with a first-class "can't tell". Uncalibrated judges see the
- * calibration progress and the known-consensus pairs first. Test $SKR on devnet.
+ * one 1-5, with a first-class "can't tell". Test $SKR on devnet.
  */
 @Composable
 fun JudgmentScreen(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit) {
@@ -51,9 +49,7 @@ fun JudgmentScreen(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit) {
             )
             JudgeStatsCard(s)
             JudgeTierLadder(judgeLevelFrom(s.judgeAgreementRate))
-            if (!s.judgeCalibrated) {
-                CalibrationCard(s, vm)
-            } else if (s.judgePair == null) {
+            if (s.judgePair == null) {
                 EmptyCard(s, vm, onBond)
             } else {
                 PairCard(s, vm)
@@ -76,27 +72,6 @@ private fun JudgeStatsCard(s: PilotState) {
             style = MaterialTheme.typography.bodySmall,
             color = MutedGray,
         )
-    }
-}
-
-@Composable
-private fun CalibrationCard(s: PilotState, vm: SeekerViewModel) {
-    CapturePanel(Modifier.fillMaxWidth(), elevated = true) {
-        Text("CALIBRATION", style = MaterialTheme.typography.labelMedium, color = CaptureAccentBright)
-        Text(
-            "Answer ${s.calibrationRequired} known pairs before you can stake and earn. " +
-                "Calibration is unpaid. ${s.calibrationCorrect} correct so far.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MutedGray,
-        )
-        val fraction =
-            if (s.calibrationRequired > 0) {
-                (s.calibrationCompleted.toFloat() / s.calibrationRequired).coerceIn(0f, 1f)
-            } else {
-                0f
-            }
-        LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
-        PairChoice(s, vm)
     }
 }
 

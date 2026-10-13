@@ -153,12 +153,11 @@ def ready_judge(c, app, h, calib_ids):
 # ---- calibration gate ----
 
 
-def test_deposit_gated_on_calibration(pilot):
+def test_deposit_does_not_require_calibration(pilot):
     c, _app, h, _keys, _chain, _s = pilot
     assert c.post("/bond/faucet", headers=h[0]).status_code == 200
     r = c.post("/bond/deposit", headers=h[0])
-    assert r.status_code == 403
-    assert "calibrat" in r.json()["detail"].lower()
+    assert r.status_code == 200, r.text
 
 
 def test_calibration_pass_at_eight_of_ten(pilot):
