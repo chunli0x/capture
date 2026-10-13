@@ -55,15 +55,15 @@ data class PilotState(
     val error: String? = null,
     val status: AsyncStatus = AsyncStatus.Idle,
     val transient: String? = null,
-    // --- Bond (test-USDC stake) ---
-    val bondTestUsdcUnits: Long = 0,
+    // --- Bond (test-$SKR stake) ---
+    val bondTestSkrUnits: Long = 0,
     val bonded: Boolean = false,
     val bondFunded: Boolean = false,
     val livenessCompleted: Boolean = false,
     val livenessChallenge: String? = null,
     val faucetMints: Int = 0,
     val faucetMaxMints: Int = 5,
-    val judgeStakedUsdc: Long = 0,
+    val judgeStakedSkr: Long = 0,
     val judgeWarnings: Int = 0,
     // --- Judgment product (RLHF preference judging) ---
     val judgeCalibrated: Boolean = false,
@@ -72,17 +72,17 @@ data class PilotState(
     val judgeLevel: Int = 0,
     val judgeLevelName: String = "Scout",
     val judgeRateMultiplier: Double = 1.0,
-    val judgeBaseUsdc: Long = 0,
-    val judgeFlatUsdc: Long = 0,
-    val judgeEarnedUsdc: Long = 0,
-    val judgeSettledUsdc: Long = 0,
+    val judgeBaseSkr: Long = 0,
+    val judgeFlatSkr: Long = 0,
+    val judgeEarnedSkr: Long = 0,
+    val judgeSettledSkr: Long = 0,
     val calibrationCompleted: Int = 0,
     val calibrationRequired: Int = 10,
     val calibrationCorrect: Int = 0,
     val judgePair: JSONObject? = null,
 ) {
     // The stats API exposes earned and settled; pending is their unpaid difference.
-    val judgePendingUsdc: Long get() = (judgeEarnedUsdc - judgeSettledUsdc).coerceAtLeast(0)
+    val judgePendingSkr: Long get() = (judgeEarnedSkr - judgeSettledSkr).coerceAtLeast(0)
 }
 
 class SeekerViewModel(application: Application) : AndroidViewModel(application) {
@@ -266,10 +266,10 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-    // --- Bond (test-USDC stake) ---
+    // --- Bond (test-$SKR stake) ---
 
     fun faucet() =
-        run("Requesting test USDC", "Test USDC funded") {
+        run("Requesting test \$SKR", "Test \$SKR funded") {
             val r = post("/bond/faucet")
             mutable.update {
                 it.copy(bondFunded = true, faucetMints = r.optInt("mints", it.faucetMints + 1))
@@ -356,13 +356,13 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         val pair = if (next.optString("kind", "none") == "none") null else next
         mutable.update {
             it.copy(
-                bondTestUsdcUnits = me.optLong("bond_test_usdc_units", 0),
+                bondTestSkrUnits = me.optLong("bond_test_skr_units", 0),
                 bonded = me.optBoolean("bonded", false),
-                bondFunded = me.optBoolean("usdc_funded", false),
+                bondFunded = me.optBoolean("skr_funded", false),
                 livenessCompleted = me.optBoolean("liveness_completed", false),
                 faucetMints = me.optInt("faucet_mints", 0),
                 faucetMaxMints = me.optInt("faucet_max", 5),
-                judgeStakedUsdc = stats.optLong("staked_usdc", 0),
+                judgeStakedSkr = stats.optLong("staked_skr", 0),
                 judgeWarnings = stats.optInt("warnings", 0),
                 judgePair = pair,
                 judgeCalibrated = stats.optBoolean("calibrated", false),
@@ -371,10 +371,10 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
                 judgeLevel = level,
                 judgeLevelName = stats.optString("level_name", judgeLevelName(level)),
                 judgeRateMultiplier = stats.optDouble("rate_multiplier", judgeRateMultiplier(level)),
-                judgeBaseUsdc = stats.optLong("base_usdc", 0),
-                judgeFlatUsdc = stats.optLong("flat_usdc", 0),
-                judgeEarnedUsdc = stats.optLong("earned_usdc", 0),
-                judgeSettledUsdc = stats.optLong("settled_usdc", 0),
+                judgeBaseSkr = stats.optLong("base_skr", 0),
+                judgeFlatSkr = stats.optLong("flat_skr", 0),
+                judgeEarnedSkr = stats.optLong("earned_skr", 0),
+                judgeSettledSkr = stats.optLong("settled_skr", 0),
                 calibrationCompleted = progress?.optInt("completed", 0) ?: 0,
                 calibrationRequired = progress?.optInt("required", 10) ?: 10,
                 calibrationCorrect = progress?.optInt("correct", 0) ?: 0,

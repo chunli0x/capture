@@ -45,7 +45,7 @@ fun OnboardingScreen(onDone: () -> Unit) {
             CaptureWordmark()
             EditorialHeading("HOW IT WORKS.")
             Text(
-                "You judge a vision model's outputs. Agree with the crowd and earn test USDC on devnet.",
+                "You judge a vision model's outputs. Agree with the crowd and earn test \$SKR on devnet.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = CaptureInk,
                 textAlign = TextAlign.Start,
@@ -63,7 +63,7 @@ fun OnboardingScreen(onDone: () -> Unit) {
 private fun FlowCard() {
     CapturePanel(Modifier.fillMaxWidth()) {
         Text("WHAT YOU DO", style = MaterialTheme.typography.labelMedium, color = CaptureAccentBright)
-        Step("1. Stake", "Deposit a slashable test-USDC bond.")
+        Step("1. Stake", "Deposit a slashable test-\$SKR bond.")
         Step("2. Judge", "Compare two outputs (A/B) or rate one 1-5.")
         Step("3. Earn", "Aligned judgments pay. Dissenters earn nothing.")
     }
@@ -144,7 +144,7 @@ private fun EarningsCard() {
             color = CaptureInk,
         )
         Text(
-            "Test USDC on devnet — not real value.",
+            "Test \$SKR on devnet — not real value.",
             style = MaterialTheme.typography.labelSmall,
             color = MutedGray,
         )

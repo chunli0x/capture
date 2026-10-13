@@ -6,7 +6,7 @@ import kotlin.math.roundToInt
  * The judge accuracy ladder (parallel to [Leveling.kt], which stays capture-only).
  *
  * Keyed on *agreement rate only* — the fraction of a judge's resolved judgments
- * they aligned with the crowd. Payout is `judge_base_usdc × multiplier` per aligned
+ * they aligned with the crowd. Payout is `judge_base_skr × multiplier` per aligned
  * judgment. Kept free of Android so every decision is JVM-testable.
  */
 
