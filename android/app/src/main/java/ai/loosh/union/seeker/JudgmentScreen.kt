@@ -32,6 +32,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 
+/** Formats USDC base units with sub-cent precision for pay rates (0.005 USDC). */
+private fun formatPayUsdc(units: Long): String =
+    "%.3f".format(units / 1_000_000.0).trimEnd('0').trimEnd('.')
+
 /**
  * The judgment product screen: a judge compares two model outputs (A/B) or rates
  * one 1-5, with a first-class "can't tell". Earns test USDC; bond is test USDC.
@@ -81,6 +85,12 @@ private fun JudgeStatsCard(s: PilotState) {
             style = MaterialTheme.typography.bodySmall,
             color = MutedGray,
         )
+        Text(
+            "Earn ${formatPayUsdc((s.judgeBaseUsdc * s.judgeRateMultiplier).toLong())} USDC per aligned answer · " +
+                "${formatPayUsdc(s.judgeFlatUsdc)} USDC for can't tell",
+            style = MaterialTheme.typography.bodySmall,
+            color = CaptureInk,
+        )
     }
 }
 
@@ -124,7 +134,8 @@ private fun PairChoice(s: PilotState, vm: SeekerViewModel) {
     val imagesReady = failCount == 0 && okCount >= required
 
     if (taskType == "rating") {
-        Text("Rate this output (1–5)", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
+        Text("Is this photo realistic?", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
+        Text("Rate it 1–5. 1 = bad, 5 = good.", style = MaterialTheme.typography.bodySmall, color = MutedGray)
         OutputImage(pair.optString("output_a_url", ""), "Output", Modifier.fillMaxWidth(), report)
         if (failCount > 0) {
             OutlinedButton(
@@ -148,6 +159,7 @@ private fun PairChoice(s: PilotState, vm: SeekerViewModel) {
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Can't tell") }
     } else {
+        Text("Which photo is more realistic?", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutputImage(pair.optString("output_a_url", ""), "A", Modifier.weight(1f), report)
             OutputImage(pair.optString("output_b_url", ""), "B", Modifier.weight(1f), report)

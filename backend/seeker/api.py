@@ -912,6 +912,8 @@ def create_app(settings: Settings, *, chain=None):
                 "level": level["level"],
                 "level_name": level["level_name"],
                 "rate_multiplier": level["rate_multiplier"],
+                "base_usdc": settings.judge_base_usdc,
+                "flat_usdc": settings.judge_flat_usdc,
                 "staked_usdc": actor.staked_usdc,
                 "warnings": actor.warnings,
                 "earned_usdc": earned,

@@ -63,9 +63,22 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
         }
     }
 
+    val showTopMenu =
+        onboarded && s.wallet.isNotEmpty() && !showBond && !showBalances && !showCalibration
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = Color.Transparent,
+        topBar = {
+            if (showTopMenu) {
+                TopMenu(
+                    onBalances = { showBalances = true },
+                    onCalibration = { showCalibration = true },
+                    onSignOut = { vm.logout() },
+                    enabled = !s.busy,
+                )
+            }
+        },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
@@ -78,28 +91,41 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
                 showBond -> BondScreen(s, vm, sender, onBack = { showBond = false })
                 showBalances -> BalanceScreen(s, vm, onBack = { showBalances = false })
                 showCalibration -> CalibrationScreen(s, vm, onBack = { showCalibration = false })
-                else -> {
-                    JudgmentScreen(s, vm, onBond = { showBond = true })
-                    Column(
-                        Modifier.align(Alignment.TopStart).safeDrawingPadding().padding(12.dp),
-                    ) {
-                        TextButton(
-                            onClick = { showCalibration = true },
-                            enabled = !s.busy,
-                        ) { Text("Calibrate", color = MutedGray) }
-                        TextButton(
-                            onClick = { showBalances = true },
-                            enabled = !s.busy,
-                        ) { Text("Balances", color = MutedGray) }
-                    }
-                    TextButton(
-                        onClick = { vm.logout() },
-                        enabled = !s.busy,
-                        modifier = Modifier.align(Alignment.TopEnd).safeDrawingPadding().padding(12.dp),
-                    ) { Text("Sign out", color = MutedGray) }
-                }
+                else -> JudgmentScreen(s, vm, onBond = { showBond = true })
             }
         }
+    }
+}
+
+@Composable
+private fun TopMenu(
+    onBalances: () -> Unit,
+    onCalibration: () -> Unit,
+    onSignOut: () -> Unit,
+    enabled: Boolean,
+) {
+    Column {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(CaptureBase)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "JUDGE",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = CaptureAccent,
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                )
+                TextButton(onClick = onBalances, enabled = enabled) { Text("Balances") }
+                TextButton(onClick = onCalibration, enabled = enabled) { Text("Calibrate") }
+            }
+            TextButton(onClick = onSignOut, enabled = enabled) { Text("Sign out", color = MutedGray) }
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(CaptureOutline))
     }
 }
 
