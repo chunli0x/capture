@@ -37,13 +37,17 @@ A judge-accuracy ladder (agreement-rate driven) raises the rate multiplier from
 
 Honest notes (state, do not hide):
 
-- **Test tokens.** Pay is **devnet/test USDC**; the bond is **devnet/test USDC**.
-  Neither is real value. The UI and `/health` both say so.
+- **Test tokens.** Pay and bond are both **devnet/test USDC** (one token, three
+  jobs). Not real value. The UI and `/health` both say so.
 - **Majority-preference bias.** RLHF on majority preference flattens minority and
   edge preferences. This is fine for a first pass, but the dataset does **not**
   represent all humans. Do not claim it does.
 - K, thresholds, and rates are starting hypotheses — tune against real agreement
   data, not once.
+- **Seed data.** The demo is seeded with 100 judgment pairs whose output URLs
+  are placeholders (real vision-model outputs are loaded by the training
+  pipeline, out of scope for the hackathon). This proves the judging
+  infrastructure, not a production dataset.
 
 ## Payout economics
 
@@ -92,13 +96,15 @@ systematic disagreement warns then slashes the USDC bond to a penalty vault.
 
 ## Status
 
-October 12 2026:
+October 13 2026:
 
 - Deployed to **Solana devnet**; backend live at `https://capture.magnumopus.ai`.
 - **46 backend tests** pass; the Anchor program's **6 unit tests** pass and the
   BPF build is clean.
-- The USDC bond is a real on-chain staking contract with full slash, live on
-  devnet (program `5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV`, upgradeable).
+- **USDC everywhere** — payout, bond, and slash are a single test-USDC token.
+  The single-mint program is live on devnet (program
+  `5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV`, upgradeable).
+- Seeded with **100 judgment pairs** (60 A/B preference + 40 rating) for the demo.
 - Everything here runs on **devnet test tokens**.
 
 Not done / honest caveats:

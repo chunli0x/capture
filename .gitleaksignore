@@ -1,0 +1,3 @@
+# False positive — dummy test key (sequential hex + base64) at line 371 of a
+# deleted capture-era test file. Not a real credential.
+backend/tests/test_seeker_v2.py:generic-api-key:371
