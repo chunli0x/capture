@@ -33,7 +33,7 @@ import androidx.compose.ui.layout.ContentScale
 import coil3.compose.AsyncImage
 
 /** Formats USDC base units with sub-cent precision for pay rates (0.005 USDC). */
-private fun formatPayUsdc(units: Long): String =
+internal fun formatPayUsdc(units: Long): String =
     "%.3f".format(units / 1_000_000.0).trimEnd('0').trimEnd('.')
 
 /**

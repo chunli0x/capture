@@ -104,7 +104,7 @@ fun CaptureWordmark() {
 }
 
 /** Small, consistent line icons drawn as vectors, with accessible labels at call sites. */
-enum class CaptureSymbol { CAMERA, GALLERY, PERSON, RING, BOLT, STREAK, EXPLORE, ROUTE, VERIFIED, TARGET, BRANCH, LOCK, SURFACE, LIGHT, WEATHER, MOTION, OBJECT, PLACE, VIDEO }
+enum class CaptureSymbol { CAMERA, GALLERY, PERSON, RING, BOLT, STREAK, EXPLORE, ROUTE, VERIFIED, TARGET, BRANCH, LOCK, SURFACE, LIGHT, WEATHER, MOTION, OBJECT, PLACE, VIDEO, EYE, STARS, QUESTION_BUBBLE, FILMSTRIP, COINS, SCALES, INFO, ARROW_LEFT, ARROW_RIGHT, ARROW_DOWN }
 
 @Composable
 fun CaptureIcon(symbol: CaptureSymbol, modifier: Modifier = Modifier, tint: Color = CaptureAccent, description: String? = null) {
@@ -134,6 +134,52 @@ fun CaptureIcon(symbol: CaptureSymbol, modifier: Modifier = Modifier, tint: Colo
             CaptureSymbol.OBJECT -> { path(3f,7f,12f,2f,21f,7f,21f,17f,12f,22f,3f,17f,3f,7f,12f,12f,21f,7f); line(12f,12f,12f,22f) }
             CaptureSymbol.PLACE -> { path(3f,11f,12f,3f,21f,11f); path(5f,10f,5f,21f,19f,21f,19f,10f); path(10f,21f,10f,14f,14f,14f,14f,21f) }
             CaptureSymbol.VIDEO -> { path(3f,6f,16f,6f,16f,18f,3f,18f,3f,6f); path(16f,10f,22f,6f,22f,18f,16f,14f) }
+            CaptureSymbol.EYE -> {
+                val eye = Path().apply {
+                    moveTo(2f*u,12f*u); quadraticTo(12f*u,-2f*u,22f*u,12f*u)
+                    quadraticTo(12f*u,26f*u,2f*u,12f*u); close()
+                }
+                drawPath(eye, tint, style = Stroke(1.6f*u))
+                circle(12f,12f,3f)
+            }
+            CaptureSymbol.STARS -> repeat(5) { i ->
+                val star = Path()
+                repeat(10) { point ->
+                    val angle = -PI/2 + point*PI/5
+                    val radius = if (point % 2 == 0) 2.5f else 1.1f
+                    val x = (2.5f + i*4.75f + cos(angle).toFloat()*radius)*u
+                    val y = (12f + sin(angle).toFloat()*radius)*u
+                    if (point == 0) star.moveTo(x,y) else star.lineTo(x,y)
+                }
+                star.close()
+                drawPath(star, tint)
+            }
+            CaptureSymbol.QUESTION_BUBBLE -> {
+                path(3f,3f,21f,3f,21f,18f,10f,18f,5f,22f,5f,18f,3f,18f,3f,3f)
+                path(9f,8f,10f,6f,14f,6f,15f,8f,12f,11f,12f,12f)
+                line(12f,15f,12f,15.2f)
+            }
+            CaptureSymbol.FILMSTRIP -> {
+                path(2f,3f,22f,3f,22f,21f,2f,21f,2f,3f)
+                line(6f,3f,6f,21f); line(18f,3f,18f,21f)
+                for (y in listOf(7f,12f,17f)) { line(2f,y,6f,y); line(18f,y,22f,y) }
+                line(6f,12f,18f,12f)
+            }
+            CaptureSymbol.COINS -> {
+                for (y in listOf(10f,15f,20f)) {
+                    drawOval(tint, Offset(3f*u,(y-3f)*u), Size(13f*u,5f*u), style = Stroke(1.6f*u))
+                }
+                circle(17f,6f,4f)
+            }
+            CaptureSymbol.SCALES -> {
+                line(12f,3f,12f,21f); line(7f,21f,17f,21f); line(3f,7f,21f,7f)
+                path(6f,7f,2f,15f,10f,15f,6f,7f)
+                path(18f,7f,14f,15f,22f,15f,18f,7f)
+            }
+            CaptureSymbol.INFO -> { circle(12f,12f,9f); line(12f,11f,12f,17f); line(12f,7f,12f,7.2f) }
+            CaptureSymbol.ARROW_LEFT -> { path(10f,5f,3f,12f,10f,19f); line(3f,12f,21f,12f) }
+            CaptureSymbol.ARROW_RIGHT -> { path(14f,5f,21f,12f,14f,19f); line(3f,12f,21f,12f) }
+            CaptureSymbol.ARROW_DOWN -> { path(5f,14f,12f,21f,19f,14f); line(12f,3f,12f,21f) }
             CaptureSymbol.RING -> circle(12f,12f,9f)
         }
     }
@@ -178,13 +224,16 @@ fun FloatingBottomBar(profile: Boolean, enabled: Boolean, onGallery: () -> Unit,
 }
 
 @Composable
-fun ActionButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+fun ActionButton(
+    label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true,
+    containerColor: Color = Color.Transparent, contentColor: Color = Color.White,
+) {
     val haptic = LocalHapticFeedback.current
     Button(onClick = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); onClick() },
         modifier = modifier.fillMaxWidth().heightIn(min = 56.dp)
             .clip(CaptureRadii.pill).background(CaptureGradients.action, alpha = if (enabled) 1f else .35f),
         enabled = enabled, shape = CaptureRadii.pill,
-        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent, contentColor = Color.White, disabledContainerColor = Color.Transparent)) {
+        colors = ButtonDefaults.buttonColors(containerColor = containerColor, contentColor = contentColor, disabledContainerColor = Color.Transparent)) {
         Text(label, style = MaterialTheme.typography.titleMedium)
     }
 }
