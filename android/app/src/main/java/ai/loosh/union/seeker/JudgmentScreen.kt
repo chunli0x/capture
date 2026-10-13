@@ -24,7 +24,7 @@ import androidx.compose.ui.unit.dp
 
 /**
  * The judgment product screen: a judge compares two model outputs (A/B) or rates
- * one 1-5, with a first-class "can't tell". Test $SKR on devnet.
+ * one 1-5, with a first-class "can't tell". Earns test USDC; bond is test $SKR.
  */
 @Composable
 fun JudgmentScreen(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit) {
@@ -42,13 +42,12 @@ fun JudgmentScreen(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit) {
             EditorialHeading("JUDGE.")
             Text(
                 "Compare two model outputs and pick the better one. Consensus-aligned judges earn " +
-                    "test \$SKR on devnet.",
+                    "test USDC on devnet.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MutedGray,
                 textAlign = TextAlign.Center,
             )
             JudgeStatsCard(s)
-            JudgeTierLadder(judgeLevelFrom(s.judgeAgreementRate))
             if (s.judgePair == null) {
                 EmptyCard(s, vm, onBond)
             } else {
@@ -68,7 +67,7 @@ private fun JudgeStatsCard(s: PilotState) {
             color = CaptureInk,
         )
         Text(
-            "${s.judgeJudgedCount} judged · ${formatSkr(s.judgeStakedSkr)} SKR staked · ${s.judgeWarnings} warnings",
+            "${s.judgeJudgedCount} judged · ${formatToken(s.judgeStakedSkr)} SKR staked · ${s.judgeWarnings} warnings",
             style = MaterialTheme.typography.bodySmall,
             color = MutedGray,
         )

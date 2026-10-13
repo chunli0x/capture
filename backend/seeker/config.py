@@ -15,28 +15,29 @@ class Settings(BaseSettings):
     usdc_mint: str
     skr_mint: str
     verifier_key_file: Path
-    # Devnet treasury: holds the SKR mint authority (the /bond/faucet mint and
-    # the settle_skr payout). Optional (0600, gitignored). Unset -> the on-chain
-    # mint is unavailable and the backend fails closed instead of fabricating it.
+    # Devnet treasury: holds the SKR mint authority (the /bond/faucet bond mint)
+    # and the USDC mint authority (the settle_usdc payout). Optional (0600,
+    # gitignored). Unset -> the on-chain mint is unavailable and the backend
+    # fails closed instead of fabricating it.
     treasury_key_file: Path | None = None
     session_seconds: int = 3600
     min_bond: int = Field(default=1_000_000, gt=0, le=1_000_000_000_000)
 
     # ---- Judgment product (RLHF preference judging) ----
-    # Consensus-gated pay in test $SKR. All are starting hypotheses (incentive
-    # spec §8): tune against real agreement data, not once.
+    # Consensus-gated pay in test USDC (1:1 USD, 6 decimals). All are starting
+    # hypotheses (incentive spec §8): tune against real agreement data, not once.
     judge_k: int = Field(default=3, gt=0)
     calibration_n: int = Field(default=10, gt=0)
     judge_window: int = Field(default=100, gt=0)
     judge_slash_floor: float = 0.45
     judge_slash_min_judged: int = Field(default=20, gt=0)
-    # Payout in SKR base units (6 decimals). The treasury keypair is the SKR mint
-    # authority; settlement mints test SKR to the judge (devnet faucet-equivalent).
-    # USD anchor (incentive spec §8): 1 SKR ≈ $0.02. So:
-    #   judge_base_skr = 1 SKR      = $0.02 per aligned judgment (× level multiplier)
-    #   judge_flat_skr = 0.25 SKR   = $0.005 flat "can't tell" / calibration reward
-    judge_base_skr: int = Field(default=1_000_000, gt=0)
-    judge_flat_skr: int = Field(default=250_000, gt=0)
+    # Payout in USDC base units (6 decimals). The treasury keypair is the USDC
+    # mint authority; settlement mints test USDC to the judge. The bond stays
+    # $SKR (the slashable collateral). So:
+    #   judge_base_usdc = 0.02 USDC  = $0.02 per aligned judgment (× level multiplier)
+    #   judge_flat_usdc = 0.005 USDC = $0.005 flat "can't tell"
+    judge_base_usdc: int = Field(default=20_000, gt=0)
+    judge_flat_usdc: int = Field(default=5_000, gt=0)
     # Cap on flat "can't tell" payments a judge can earn per rolling window,
     # to bound abstention farming (finding #12): three colluding judges can
     # otherwise send "can't tell" on every fresh pair and collect flat without

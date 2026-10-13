@@ -189,6 +189,7 @@ def create_app(settings: Settings, *, chain=None):
                 "test_tokens": True,
                 "dataset_bias": "majority-preference",
                 "skr_mint": settings.skr_mint,
+                "usdc_mint": settings.usdc_mint,
                 "program_id": settings.program_id,
                 "treasury": (
                     str(chain.treasury.pubkey())
@@ -200,7 +201,7 @@ def create_app(settings: Settings, *, chain=None):
                     if getattr(chain, "verifier", None) is not None
                     else None
                 ),
-                "skr_payout": (
+                "usdc_payout": (
                     "ready" if getattr(chain, "treasury", None) is not None else "unavailable"
                 ),
             },
@@ -508,7 +509,7 @@ def create_app(settings: Settings, *, chain=None):
             .where(
                 Judgment.wallet == wallet,
                 Judgment.choice == "cant_tell",
-                Judgment.earned_skr > 0,
+                Judgment.earned_usdc > 0,
             )
         ) or 0
 
@@ -527,14 +528,14 @@ def create_app(settings: Settings, *, chain=None):
         return [j for j in rows if j.choice in ("a", "b")]
 
     def _settle_judgment_obligation(j, pair_id):
-        """Mint ``j.earned_skr`` to ``j.wallet`` and confirm it, then clear the
+        """Mint ``j.earned_usdc`` to ``j.wallet`` and confirm it, then clear the
         settling flag. Idempotent: the memo is the judgment_id, so a retry of
         the same obligation produces a distinct transaction from any other
         obligation (finding #3), and a successful confirm clears settling so the
         next reconciliation does not re-mint (finding #1). Returns True on
         settle, False on a transport failure (obligation stays settling=True)."""
         try:
-            sig = chain.settle_skr(j.wallet, j.earned_skr, memo=j.judgment_id)
+            sig = chain.settle_usdc(j.wallet, j.earned_usdc, memo=j.judgment_id)
         except ChainUnavailable:
             return False
         with database.transaction() as db:
@@ -764,7 +765,7 @@ def create_app(settings: Settings, *, chain=None):
                     payouts = []
                     for w in aligned:
                         lvl = judge_level_for(rolling_agreement(db, w))
-                        payouts.append((w, int(settings.judge_base_skr * judge_rate_multiplier(lvl))))
+                        payouts.append((w, int(settings.judge_base_usdc * judge_rate_multiplier(lvl))))
                     payout_map = dict(payouts)
                     for j in db.scalars(
                         select(Judgment).where(
@@ -773,7 +774,7 @@ def create_app(settings: Settings, *, chain=None):
                     ).all():
                         j.aligned = j.wallet in aligned
                         if j.aligned:
-                            j.earned_skr = payout_map[j.wallet]
+                            j.earned_usdc = payout_map[j.wallet]
                             j.settling = True
                     pair.status = "resolving"
                     claim = {
@@ -797,7 +798,7 @@ def create_app(settings: Settings, *, chain=None):
                         if settings.judge_flat_cap > 0 and earned >= settings.judge_flat_cap:
                             j.consumed = True
                             continue
-                        j.earned_skr = settings.judge_flat_skr
+                        j.earned_usdc = settings.judge_flat_usdc
                         j.settling = True
                 if j is not None and j.settling:
                     _settle_judgment_obligation(j, pair_id)
@@ -818,7 +819,7 @@ def create_app(settings: Settings, *, chain=None):
         if failed:
             fail(
                 503,
-                "SKR payout pending for some judges; retry to reconcile",
+                "USDC payout pending for some judges; retry to reconcile",
             )
         with database.transaction() as db:
             pair = lock(db, JudgmentPair, pair_id)
@@ -849,12 +850,12 @@ def create_app(settings: Settings, *, chain=None):
             level = judge_level_info(actor.agreement_rate)
             in_progress = (not actor.calibrated) and 0 < answered < settings.calibration_n
             earned = db.scalar(
-                select(func.coalesce(func.sum(Judgment.earned_skr), 0)).where(
+                select(func.coalesce(func.sum(Judgment.earned_usdc), 0)).where(
                     Judgment.wallet == actor.wallet
                 )
             )
             settled = db.scalar(
-                select(func.coalesce(func.sum(Judgment.earned_skr), 0)).where(
+                select(func.coalesce(func.sum(Judgment.earned_usdc), 0)).where(
                     Judgment.wallet == actor.wallet,
                     Judgment.payout_signature.is_not(None),
                 )
@@ -873,8 +874,8 @@ def create_app(settings: Settings, *, chain=None):
                 "rate_multiplier": level["rate_multiplier"],
                 "staked_skr": actor.staked_skr,
                 "warnings": actor.warnings,
-                "earned_skr": earned,
-                "settled_skr": settled,
+                "earned_usdc": earned,
+                "settled_usdc": settled,
             }
 
     @app.get("/batch/{batch_id}/dataset")

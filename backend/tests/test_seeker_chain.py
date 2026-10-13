@@ -213,7 +213,7 @@ def test_find_signature_paginates_beyond_first_100(chain, payer):
 def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
     # Regression: the treasury is a Keypair (not a Pubkey), and the SPL
     # instruction params take pubkeys while _sign_and_send signs with the
-    # Keypair. This exercises both faucet and settle_skr end to end.
+    # Keypair. This exercises both faucet and settle_usdc end to end.
     treasury = Keypair()
     p = tmp_path / "treasury.json"
     p.write_text(json.dumps(list(bytes(treasury))))
@@ -229,7 +229,7 @@ def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
         if method == "sendTransaction":
             return "sig_" + method
         if method == "getSignatureStatuses":
-            # confirm success so settle_skr's _confirm_sent passes
+            # confirm success so settle_usdc's _confirm_sent passes
             return {"value": [{"err": None, "confirmationStatus": "finalized"}]}
         raise AssertionError(f"unexpected rpc method: {method}")
 
@@ -238,7 +238,7 @@ def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
     sig = chain.faucet(str(worker.pubkey()))
     assert sig == "sig_sendTransaction"
     # Settlement mints test SKR to the judge (mint authority = treasury).
-    sig = chain.settle_skr(str(worker.pubkey()), 100_000, memo="judgment-1")
+    sig = chain.settle_usdc(str(worker.pubkey()), 100_000, memo="judgment-1")
     assert sig == "sig_sendTransaction"
 
     # Both produced exactly two sendTransaction calls (one each) and the

@@ -174,7 +174,7 @@ pub mod seeker_bounty {
         Ok(())
     }
 
-    /// Record a payment id so a settle_skr retry is idempotent (finding D).
+    /// Record a payment id so a settle_usdc retry is idempotent (finding D).
     /// The mint authority records the id BEFORE minting; a retry whose payment
     /// account already exists must skip the mint. Append-only via `init`.
     pub fn record_payment(

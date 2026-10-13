@@ -1,6 +1,6 @@
-"""Migration 0012 — durable $SKR payout journal (finding 10 #1).
+"""Migration 0012 — durable USDC payout journal (finding 10 #1).
 
-Adds ``judgments.settling``: an earned-SKR obligation that is committed to the
+Adds ``judgments.settling``: an earned-USDC obligation that is committed to the
 ledger before its mint transaction broadcasts. Without it, a partial payout (one
 judge paid, the next settle raises ChainUnavailable) is lost — the pair returns
 to ``collecting`` and a later re-resolution pays the already-paid judge again.

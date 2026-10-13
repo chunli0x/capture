@@ -45,7 +45,7 @@ fun OnboardingScreen(onDone: () -> Unit) {
             CaptureWordmark()
             EditorialHeading("HOW IT WORKS.")
             Text(
-                "You judge a vision model's outputs. Agree with the crowd and earn test \$SKR on devnet.",
+                "You judge a vision model's outputs. Agree with the crowd and earn test USDC on devnet.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = CaptureInk,
                 textAlign = TextAlign.Start,
@@ -139,7 +139,7 @@ private fun EarningsCard() {
             color = CaptureInk,
         )
         Text(
-            "Test \$SKR on devnet — not real value.",
+            "Test USDC on devnet — not real value.",
             style = MaterialTheme.typography.labelSmall,
             color = MutedGray,
         )

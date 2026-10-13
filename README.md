@@ -10,9 +10,9 @@ with trust priced into every judgment through a slashable **test-SKR** stake.
 ## The judgment product
 
 Humans judge a vision model's outputs for RLHF. The incentive is
-**consensus-gated pay in test $SKR**: every pair goes to K=3 judges; the
+**consensus-gated pay in test USDC**: every pair goes to K=3 judges; the
 majority pick (or the crowd median for ratings) wins, aligned judges are paid
-(`base_skr × level multiplier`), dissenters earn nothing, and **"can't tell" is
+(`base_usdc × level multiplier`), dissenters earn nothing, and **"can't tell" is
 a first-class answer** that re-routes the pair instead of forcing a guess.
 
 The full loop:
@@ -24,7 +24,7 @@ The full loop:
 3. **Resolve.** K substantive votes resolve the pair. Neutral votes ("can't
    tell"/"tie") never count as dissent and never inflate the quorum. A genuine
    split adds one tiebreaker judge.
-4. **Pay or slash.** Aligned judges earn test-SKR (journaled before broadcast,
+4. **Pay or slash.** Aligned judges earn test-USDC (journaled before broadcast,
    idempotent per judgment). A judge whose rolling agreement rate stays below a
    floor runs the two-strike warn/slash ladder on-chain (full bond forfeit on
    the second strike).
@@ -37,8 +37,8 @@ A judge-accuracy ladder (agreement-rate driven) raises the rate multiplier from
 
 Honest notes (state, do not hide):
 
-- **Test tokens.** $SKR here is **devnet/test $SKR** for the hackathon. It is not
-  real value. The UI and `/health` both say so.
+- **Test tokens.** Pay is **devnet/test USDC**; the bond is **devnet/test $SKR**.
+  Neither is real value. The UI and `/health` both say so.
 - **Majority-preference bias.** RLHF on majority preference flattens minority and
   edge preferences. This is fine for a first pass, but the dataset does **not**
   represent all humans. Do not claim it does.
@@ -49,8 +49,7 @@ Honest notes (state, do not hide):
 
 A judge's **base rate is $0.02 per aligned judgment**, times their level
 multiplier. Dissenters earn $0. "Can't tell" earns a flat **$0.005** and
-re-routes the pair. These are $SKR-denominated USD terms; the hackathon pays in
-**test $SKR on devnet** (1 test SKR anchors to $0.02).
+re-routes the pair. Payout is in **test USDC on devnet** (USDC is 1:1 USD).
 
 | Level | Agreement | Rate | ~Earns at 240/hr |
 |---|---|---|---|
@@ -76,24 +75,26 @@ Whole-dataset cost (10,000 pairs at K=3): **~$540** total payout, versus ~$9,000
 for enterprise RLHF (~$0.30/judgment) or ~125 hours of manual labeling. $540 and
 zero operator time replaces $9k or 125 hours.
 
-The flywheel: judge → earn $SKR → stake more → unlock higher tiers → earn
+The flywheel: judge → earn USDC → stake more $SKR → unlock higher tiers → earn
 faster. The token accrues to people who are good at judging, and they reinvest
 it to earn more.
 
 ## Tokens & settlement
 
-- **test-SKR** — one token, three jobs: **stake** (deposit to unlock paid
-  judging), **reward** (consensus-aligned judgments earn SKR), **slash** (lose
-  stake for systematic disagreement). A devnet fixture mint we control.
+- **test-USDC** — the **payout**: consensus-aligned judgments earn USDC. A
+  devnet fixture mint we control.
+- **test-SKR** — the **bond**: deposit to unlock paid judging, and the **slash**
+  collateral (lose stake for systematic disagreement). A devnet fixture mint we
+  control.
 
 The production SKR token is a separate mainnet mint
 (`SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3`), not used in the devnet demo. The
 demo mints test-SKR because we hold its mint authority; the mainnet token's mint
 authority is not ours, so it is swapped in post-hackathon, not before.
 
-Settlement is **real on-chain transfer**: the SKR bond escrows on-chain at
-deposit, aligned judges are paid test-SKR on agreement, and a systematic
-disagreement warns then slashes the bond to a penalty vault.
+Settlement is **real on-chain**: the SKR bond escrows on-chain at deposit,
+aligned judges are paid test-USDC on agreement (minted by the treasury), and a
+systematic disagreement warns then slashes the SKR bond to a penalty vault.
 
 ## Status
 

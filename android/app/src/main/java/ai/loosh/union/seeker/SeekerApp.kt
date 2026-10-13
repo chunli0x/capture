@@ -42,14 +42,15 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 
 /**
- * The judgment product app: sign in, calibrate, stake, judge, and earn test
- * $SKR for consensus-aligned preferences.
+ * The judgment product app: sign in, stake, judge, and earn test USDC for
+ * consensus-aligned preferences (slashable bond in test $SKR).
  */
 @Composable
 fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
     val s by vm.state.collectAsState()
     var showBond by remember { mutableStateOf(false) }
     var showBalances by remember { mutableStateOf(false) }
+    var showCalibration by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("seeker.api", Context.MODE_PRIVATE) }
     var onboarded by remember { mutableStateOf(prefs.getBoolean("onboarded", false)) }
@@ -76,13 +77,21 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
                 s.wallet.isEmpty() -> SignInScreen(s, vm, sender)
                 showBond -> BondScreen(s, vm, sender, onBack = { showBond = false })
                 showBalances -> BalanceScreen(s, vm, onBack = { showBalances = false })
+                showCalibration -> CalibrationScreen(s, vm, onBack = { showCalibration = false })
                 else -> {
                     JudgmentScreen(s, vm, onBond = { showBond = true })
-                    TextButton(
-                        onClick = { showBalances = true },
-                        enabled = !s.busy,
-                        modifier = Modifier.align(Alignment.TopStart).safeDrawingPadding().padding(12.dp),
-                    ) { Text("Balances", color = MutedGray) }
+                    Column(
+                        Modifier.align(Alignment.TopStart).safeDrawingPadding().padding(12.dp),
+                    ) {
+                        TextButton(
+                            onClick = { showCalibration = true },
+                            enabled = !s.busy,
+                        ) { Text("Calibrate", color = MutedGray) }
+                        TextButton(
+                            onClick = { showBalances = true },
+                            enabled = !s.busy,
+                        ) { Text("Balances", color = MutedGray) }
+                    }
                     TextButton(
                         onClick = { vm.logout() },
                         enabled = !s.busy,
@@ -110,7 +119,7 @@ private fun SignInScreen(s: PilotState, vm: SeekerViewModel, sender: ActivityRes
             EditorialHeading("SIGN IN.")
             Text(
                 "Compare two model outputs and pick the better one. Consensus-aligned judges " +
-                    "earn test \$SKR on devnet.",
+                    "earn test USDC on devnet.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = CaptureInk,
             )

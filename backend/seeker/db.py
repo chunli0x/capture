@@ -147,9 +147,9 @@ class Judgment(Base):
     # "cant_tell"/"tie" vote). Consumed judgments do not re-trigger a reroute
     # and are excluded from the final consensus denominator.
     consumed: Mapped[bool] = mapped_column(Boolean, default=False)
-    earned_skr: Mapped[int] = mapped_column(BigInteger, default=0)
+    earned_usdc: Mapped[int] = mapped_column(BigInteger, default=0)
     payout_signature: Mapped[str | None] = mapped_column(String(88))
-    # settling == the earned_skr obligation was committed to the ledger but its
+    # settling == the earned_usdc obligation was committed to the ledger but its
     # mint transaction has not yet been confirmed on-chain. Payout obligations
     # are persisted BEFORE broadcast so a partial payout can never be lost or
     # double-paid (finding 10 #1); cleared once the mint confirms.

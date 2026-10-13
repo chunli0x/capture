@@ -64,9 +64,10 @@ class Chain:
         )
         self.config = self.pda(b"config")
         self.penalty_vault = self.pda(b"penalty-vault", bytes(self.config))
-        # Devnet treasury: holds the SKR mint authority (the /bond/faucet mint
-        # and the settle_skr payout). Absent means the on-chain mint is
-        # unavailable and the backend fails closed instead of fabricating it.
+        # Devnet treasury: holds the SKR mint authority (the /bond/faucet mint)
+        # and the USDC mint authority (the settle_usdc payout). Absent means the
+        # on-chain mint is unavailable and the backend fails closed instead of
+        # fabricating it.
         self.treasury = self._load_key(getattr(settings, "treasury_key_file", None))
 
     @staticmethod
@@ -301,11 +302,12 @@ class Chain:
         )
         return self._sign_and_send(instructions, payer)
 
-    def settle_skr(self, wallet, amount, memo=None):
-        """Pay ``amount`` test SKR to the judge's SKR ATA. The treasury keypair
-        is the SKR mint authority, so settlement mints test SKR to the judge
-        (devnet faucet-equivalent; no separate SKR funding step to deadlock on).
-        Server-signed. Fail closed when the treasury is not configured.
+    def settle_usdc(self, wallet, amount, memo=None):
+        """Pay ``amount`` test USDC to the judge's USDC ATA. The treasury
+        keypair is the USDC mint authority, so settlement mints test USDC to the
+        judge (devnet faucet-equivalent; no separate USDC funding step to
+        deadlock on). Server-signed. Fail closed when the treasury is not
+        configured.
 
         ``memo`` (optional) makes distinct logical payments produce distinct
         transactions: two equal mints to the same wallet within one blockhash
@@ -313,16 +315,16 @@ class Chain:
         execution. Callers pass a unique per-judgment id so each reward is its
         own transaction."""
         if self.treasury is None:
-            raise ChainUnavailable("SKR treasury (mint authority) is not configured")
+            raise ChainUnavailable("USDC treasury (mint authority) is not configured")
         worker = Pubkey.from_string(wallet)
         payer = self.treasury
-        instructions = [ata_instruction(payer.pubkey(), worker, self.skr)]
+        instructions = [ata_instruction(payer.pubkey(), worker, self.usdc)]
         instructions.append(
             mint_to(
                 MintToParams(
                     program_id=TOKEN_PROGRAM_ID,
-                    mint=self.skr,
-                    dest=get_associated_token_address(worker, self.skr),
+                    mint=self.usdc,
+                    dest=get_associated_token_address(worker, self.usdc),
                     mint_authority=payer.pubkey(),
                     amount=amount,
                     signers=[payer.pubkey()],

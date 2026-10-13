@@ -4,15 +4,16 @@ Status: 2026-10-12. PM-authored. Every builder (backend, blockchain-dev, front-e
 reads THIS file and implements to it. Do not invent different field names or paths.
 If a field here is wrong, change it HERE and re-read; do not fork the contract.
 
-Product = Capture. Device = Android. Currency = test $SKR (devnet only).
+Product = Capture. Device = Android. Payout = test USDC (devnet); bond/slash =
+test $SKR (devnet).
 Public copy stays strictly product-focused ("judge a vision model's outputs for
 RLHF"); do not disclose the underlying training use. Majority-preference bias
 must be stated, never hidden. "can't tell" is first-class and never penalized.
 
 Pinned identifiers (devnet):
 - program id:  5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV  (seeker-bounty)
-- skr mint:    3aGKaVL7GpcTcTuKjkyirnVeyNG1JGFNyGGueu8mAGbM  (devnet TEST-SKR, working)
-- usdc mint:   TXtqUVPDj6JuDoeyFJvwuUqy5jGYTgF98kEkbeN6U8Z   (capture path only, dormant)
+- skr mint:    3aGKaVL7GpcTcTuKjkyirnVeyNG1JGFNyGGueu8mAGbM  (devnet TEST-SKR, bond/slash)
+- usdc mint:   TXtqUVPDj6JuDoeyFJvwuUqy5jGYTgF98kEkbeN6U8Z   (devnet TEST-USDC, payout)
 
 Real mainnet token (NOT used on devnet; do not wire into the demo):
 - SKR (mainnet): SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3, 6 decimals,
@@ -31,12 +32,12 @@ Real mainnet token (NOT used on devnet; do not wire into the demo):
   (levels 1..4). See §6.
 - Slash floor: rolling agreement_rate < 0.45 AND judged_count >= 20 ->
   trigger two-strike warn/slash. Config `judge_slash_floor`, `judge_slash_min_judged`.
-- Payout (SKR base units, 6 decimals, config-backed): `judge_base_skr` (per aligned
-  judgment), `judge_flat_skr` (flat "can't tell" / calibration reward). USD anchor:
-  1 SKR ≈ $0.02 (incentive spec §8). Devnet defaults: `judge_base_skr = 1_000_000`
-  (= 1 SKR ≈ $0.02/aligned judgment), `judge_flat_skr = 250_000`
-  (= 0.25 SKR ≈ $0.005 flat). Level multipliers (§6) apply on top of base. These
-  are starting hypotheses per incentive spec §8 — tune against real agreement data.
+- Payout (USDC base units, 6 decimals, config-backed): `judge_base_usdc` (per aligned
+  judgment), `judge_flat_usdc` (flat "can't tell"). USDC is 1:1 USD (6 decimals).
+  Devnet defaults: `judge_base_usdc = 20_000` (= 0.02 USDC = $0.02/aligned judgment),
+  `judge_flat_usdc = 5_000` (= 0.005 USDC = $0.005 flat). Level multipliers (§6)
+  apply on top of base. These are starting hypotheses per incentive spec §8 —
+  tune against real agreement data.
 
 ## 2. Data model (exact field names)
 
@@ -89,10 +90,10 @@ POST /judge/{pair_id}
   body: {"choice": "a"|"b"|"tie"|"cant_tell"|null, "rating": 1..5|null}
   (preference -> choice required; rating -> rating required)
   -> 200 {"status": "submitted"} on a non-resolving submit, or
-     {"status": "resolved", "aligned": bool, "earned_skr": int, "preference": "a"|"b"|null}
+     {"status": "resolved", "aligned": bool, "earned_usdc": int, "preference": "a"|"b"|null}
   (idempotent: same (pair_id,wallet) already answered returns 409; re-submit of the
    exact same answer returns 200 with current status, not a double pay.)
-  "cant_tell" -> pair rerouted (status "rerouted", k incremented), flat_skr earned,
+  "cant_tell" -> pair rerouted (status "rerouted", k incremented), flat_usdc earned,
   never penalized, never forced to guess.
 
 GET /judge/stats
@@ -123,18 +124,19 @@ GET /batch/{id}/dataset
   }
 
 /health additions (MUST be present):
-  - "skr_mint", "program_id", "treasury" (SKR mint-authority/treasury pubkey),
-    "slash_authority" (verifier pubkey), "skr_payout": "ready"|"unavailable",
+  - "skr_mint" (bond), "usdc_mint" (payout), "program_id",
+    "treasury" (SKR+USDC mint-authority/treasury pubkey),
+    "slash_authority" (verifier pubkey), "usdc_payout": "ready"|"unavailable",
     "test_tokens": true, "dataset_bias": "majority-preference".
 
 ## 4. Consensus scoring (backend owns)
 
 On judgment submit, when a pair reaches K judgments:
 1. "cant_tell" is neutral: no vote, pair -> "rerouted", k += 1 (more judges).
-   flat_skr to the "cant_tell" judge.
+   flat_usdc to the "cant_tell" judge.
 2. Majority over a/b. Tie/even split -> "rerouted", k += 1.
 3. Rating: median; aligned = |rating - median| <= 1.
-4. Pay aligned judges judge_base_skr * level_multiplier ($SKR). Dissenters get 0.
+4. Pay aligned judges judge_base_usdc * level_multiplier (USDC). Dissenters get 0.
 5. Record preference (majority), agreement = aligned/voting, confidence =
    agreement * min(1.0, voting/k). Mark pair "resolved".
 agreement_rate = rolling window (last 100 resolved) fraction aligned.
@@ -155,16 +157,16 @@ passing calibration. The calibration_pair/calibration_answer tables and the
 | 3     | Expert    | >= 0.93        | 1.50       |
 | 4     | Pathfinder| >= 0.97        | 2.00       |
 
-Payout = judge_base_skr * multiplier.
+Payout = judge_base_usdc * multiplier.
 
-## 7. On-chain $SKR payout (backend owns; chain.py)
+## 7. On-chain USDC payout (backend owns; chain.py)
 
-Add `chain.settle_skr(wallet, amount)` — pays amount SKR to the judge's SKR ATA,
-server-signed. The treasury keypair is the SKR mint authority; prefer a transfer
-from the treasury's SKR ATA, and if the treasury holds no SKR balance, mint_to
-the payout (mint authority) so the demo never deadlocks on a funding step. Fail
-closed (ChainUnavailable -> 503) and never record earnings without a confirmed
-signature. Reuse the settle_usdc durability pattern (reserve -> broadcast ->
+Add `chain.settle_usdc(wallet, amount)` — pays amount USDC to the judge's USDC
+ATA, server-signed. The treasury keypair is the USDC mint authority; prefer a
+transfer from the treasury's USDC ATA, and if the treasury holds no USDC balance,
+mint_to the payout (mint authority) so the demo never deadlocks on a funding
+step. Fail closed (ChainUnavailable -> 503) and never record earnings without a
+confirmed signature. Reuse the settle durability pattern (reserve -> broadcast ->
 confirm -> clear) so a lost tx cannot lose or double-pay.
 
 ## 8. Merkle provenance — backend computes, on-chain anchor deferred
@@ -205,7 +207,7 @@ document it in README as a hackathon-grade provenance anchor, tunable.
 
 ## 9. Hard rules (both sides)
 
-- Honest devnet: "$SKR is test $SKR" in UI and /health.
+- Honest devnet: "test USDC payout + test $SKR bond" in UI and /health.
 - Majority-preference bias stated in README.
 - "can't tell" first-class, never penalized.
 - Public copy stays strictly product-focused ("judge a vision model's outputs for
