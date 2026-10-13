@@ -4,23 +4,15 @@ Status: 2026-10-12. PM-authored. Every builder (backend, blockchain-dev, front-e
 reads THIS file and implements to it. Do not invent different field names or paths.
 If a field here is wrong, change it HERE and re-read; do not fork the contract.
 
-Product = Capture. Device = Android. Payout = test USDC (devnet); bond/slash =
-test $SKR (devnet).
+Product = Capture. Device = Android. Currency = test USDC (devnet).
 Public copy stays strictly product-focused ("judge a vision model's outputs for
 RLHF"); do not disclose the underlying training use. Majority-preference bias
 must be stated, never hidden. "can't tell" is first-class and never penalized.
 
 Pinned identifiers (devnet):
 - program id:  5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV  (seeker-bounty)
-- skr mint:    3aGKaVL7GpcTcTuKjkyirnVeyNG1JGFNyGGueu8mAGbM  (devnet TEST-SKR, bond/slash)
-- usdc mint:   TXtqUVPDj6JuDoeyFJvwuUqy5jGYTgF98kEkbeN6U8Z   (devnet TEST-USDC, payout)
+- usdc mint:   TXtqUVPDj6JuDoeyFJvwuUqy5jGYTgF98kEkbeN6U8Z   (devnet TEST-USDC, payout + bond + slash)
 
-Real mainnet token (NOT used on devnet; do not wire into the demo):
-- SKR (mainnet): SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3, 6 decimals,
-  mint authority FMNn5sorEBbEoGQGrh7y3xSbYGt116F12FpL2VTsohiw. This is the eventual
-  production token. The devnet demo keeps using the devnet TEST-SKR mint above;
-  we do not hold that mainnet mint authority, so it cannot be minted for a devnet
-  payout. Branding says "$SKR" everywhere; the address swap happens post-hackathon.
 
 ---
 
@@ -65,7 +57,7 @@ judgment_batch:
 
 Extend Actor (NOT a separate judge table — matches the existing denormalization):
   calibrated (bool, default false), agreement_rate (float, default 0.0),
-  judged_count (int, default 0), staked_skr (int, default 0), warnings (int, default 0)
+  judged_count (int, default 0), staked_usdc (int, default 0), warnings (int, default 0)
   (calibration progress is derived from calibration_pair rows answered, not a column.)
 
 ## 3. API surface
@@ -104,11 +96,11 @@ GET /judge/stats
     "judged_count": int,
     "level": int, "level_name": "Scout",
     "rate_multiplier": float,
-    "staked_skr": int,
+    "staked_usdc": int,
     "warnings": int
   }
 
-POST /bond/faucet  (exists — mints test SKR on-chain, idempotent)
+POST /bond/faucet  (exists — mints test USDC on-chain, idempotent)
 POST /bond/deposit (exists — real deposit_bond escrow; sets bonded+worker on confirm)
 POST /bond/withdraw (exists — real withdraw_bond; clears bonded on confirm)
 
@@ -124,8 +116,8 @@ GET /batch/{id}/dataset
   }
 
 /health additions (MUST be present):
-  - "skr_mint" (bond), "usdc_mint" (payout), "program_id",
-    "treasury" (SKR+USDC mint-authority/treasury pubkey),
+  - "usdc_mint", "program_id",
+    "treasury" (USDC mint-authority/treasury pubkey),
     "slash_authority" (verifier pubkey), "usdc_payout": "ready"|"unavailable",
     "test_tokens": true, "dataset_bias": "majority-preference".
 
@@ -207,7 +199,7 @@ document it in README as a hackathon-grade provenance anchor, tunable.
 
 ## 9. Hard rules (both sides)
 
-- Honest devnet: "test USDC payout + test $SKR bond" in UI and /health.
+- Honest devnet: "test USDC (payout + bond)" in UI and /health.
 - Majority-preference bias stated in README.
 - "can't tell" first-class, never penalized.
 - Public copy stays strictly product-focused ("judge a vision model's outputs for

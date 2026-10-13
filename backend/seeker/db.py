@@ -46,20 +46,20 @@ class Actor(Base):
     # liveness session (see /liveness/complete). Proof-of-human, not bank-grade.
     liveness_completed: Mapped[bool] = mapped_column(Boolean, default=False)
     # Bond gate (all server-recorded): bonded == the devnet bond was deposited;
-    # skr_funded == the devnet test-SKR faucet ran.
+    # usdc_funded == the devnet test-USDC faucet ran.
     bonded: Mapped[bool] = mapped_column(Boolean, default=False)
-    skr_funded: Mapped[bool] = mapped_column(Boolean, default=False)
+    usdc_funded: Mapped[bool] = mapped_column(Boolean, default=False)
     # ---- Judgment product (RLHF preference judging) ----
     # calibrated == passed the N-pair calibration gate (unpaid) and may stake +
     # judge. agreement_rate == rolling fraction of resolved judgments this judge
     # was aligned on (last judge_window). judged_count == resolved judgments
-    # participated in. staked_skr == the SKR bond escrowed on deposit (mirror).
+    # participated in. staked_usdc == the USDC bond escrowed on deposit (mirror).
     # warnings == mirror of the on-chain bond.warnings ladder (0 clean, 1 warned,
     # >= 2 slashed).
     calibrated: Mapped[bool] = mapped_column(Boolean, default=False)
     agreement_rate: Mapped[float] = mapped_column(Float, default=0.0)
     judged_count: Mapped[int] = mapped_column(Integer, default=0)
-    staked_skr: Mapped[int] = mapped_column(BigInteger, default=0)
+    staked_usdc: Mapped[int] = mapped_column(BigInteger, default=0)
     warnings: Mapped[int] = mapped_column(Integer, default=0)
 
 

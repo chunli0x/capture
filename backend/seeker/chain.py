@@ -58,14 +58,13 @@ class Chain:
         self.settings = settings
         self.program = Pubkey.from_string(settings.program_id)
         self.usdc = Pubkey.from_string(settings.usdc_mint)
-        self.skr = Pubkey.from_string(settings.skr_mint)
         self.verifier = Keypair.from_bytes(
             bytes(json.loads(settings.verifier_key_file.read_text()))
         )
         self.config = self.pda(b"config")
         self.penalty_vault = self.pda(b"penalty-vault", bytes(self.config))
-        # Devnet treasury: holds the SKR mint authority (the /bond/faucet mint)
-        # and the USDC mint authority (the settle_usdc payout). Absent means the
+        # Devnet treasury: holds the USDC mint authority (the faucet, the bond,
+        # and the settle_usdc payout — one token, three jobs). Absent means the
         # on-chain mint is unavailable and the backend fails closed instead of
         # fabricating it.
         self.treasury = self._load_key(getattr(settings, "treasury_key_file", None))
@@ -115,19 +114,18 @@ class Chain:
         if not account or account["owner"] != str(self.program):
             raise ChainUnavailable("Escrow program has not been initialized")
         raw = base64.b64decode(account["data"][0], validate=True)
-        # Config layout (post slash_authority): discriminator(8) + admin(32) +
-        # verifier(32) + usdc_mint(32) + skr_mint(32) + min_bond(8) +
-        # slash_authority(32) == 176 bytes. slash_authority is the verifier key
-        # (the backend reuses it; no separate authority keypair).
+        # Config layout (single USDC mint): discriminator(8) + admin(32) +
+        # verifier(32) + usdc_mint(32) + min_bond(8) + slash_authority(32)
+        # == 144 bytes. slash_authority is the verifier key (the backend reuses
+        # it; no separate authority keypair).
         expected = (
             bytes(self.verifier.pubkey())
             + bytes(self.usdc)
-            + bytes(self.skr)
             + struct.pack("<Q", self.settings.min_bond)
             + bytes(self.verifier.pubkey())
         )
         if (
-            len(raw) != 176
+            len(raw) != 144
             or raw[:8] != discriminator("Config", "account")
             or raw[40:] != expected
         ):
@@ -144,14 +142,14 @@ class Chain:
         bond_vault = self.pda(b"bond-vault", bytes(worker))
         prefix = []
         if action in {"deposit", "withdraw"}:
-            prefix = [ata_instruction(who, who, self.skr)]
+            prefix = [ata_instruction(who, who, self.usdc)]
             accounts = [
                 meta(who, True, action == "deposit"),
                 meta(self.config),
-                meta(self.skr),
+                meta(self.usdc),
                 meta(bond, writable=action == "deposit"),
                 meta(bond_vault, writable=True),
-                meta(get_associated_token_address(who, self.skr), writable=True),
+                meta(get_associated_token_address(who, self.usdc), writable=True),
                 meta(TOKEN_PROGRAM_ID),
             ]
             if action == "deposit":
@@ -280,20 +278,20 @@ class Chain:
         return sig
 
     def faucet(self, wallet):
-        """Mint the minimum test-SKR bond to a wallet (SKR mint authority is
+        """Mint the minimum test-USDC bond to a wallet (USDC mint authority is
         the treasury). Returns the mint signature, or raises ChainUnavailable
         when the treasury keypair is not configured."""
         if self.treasury is None:
-            raise ChainUnavailable("SKR treasury (mint authority) is not configured")
+            raise ChainUnavailable("USDC treasury (mint authority) is not configured")
         worker = Pubkey.from_string(wallet)
         payer = self.treasury
-        instructions = [ata_instruction(payer.pubkey(), worker, self.skr)]
+        instructions = [ata_instruction(payer.pubkey(), worker, self.usdc)]
         instructions.append(
             mint_to(
                 MintToParams(
                     program_id=TOKEN_PROGRAM_ID,
-                    mint=self.skr,
-                    dest=get_associated_token_address(worker, self.skr),
+                    mint=self.usdc,
+                    dest=get_associated_token_address(worker, self.usdc),
                     mint_authority=payer.pubkey(),
                     amount=self.settings.min_bond,
                     signers=[payer.pubkey()],

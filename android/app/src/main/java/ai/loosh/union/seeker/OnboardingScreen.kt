@@ -63,7 +63,7 @@ fun OnboardingScreen(onDone: () -> Unit) {
 private fun FlowCard() {
     CapturePanel(Modifier.fillMaxWidth()) {
         Text("WHAT YOU DO", style = MaterialTheme.typography.labelMedium, color = CaptureAccentBright)
-        Step("1. Stake", "Deposit a slashable test-SKR bond.")
+        Step("1. Stake", "Deposit a slashable test-USDC bond.")
         Step("2. Judge", "Compare two outputs (A/B) or rate one 1-5.")
         Step("3. Earn", "Aligned judgments pay. Dissenters earn nothing.")
     }

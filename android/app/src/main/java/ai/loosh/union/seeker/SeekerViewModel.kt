@@ -55,11 +55,11 @@ data class PilotState(
     val error: String? = null,
     val status: AsyncStatus = AsyncStatus.Idle,
     val transient: String? = null,
-    // --- Bond (test-SKR stake) ---
-    val bondTestSkrUnits: Long = 0,
+    // --- Bond (test-USDC stake) ---
+    val bondTestUsdcUnits: Long = 0,
     val bonded: Boolean = false,
     val bondFunded: Boolean = false,
-    val judgeStakedSkr: Long = 0,
+    val judgeStakedUsdc: Long = 0,
     val judgeWarnings: Int = 0,
     // --- Judgment product (RLHF preference judging) ---
     val judgeCalibrated: Boolean = false,
@@ -256,10 +256,10 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-    // --- Bond (test-SKR stake) ---
+    // --- Bond (test-USDC stake) ---
 
     fun faucet() =
-        run("Requesting test SKR", "Test SKR funded") {
+        run("Requesting test USDC", "Test USDC funded") {
             post("/bond/faucet")
             mutable.update { it.copy(bondFunded = true) }
         }
@@ -317,10 +317,10 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         val pair = if (next.optString("kind", "none") == "none") null else next
         mutable.update {
             it.copy(
-                bondTestSkrUnits = me.optLong("bond_test_skr_units", 0),
+                bondTestUsdcUnits = me.optLong("bond_test_usdc_units", 0),
                 bonded = me.optBoolean("bonded", false),
-                bondFunded = me.optBoolean("skr_funded", false),
-                judgeStakedSkr = stats.optLong("staked_skr", 0),
+                bondFunded = me.optBoolean("usdc_funded", false),
+                judgeStakedUsdc = stats.optLong("staked_usdc", 0),
                 judgeWarnings = stats.optInt("warnings", 0),
                 judgePair = pair,
                 judgeCalibrated = stats.optBoolean("calibrated", false),

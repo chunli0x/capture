@@ -188,7 +188,6 @@ def create_app(settings: Settings, *, chain=None):
                 # Judgment product honesty (test tokens + provenance anchors).
                 "test_tokens": True,
                 "dataset_bias": "majority-preference",
-                "skr_mint": settings.skr_mint,
                 "usdc_mint": settings.usdc_mint,
                 "program_id": settings.program_id,
                 "treasury": (
@@ -263,11 +262,11 @@ def create_app(settings: Settings, *, chain=None):
             "wallet": actor.wallet,
             "over_18": actor.over_18,
             "liveness_completed": actor.liveness_completed,
-            "bond_test_skr_units": settings.min_bond,
+            "bond_test_usdc_units": settings.min_bond,
             "bonded": actor.bonded,
-            "skr_funded": actor.skr_funded,
+            "usdc_funded": actor.usdc_funded,
             "calibrated": actor.calibrated,
-            "staked_skr": actor.staked_skr,
+            "staked_usdc": actor.staked_usdc,
             "warnings": actor.warnings,
             **level,
         }
@@ -325,20 +324,20 @@ def create_app(settings: Settings, *, chain=None):
 
     @app.post("/bond/faucet")
     def bond_faucet(actor: Auth):
-        """Devnet test-SKR faucet ("Get test SKR"). Idempotent.
+        """Devnet test-USDC faucet ("Get test USDC"). Idempotent.
 
-        Mints the minimum bond on-chain (the treasury holds the SKR mint
-        authority) and only then records ``skr_funded``; a chain outage fails
+        Mints the minimum bond on-chain (the treasury holds the USDC mint
+        authority) and only then records ``usdc_funded``; a chain outage fails
         closed (503) so funding is never recorded for a mint that did not land."""
         with database.transaction() as db:
             actor = lock(db, Actor, actor.wallet)
-            if actor.skr_funded:
+            if actor.usdc_funded:
                 return {"funded": True, "already": True}
             try:
                 chain.faucet(actor.wallet)
             except ChainUnavailable as exc:
-                fail(503, f"Test-SKR faucet unavailable: {exc}")
-            actor.skr_funded = True
+                fail(503, f"Test-USDC faucet unavailable: {exc}")
+            actor.usdc_funded = True
         return {"funded": True, "already": False}
 
     @app.post("/bond/deposit")
@@ -348,8 +347,8 @@ def create_app(settings: Settings, *, chain=None):
         message via /transactions/{id}/confirm."""
         with database.transaction() as db:
             actor = lock(db, Actor, actor.wallet)
-            if not actor.skr_funded:
-                fail(409, "Get test SKR first")
+            if not actor.usdc_funded:
+                fail(409, "Get test USDC first")
             return prepare(db, "deposit", actor.wallet, actor)
 
     @app.post("/bond/withdraw")
@@ -373,8 +372,8 @@ def create_app(settings: Settings, *, chain=None):
         with database.transaction() as db:
             actor = lock(db, Actor, actor.wallet)
             if action == "deposit":
-                if not actor.skr_funded:
-                    fail(409, "Get test SKR first")
+                if not actor.usdc_funded:
+                    fail(409, "Get test USDC first")
             else:
                 if not actor.bonded:
                     fail(403, "Bond deposit required")
@@ -623,7 +622,7 @@ def create_app(settings: Settings, *, chain=None):
                 a.warnings = 2
                 a.bonded = False
                 a.calibrated = False
-                a.staked_skr = 0
+                a.staked_usdc = 0
 
     def _maybe_slash_agreement_farmers(judges):
         for wallet, _choice, _rating in judges:
@@ -641,7 +640,7 @@ def create_app(settings: Settings, *, chain=None):
         with database.transaction() as db:
             actor = lock(db, Actor, actor.wallet)
             if not actor.bonded:
-                return {"kind": "none", "calibrated": True, "reason": "deposit the SKR bond to judge"}
+                return {"kind": "none", "calibrated": True, "reason": "deposit the USDC bond to judge"}
             done = select(Judgment.pair_id).where(Judgment.wallet == actor.wallet)
             pair = db.scalars(
                 select(JudgmentPair)
@@ -702,7 +701,7 @@ def create_app(settings: Settings, *, chain=None):
         with database.transaction() as db:
             actor = lock(db, Actor, wallet)
             if not actor.bonded:
-                fail(403, "Deposit the SKR bond to judge")
+                fail(403, "Deposit the USDC bond to judge")
             pair = lock(db, JudgmentPair, pair_id)
             if pair.status == "resolved":
                 return {"status": "resolved", "preference": pair.preference}
@@ -715,9 +714,9 @@ def create_app(settings: Settings, *, chain=None):
             # judgment: `bond_warnings` raises if the bond account is gone.
             try:
                 if chain.bond_warnings(wallet) >= 2:
-                    fail(403, "Bond is slashed; deposit a fresh SKR bond to judge")
+                    fail(403, "Bond is slashed; deposit a fresh USDC bond to judge")
             except ChainUnavailable:
-                fail(403, "Bond is not active on-chain; deposit the SKR bond to judge")
+                fail(403, "Bond is not active on-chain; deposit the USDC bond to judge")
             choice, rating = _validate_against_task(pair.task_type, body)
             existing = db.scalar(
                 select(Judgment).where(
@@ -872,7 +871,7 @@ def create_app(settings: Settings, *, chain=None):
                 "level": level["level"],
                 "level_name": level["level_name"],
                 "rate_multiplier": level["rate_multiplier"],
-                "staked_skr": actor.staked_skr,
+                "staked_usdc": actor.staked_usdc,
                 "warnings": actor.warnings,
                 "earned_usdc": earned,
                 "settled_usdc": settled,
@@ -985,11 +984,11 @@ def create_app(settings: Settings, *, chain=None):
             if p.action == "deposit":
                 worker = lock(db, Actor, p.wallet)
                 worker.bonded = True
-                worker.staked_skr = settings.min_bond
+                worker.staked_usdc = settings.min_bond
             elif p.action == "withdraw":
                 worker = lock(db, Actor, p.wallet)
                 worker.bonded = False
-                worker.staked_skr = 0
+                worker.staked_usdc = 0
             return tx_view(p)
 
     @app.post("/transactions/{pid}/confirm")

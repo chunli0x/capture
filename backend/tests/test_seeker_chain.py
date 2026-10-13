@@ -22,7 +22,6 @@ def chain(tmp_path):
         SimpleNamespace(
             program_id="5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV",
             usdc_mint=str(Keypair().pubkey()),
-            skr_mint=str(Keypair().pubkey()),
             verifier_key_file=p,
             cluster="localnet",
             rpc_url="http://127.0.0.1:8899",
@@ -99,11 +98,10 @@ def test_environment_binds_config_mints_verifier_and_network(chain):
         + bytes(Keypair().pubkey())  # admin (not checked)
         + bytes(chain.verifier.pubkey())
         + bytes(chain.usdc)
-        + bytes(chain.skr)
         + struct.pack("<Q", 1_000_000)
         + bytes(chain.verifier.pubkey())  # slash_authority == verifier
     )
-    assert len(raw) == 176
+    assert len(raw) == 144
     account = {
         "value": {
             "owner": str(chain.program),
@@ -124,16 +122,15 @@ def test_environment_binds_config_mints_verifier_and_network(chain):
         chain.check_environment()
 
 
-def test_environment_rejects_stale_144_byte_config(chain):
+def test_environment_rejects_stale_config(chain):
     from seeker.chain import DEVNET_GENESIS
 
-    # The pre-slash layout (no slash_authority) must be rejected as a mismatch.
+    # A stale config (pre-slash_authority, single-mint) must be rejected.
     raw = (
         discriminator("Config", "account")
         + bytes(Keypair().pubkey())
         + bytes(chain.verifier.pubkey())
         + bytes(chain.usdc)
-        + bytes(chain.skr)
         + struct.pack("<Q", 1_000_000)
     )
     account = {
@@ -234,10 +231,10 @@ def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
         raise AssertionError(f"unexpected rpc method: {method}")
 
     chain.rpc = fake_rpc
-    # Faucet mints min_bond SKR to the worker (mint authority = treasury).
+    # Faucet mints min_bond USDC to the worker (mint authority = treasury).
     sig = chain.faucet(str(worker.pubkey()))
     assert sig == "sig_sendTransaction"
-    # Settlement mints test SKR to the judge (mint authority = treasury).
+    # Settlement mints test USDC to the judge (mint authority = treasury).
     sig = chain.settle_usdc(str(worker.pubkey()), 100_000, memo="judgment-1")
     assert sig == "sig_sendTransaction"
 

@@ -29,7 +29,7 @@ fun formatToken(units: Long): String {
     return if (tokens == floor(tokens)) "%.0f".format(tokens) else "%.2f".format(tokens)
 }
 
-/** The balances page: what a judge has earned (USDC) and staked (SKR), plus the
+/** The balances page: what a judge has earned (USDC) and staked (USDC), plus the
  *  level ladder. Test tokens on devnet, not real value. */
 @Composable
 fun BalanceScreen(s: PilotState, vm: SeekerViewModel, onBack: () -> Unit) {
@@ -45,7 +45,7 @@ fun BalanceScreen(s: PilotState, vm: SeekerViewModel, onBack: () -> Unit) {
             CaptureWordmark()
             EditorialHeading("BALANCES.")
             Text(
-                "Earned in test USDC, staked in test \$SKR — devnet only, not real value.",
+                "Earned in test USDC, staked in test USDC — devnet only, not real value.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MutedGray,
             )
@@ -71,7 +71,7 @@ private fun BalanceCard(s: PilotState) {
             AmountRow("Pending", formatToken(pending), "USDC", Modifier.weight(1f))
             AmountRow("Settled", formatToken(s.judgeSettledUsdc), "USDC", Modifier.weight(1f))
         }
-        AmountRow("Staked", formatToken(s.judgeStakedSkr), "SKR")
+        AmountRow("Staked", formatToken(s.judgeStakedUsdc), "USDC")
         Text(
             "Level ${s.judgeLevelName} · ×${"%.2f".format(s.judgeRateMultiplier)} rate · ${s.judgeWarnings} warning${if (s.judgeWarnings == 1) "" else "s"}",
             style = MaterialTheme.typography.bodySmall,

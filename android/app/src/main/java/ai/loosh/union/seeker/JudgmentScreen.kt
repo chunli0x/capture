@@ -24,7 +24,7 @@ import androidx.compose.ui.unit.dp
 
 /**
  * The judgment product screen: a judge compares two model outputs (A/B) or rates
- * one 1-5, with a first-class "can't tell". Earns test USDC; bond is test $SKR.
+ * one 1-5, with a first-class "can't tell". Earns test USDC; bond is test USDC.
  */
 @Composable
 fun JudgmentScreen(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit) {
@@ -67,7 +67,7 @@ private fun JudgeStatsCard(s: PilotState) {
             color = CaptureInk,
         )
         Text(
-            "${s.judgeJudgedCount} judged · ${formatToken(s.judgeStakedSkr)} SKR staked · ${s.judgeWarnings} warnings",
+            "${s.judgeJudgedCount} judged · ${formatToken(s.judgeStakedUsdc)} USDC staked · ${s.judgeWarnings} warnings",
             style = MaterialTheme.typography.bodySmall,
             color = MutedGray,
         )
@@ -79,7 +79,7 @@ private fun EmptyCard(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit) {
     CapturePanel(Modifier.fillMaxWidth(), elevated = true) {
         Text("No pairs to judge right now", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
         if (!s.bonded) {
-            Button(onClick = onBond, modifier = Modifier.fillMaxWidth()) { Text("Deposit the SKR bond") }
+            Button(onClick = onBond, modifier = Modifier.fillMaxWidth()) { Text("Deposit the USDC bond") }
         }
         Button(onClick = { vm.judgeNext() }, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) {
             Text("Refresh")

@@ -13,10 +13,9 @@ class Settings(BaseSettings):
     cluster: str = "devnet"
     program_id: str
     usdc_mint: str
-    skr_mint: str
     verifier_key_file: Path
-    # Devnet treasury: holds the SKR mint authority (the /bond/faucet bond mint)
-    # and the USDC mint authority (the settle_usdc payout). Optional (0600,
+    # Devnet treasury: holds the USDC mint authority (the faucet, the bond, and
+    # the settle_usdc payout — one token, three jobs). Optional (0600,
     # gitignored). Unset -> the on-chain mint is unavailable and the backend
     # fails closed instead of fabricating it.
     treasury_key_file: Path | None = None
@@ -32,8 +31,8 @@ class Settings(BaseSettings):
     judge_slash_floor: float = 0.45
     judge_slash_min_judged: int = Field(default=20, gt=0)
     # Payout in USDC base units (6 decimals). The treasury keypair is the USDC
-    # mint authority; settlement mints test USDC to the judge. The bond stays
-    # $SKR (the slashable collateral). So:
+    # mint authority; settlement mints test USDC to the judge. USDC is also the
+    # bond (the slashable collateral). So:
     #   judge_base_usdc = 0.02 USDC  = $0.02 per aligned judgment (× level multiplier)
     #   judge_flat_usdc = 0.005 USDC = $0.005 flat "can't tell"
     judge_base_usdc: int = Field(default=20_000, gt=0)

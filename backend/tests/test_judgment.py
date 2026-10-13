@@ -1,5 +1,5 @@
 """Judgment product (RLHF preference judging) — consensus, calibration, ladder,
-$SKR payout, reroute, and the agreement-floor slash trigger."""
+USDC payout, reroute, and the agreement-floor slash trigger."""
 
 import base64
 
@@ -47,7 +47,7 @@ class FakeChain:
 
     def settle_usdc(self, wallet, amount, memo=None):
         self.settled_usdc.append((wallet, amount))
-        return str(Keypair().sign_message(f"skr-{len(self.settled_usdc)}".encode()))
+        return str(Keypair().sign_message(f"usdc-{len(self.settled_usdc)}".encode()))
 
     def faucet(self, wallet):
         return str(Keypair().sign_message(b"faucet"))
@@ -66,7 +66,6 @@ def pilot(tmp_path):
         domain="pilot.test",
         program_id=str(Keypair().pubkey()),
         usdc_mint=str(Keypair().pubkey()),
-        skr_mint=str(Keypair().pubkey()),
         verifier_key_file=tmp_path / "unused",
     )
     app = create_app(settings, chain=chain)

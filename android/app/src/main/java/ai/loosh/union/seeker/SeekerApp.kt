@@ -43,7 +43,7 @@ import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 
 /**
  * The judgment product app: sign in, stake, judge, and earn test USDC for
- * consensus-aligned preferences (slashable bond in test $SKR).
+ * consensus-aligned preferences (slashable bond in test USDC).
  */
 @Composable
 fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
