@@ -1,6 +1,7 @@
 package ai.loosh.union.seeker
 
 import ai.loosh.union.*
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
@@ -47,6 +49,9 @@ import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
     val s by vm.state.collectAsState()
     var showBond by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("seeker.api", Context.MODE_PRIVATE) }
+    var onboarded by remember { mutableStateOf(prefs.getBoolean("onboarded", false)) }
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(s.transient, s.status) {
@@ -63,6 +68,10 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when {
+                !onboarded -> OnboardingScreen(onDone = {
+                    prefs.edit().putBoolean("onboarded", true).apply()
+                    onboarded = true
+                })
                 s.wallet.isEmpty() -> SignInScreen(s, vm, sender)
                 showBond -> BondScreen(s, vm, sender, onBack = { showBond = false })
                 else -> {
