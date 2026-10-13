@@ -86,36 +86,28 @@ def main():
                     )
                 )
 
-        # Judgment pairs: a mix of preference (A/B) and rating (1-5) tasks.
-        if count(db, JudgmentPair) == 0:
-            for i in range(6):
-                db.add(
-                    JudgmentPair(
-                        pair_id=uuid.uuid4().hex,
-                        batch_id=batch_id,
-                        media_type="image",
-                        task_type="preference",
-                        output_a_url=placeholder(batch_id, "a", 100 + i),
-                        output_b_url=placeholder(batch_id, "b", 100 + i),
-                        rubric="which output is more natural",
-                        k=settings.judge_k,
-                    )
+        # Judgment pairs: fill up to JUDGMENT_PAIRS_TARGET with a 60/40
+        # preference/rating mix so a demo has enough pairs for many judges.
+        target = 100
+        for i in range(count(db, JudgmentPair), target):
+            is_pref = (i % 5) < 3  # 3 of 5 preference, 2 of 5 rating
+            db.add(
+                JudgmentPair(
+                    pair_id=uuid.uuid4().hex,
+                    batch_id=batch_id,
+                    media_type="image",
+                    task_type="preference" if is_pref else "rating",
+                    output_a_url=placeholder(batch_id, "a", 100 + i),
+                    output_b_url=None if not is_pref else placeholder(batch_id, "b", 100 + i),
+                    rubric="which output is more natural" if is_pref else "rate quality 1-5",
+                    k=settings.judge_k,
                 )
-            for i in range(4):
-                db.add(
-                    JudgmentPair(
-                        pair_id=uuid.uuid4().hex,
-                        batch_id=batch_id,
-                        media_type="image",
-                        task_type="rating",
-                        output_a_url=placeholder(batch_id, "a", 200 + i),
-                        output_b_url=None,
-                        rubric="rate quality 1-5",
-                        k=settings.judge_k,
-                    )
-                )
+            )
 
-    print(f"Seeded batch {batch_id}: {settings.calibration_n} calibration pairs, 10 judgment pairs")
+    with Session() as db:
+        n_pairs = count(db, JudgmentPair)
+        n_cal = count(db, CalibrationPair)
+    print(f"Seeded batch {batch_id}: {n_cal} calibration pairs, {n_pairs} judgment pairs")
     print(f"(calibration_n={settings.calibration_n}, judge_k={settings.judge_k})")
 
 
