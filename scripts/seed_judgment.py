@@ -84,8 +84,8 @@ def main():
                         known_consensus=0.9,
                         media_type="image",
                         task_type="preference",
-                        output_a_url=placeholder(batch_id, "a", i),
-                        output_b_url=placeholder(batch_id, "b", i),
+                        output_a_url=placeholder(batch_id, "a" if i % 2 == 0 else "b", i),
+                        output_b_url=placeholder(batch_id, "b" if i % 2 == 0 else "a", i),
                         rubric="prefer naturalness over diversity",
                     )
                 )

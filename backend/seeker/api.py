@@ -696,6 +696,63 @@ def create_app(settings: Settings, *, chain=None):
                 answered, ncorrect = 0, 0
         return _calibration_status(actor, answered, ncorrect)
 
+    def _settle_and_finalize(pair_id):
+        """Settle a resolved pair's pending payout obligations and finalize it.
+
+        Shared by the resolve path and the "resolving" reconciliation path so a
+        pair stuck mid-settlement after a partial failure is durably retried
+        instead of 409ing forever (finding #3). Reads the resolution from the
+        persisted pair columns (set before the first settlement attempt)."""
+        with database.transaction() as db:
+            pair = lock(db, JudgmentPair, pair_id)
+            if pair.status == "resolved":
+                return {"status": "resolved", "preference": pair.preference}
+            if pair.preference is None:
+                fail(409, "Pair is not yet resolved; retry shortly")
+            winner = pair.preference
+            agreement = pair.agreement
+            confidence = pair.confidence
+            judges = db.scalars(
+                select(Judgment).where(
+                    Judgment.pair_id == pair_id, Judgment.consumed.is_(False)
+                )
+            ).all()
+        with database.transaction() as db:
+            obligations = db.scalars(
+                select(Judgment).where(
+                    Judgment.pair_id == pair_id, Judgment.settling.is_(True)
+                )
+            ).all()
+        failed = []
+        for j in obligations:
+            if not _settle_judgment_obligation(j, pair_id):
+                failed.append(j.wallet)
+        if failed:
+            fail(503, "USDC payout pending for some judges; retry to reconcile")
+        with database.transaction() as db:
+            pair = lock(db, JudgmentPair, pair_id)
+            if pair.status != "resolved":
+                pair.status = "resolved"
+                for j in db.scalars(
+                    select(Judgment).where(
+                        Judgment.pair_id == pair_id, Judgment.consumed.is_(False)
+                    )
+                ).all():
+                    a = lock(db, Actor, j.wallet)
+                    if a is not None:
+                        a.judged_count += 1
+                        a.agreement_rate = rolling_agreement(db, j.wallet)
+        _maybe_anchor_batch(pair_id)
+        _maybe_slash_agreement_farmers(
+            [(j.wallet, j.choice, j.rating) for j in judges]
+        )
+        return {
+            "status": "resolved",
+            "preference": winner,
+            "agreement": agreement,
+            "confidence": confidence,
+        }
+
     def _submit_judgment(pair_id, body, wallet):
         claim = None
         with database.transaction() as db:
@@ -706,7 +763,9 @@ def create_app(settings: Settings, *, chain=None):
             if pair.status == "resolved":
                 return {"status": "resolved", "preference": pair.preference}
             if pair.status == "resolving":
-                fail(409, "Pair is resolving; retry shortly")
+                # Reconciliation (finding #3): re-run settlement + finalize
+                # instead of 409ing forever after a partial payout failure.
+                return _settle_and_finalize(pair_id)
             # Finding #4: the local `actor.bonded` is a callback-maintained mirror.
             # A wallet that withdrew its bond on-chain (bypassing the backend
             # confirm endpoint) would otherwise keep judging with an empty,
@@ -715,6 +774,8 @@ def create_app(settings: Settings, *, chain=None):
             try:
                 if chain.bond_warnings(wallet) >= 2:
                     fail(403, "Bond is slashed; deposit a fresh USDC bond to judge")
+                if chain.bond_vault_balance(wallet) < settings.min_bond:
+                    fail(403, "Bond vault is empty; deposit the USDC bond to judge")
             except ChainUnavailable:
                 fail(403, "Bond is not active on-chain; deposit the USDC bond to judge")
             choice, rating = _validate_against_task(pair.task_type, body)
@@ -776,6 +837,9 @@ def create_app(settings: Settings, *, chain=None):
                             j.earned_usdc = payout_map[j.wallet]
                             j.settling = True
                     pair.status = "resolving"
+                    pair.preference = winner
+                    pair.agreement = agreement
+                    pair.confidence = confidence
                     claim = {
                         "type": "resolve",
                         "winner": winner,
@@ -804,42 +868,7 @@ def create_app(settings: Settings, *, chain=None):
             return {"status": "rerouted"}
         if claim["type"] == "tie":
             return {"status": "rerouted"}
-        failed = []
-        with database.transaction() as db:
-            obligations = db.scalars(
-                select(Judgment).where(
-                    Judgment.pair_id == pair_id, Judgment.settling.is_(True)
-                )
-            ).all()
-        for j in obligations:
-            ok = _settle_judgment_obligation(j, pair_id)
-            if not ok:
-                failed.append(j.wallet)
-        if failed:
-            fail(
-                503,
-                "USDC payout pending for some judges; retry to reconcile",
-            )
-        with database.transaction() as db:
-            pair = lock(db, JudgmentPair, pair_id)
-            if pair.status != "resolved":
-                pair.status = "resolved"
-                pair.preference = claim["winner"]
-                pair.agreement = claim["agreement"]
-                pair.confidence = claim["confidence"]
-                for w, _ch, _r in claim["judges"]:
-                    a = lock(db, Actor, w)
-                    if a is not None:
-                        a.judged_count += 1
-                        a.agreement_rate = rolling_agreement(db, w)
-        _maybe_anchor_batch(pair_id)
-        _maybe_slash_agreement_farmers(claim["judges"])
-        return {
-            "status": "resolved",
-            "preference": claim["winner"],
-            "agreement": claim["agreement"],
-            "confidence": claim["confidence"],
-        }
+        return _settle_and_finalize(pair_id)
 
     @app.get("/judge/stats")
     def judge_stats(actor: Auth):

@@ -38,7 +38,14 @@ def main() -> None:
     Session = sessionmaker(engine)
 
     with Session.begin() as db:
-        pairs = list(db.execute(select(JudgmentPair).order_by(JudgmentPair.pair_id)).scalars())
+        # Only rewrite pairs that have not started collecting judgments; a pair
+        # with votes (or a resolved anchor) must not have its images changed
+        # under the judges (finding #8).
+        pairs = list(db.execute(
+            select(JudgmentPair)
+            .where(JudgmentPair.status == "open")
+            .order_by(JudgmentPair.pair_id)
+        ).scalars())
         for idx, p in enumerate(pairs):
             i = idx % 6
             if p.task_type == "preference":
@@ -51,8 +58,14 @@ def main() -> None:
 
         cals = list(db.execute(select(CalibrationPair).order_by(CalibrationPair.pair_id)).scalars())
         for idx, c in enumerate(cals):
-            c.output_a_url = natural[idx % 6]
-            c.output_b_url = degraded[idx % 6]
+            i = idx % 6
+            if c.known_choice == "b":
+                # The known-correct answer is B, so B carries the natural image.
+                c.output_a_url = degraded[i]
+                c.output_b_url = natural[i]
+            else:
+                c.output_a_url = natural[i]
+                c.output_b_url = degraded[i]
 
     with Session() as db:
         np_ = db.scalar(select(func.count()).select_from(JudgmentPair))

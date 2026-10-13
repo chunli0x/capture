@@ -48,7 +48,11 @@ pub mod seeker_bounty {
         // A slashed bond (warnings >= 2) is reset to clean on deposit: the slash
         // already drained the vault, so a new deposit is a fresh bond, not an
         // extension of the old one. This is the "re-deposit a fresh bond" path.
-        if bond.warnings >= 2 {
+        // Only a terminally slashed bond (warnings == TERMINAL_WARNINGS) resets
+        // on deposit. A bond at the two-strike threshold (warnings == 2) is
+        // slashable but not yet slashed; resetting it there would let a worker
+        // dodge the slash with a one-base-unit deposit (finding #5).
+        if bond.warnings == TERMINAL_WARNINGS {
             bond.warnings = 0;
             bond.pending = 0;
         }
@@ -269,7 +273,7 @@ pub struct DepositBond<'info> {
     pub usdc_mint: Account<'info, Mint>,
     #[account(init_if_needed, payer=worker, space=8+Bond::INIT_SPACE, seeds=[b"bond", worker.key().as_ref()], bump)]
     pub bond: Account<'info, Bond>,
-    #[account(init_if_needed, payer=worker, seeds=[b"bond-vault", worker.key().as_ref()], bump, token::mint=usdc_mint, token::authority=bond)]
+    #[account(init_if_needed, payer=worker, seeds=[b"bond-vault", worker.key().as_ref(), usdc_mint.key().as_ref()], bump, token::mint=usdc_mint, token::authority=bond)]
     pub vault: Account<'info, TokenAccount>,
     #[account(mut, token::mint=usdc_mint, token::authority=worker)]
     pub source: Account<'info, TokenAccount>,
@@ -286,7 +290,7 @@ pub struct WithdrawBond<'info> {
     pub usdc_mint: Account<'info, Mint>,
     #[account(seeds=[b"bond", worker.key().as_ref()], bump, has_one=worker)]
     pub bond: Account<'info, Bond>,
-    #[account(mut, seeds=[b"bond-vault", worker.key().as_ref()], bump, token::mint=usdc_mint, token::authority=bond)]
+    #[account(mut, seeds=[b"bond-vault", worker.key().as_ref(), usdc_mint.key().as_ref()], bump, token::mint=usdc_mint, token::authority=bond)]
     pub vault: Account<'info, TokenAccount>,
     #[account(mut, token::mint=usdc_mint, token::authority=worker)]
     pub destination: Account<'info, TokenAccount>,
@@ -333,7 +337,7 @@ pub struct Slash<'info> {
     pub config: Account<'info, Config>,
     #[account(mut, seeds=[b"bond", worker.as_ref()], bump)]
     pub bond: Account<'info, Bond>,
-    #[account(mut, seeds=[b"bond-vault", worker.as_ref()], bump, token::mint=config.usdc_mint, token::authority=bond)]
+    #[account(mut, seeds=[b"bond-vault", worker.as_ref(), config.usdc_mint.as_ref()], bump, token::mint=config.usdc_mint, token::authority=bond)]
     pub bond_vault: Account<'info, TokenAccount>,
     #[account(mut, seeds=[b"penalty-vault", config.usdc_mint.as_ref()], bump, token::mint=config.usdc_mint, token::authority=config)]
     pub penalty_vault: Account<'info, TokenAccount>,

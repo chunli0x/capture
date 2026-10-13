@@ -38,6 +38,9 @@ class FakeChain:
     def bond_warnings(self, wallet):
         return self.warnings
 
+    def bond_vault_balance(self, wallet):
+        return 1_000_000  # >= min_bond; test judges are assumed bonded
+
     def issue(self, action, wallet, amount=None):
         self.issued.append((action, wallet, amount))
         return str(Keypair().sign_message(f"issue-{len(self.issued)}".encode()))

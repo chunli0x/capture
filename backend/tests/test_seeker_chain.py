@@ -160,7 +160,7 @@ def test_warn_slash_instruction_layout(chain, payer):
     assert len(ix.accounts) == 6
     assert ix.accounts[0].pubkey == chain.verifier.pubkey() and ix.accounts[0].is_signer
     assert ix.accounts[2].pubkey == chain.pda(b"bond", bytes(payer.pubkey()))
-    assert ix.accounts[3].pubkey == chain.pda(b"bond-vault", bytes(payer.pubkey()))
+    assert ix.accounts[3].pubkey == chain.pda(b"bond-vault", bytes(payer.pubkey()), bytes(chain.usdc))
     assert ix.accounts[3].is_writable
     assert ix.accounts[4].pubkey == chain.penalty_vault and ix.accounts[4].is_writable
     assert ix.accounts[5].pubkey == TOKEN_PROGRAM_ID

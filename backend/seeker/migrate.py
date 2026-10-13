@@ -11,6 +11,16 @@ from .db import Base, connect
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 
+# Legacy SKR -> USDC column renames (finding #1). An existing SKR-era database
+# has the old column names; rename them (preserving balances) before the ADD
+# COLUMN pass so the new names are present and continuity is kept.
+RENAMES = [
+    ("seeker_actors", "skr_funded", "usdc_funded"),
+    ("seeker_actors", "staked_skr", "staked_usdc"),
+    ("judgments", "earned_skr", "earned_usdc"),
+    ("judgments", "settled_skr", "settled_usdc"),
+]
+
 
 def _numbered_migrations():
     """Yield (migration_id, columns) for every NNNN_*.py module in migrations/,
@@ -33,6 +43,17 @@ def apply_migrations(engine):
     DB upgrades cleanly and re-running is a no-op. Works on both SQLite and
     PostgreSQL."""
     applied = 0
+    for table, old, new in RENAMES:
+        inspector = inspect(engine)
+        if not inspector.has_table(table):
+            continue
+        cols = {c["name"] for c in inspector.get_columns(table)}
+        if old in cols and new not in cols:
+            with engine.begin() as conn:
+                conn.exec_driver_sql(
+                    f"ALTER TABLE {table} RENAME COLUMN {old} TO {new}"
+                )
+            applied += 1
     for migration_id, columns in _numbered_migrations():
         for table, column, ddl in columns:
             inspector = inspect(engine)

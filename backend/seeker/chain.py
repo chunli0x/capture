@@ -139,7 +139,7 @@ class Chain:
         who = Pubkey.from_string(wallet)
         worker = who
         bond = self.pda(b"bond", bytes(worker))
-        bond_vault = self.pda(b"bond-vault", bytes(worker))
+        bond_vault = self.pda(b"bond-vault", bytes(worker), bytes(self.usdc))
         prefix = []
         if action in {"deposit", "withdraw"}:
             prefix = [ata_instruction(who, who, self.usdc)]
@@ -266,6 +266,23 @@ class Chain:
             raise ChainUnavailable("Worker bond account has unexpected layout")
         return raw[-1]
 
+    def bond_vault_balance(self, wallet):
+        """Read the worker's on-chain bond-vault USDC balance (base units).
+        Raises ChainUnavailable if the vault cannot be read — fail closed."""
+        vault = self.pda(
+            b"bond-vault",
+            bytes(Pubkey.from_string(wallet)),
+            bytes(self.usdc),
+        )
+        result = self.rpc(
+            "getTokenAccountBalance",
+            [str(vault), {"commitment": "finalized"}],
+        )
+        value = result.get("value")
+        if not value or value.get("amount") is None:
+            raise ChainUnavailable("Worker bond vault is not initialized")
+        return int(value["amount"])
+
     def issue(self, action, wallet, amount=None):
         """Server-side warn/slash: the backend is the slash_authority (the
         verifier key), so it builds, signs and broadcasts the instruction
@@ -298,7 +315,9 @@ class Chain:
                 )
             )
         )
-        return self._sign_and_send(instructions, payer)
+        sig = self._sign_and_send(instructions, payer)
+        self._confirm_sent(sig)
+        return sig
 
     def settle_usdc(self, wallet, amount, memo=None):
         """Pay ``amount`` test USDC to the judge's USDC ATA. The treasury
@@ -311,12 +330,30 @@ class Chain:
         transactions: two equal mints to the same wallet within one blockhash
         window would otherwise be byte-identical and dedupe to a single
         execution. Callers pass a unique per-judgment id so each reward is its
-        own transaction."""
+        own transaction. When present, the id is also recorded on-chain BEFORE
+        minting so a retry cannot double-pay (finding #2)."""
         if self.treasury is None:
             raise ChainUnavailable("USDC treasury (mint authority) is not configured")
         worker = Pubkey.from_string(wallet)
         payer = self.treasury
         instructions = [ata_instruction(payer.pubkey(), worker, self.usdc)]
+        if memo is not None:
+            # Idempotent settlement (finding #2): record the payment id BEFORE
+            # minting. The payment PDA is seeded off the 16-byte id, so a retry
+            # whose payment was already recorded fails the whole transaction and
+            # cannot double-mint the judge.
+            payment_id = hashlib.sha256(memo.encode()).digest()[:16]
+            instructions.append(
+                Instruction(
+                    self.program,
+                    discriminator("record_payment") + payment_id,
+                    [
+                        meta(payer.pubkey(), True, True),
+                        meta(self.pda(b"payment", payment_id), writable=True),
+                        meta(SYSTEM),
+                    ],
+                )
+            )
         instructions.append(
             mint_to(
                 MintToParams(
