@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     # otherwise send "can't tell" on every fresh pair and collect flat without
     # ever resolving a task. 0 disables the cap.
     judge_flat_cap: int = Field(default=10, ge=0)
+    # Liveness is a demo-time on-device motion check. When False, the gate is
+    # skipped and every wallet reads as liveness-complete (used to demo the
+    # judging flow while the on-device check is being stabilized).
+    liveness_required: bool = True
 
     @model_validator(mode="after")
     def safe_environment(self):

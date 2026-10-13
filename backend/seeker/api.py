@@ -261,7 +261,7 @@ def create_app(settings: Settings, *, chain=None):
         return {
             "wallet": actor.wallet,
             "over_18": actor.over_18,
-            "liveness_completed": actor.liveness_completed,
+            "liveness_completed": actor.liveness_completed or not settings.liveness_required,
             "bond_test_usdc_units": settings.min_bond,
             "bonded": actor.bonded,
             "usdc_funded": actor.usdc_funded,
@@ -651,7 +651,7 @@ def create_app(settings: Settings, *, chain=None):
     def judge_next(actor: Auth):
         with database.transaction() as db:
             actor = lock(db, Actor, actor.wallet)
-            if not actor.liveness_completed:
+            if settings.liveness_required and not actor.liveness_completed:
                 return {
                     "kind": "none",
                     "calibrated": True,
