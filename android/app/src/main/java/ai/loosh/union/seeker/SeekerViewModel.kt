@@ -59,6 +59,8 @@ data class PilotState(
     val bondTestUsdcUnits: Long = 0,
     val bonded: Boolean = false,
     val bondFunded: Boolean = false,
+    val livenessCompleted: Boolean = false,
+    val livenessChallenge: String? = null,
     val faucetMints: Int = 0,
     val faucetMaxMints: Int = 5,
     val judgeStakedUsdc: Long = 0,
@@ -95,6 +97,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
         )
     val state = mutable.asStateFlow()
     private var token: String? = null
+    private var livenessSessionId: String? = null
     private val http =
         OkHttpClient.Builder()
             .followRedirects(false)
@@ -301,6 +304,33 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
 
     // --- Judgment product (RLHF preference judging) ---
 
+    fun startLiveness() =
+        run("Starting the human check", null) {
+            val s = post(
+                "/liveness/session",
+                JSONObject()
+                    .put("contributor", mutable.value.wallet)
+                    .put("task_id", "capture-session"),
+            )
+            livenessSessionId = s.getString("session_id")
+            mutable.update { it.copy(livenessChallenge = s.getString("challenge")) }
+        }
+
+    fun completeLiveness(resultDigest: String) =
+        run("Verifying", "You're verified as human") {
+            val sid = livenessSessionId ?: error("No liveness session in progress")
+            post(
+                "/liveness/complete",
+                JSONObject()
+                    .put("contributor", mutable.value.wallet)
+                    .put("session_id", sid)
+                    .put("result_digest", resultDigest),
+            )
+            livenessSessionId = null
+            mutable.update { it.copy(livenessChallenge = null) }
+            refreshJudgment()
+        }
+
     fun judgeNext() = run("Loading next pair", "Pair loaded") { refreshJudgment() }
 
     fun submitJudgment(choice: String? = null, rating: Int? = null) =
@@ -326,6 +356,7 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
                 bondTestUsdcUnits = me.optLong("bond_test_usdc_units", 0),
                 bonded = me.optBoolean("bonded", false),
                 bondFunded = me.optBoolean("usdc_funded", false),
+                livenessCompleted = me.optBoolean("liveness_completed", false),
                 faucetMints = me.optInt("faucet_mints", 0),
                 faucetMaxMints = me.optInt("faucet_max", 5),
                 judgeStakedUsdc = stats.optLong("staked_usdc", 0),

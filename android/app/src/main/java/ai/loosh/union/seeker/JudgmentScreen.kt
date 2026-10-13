@@ -41,7 +41,7 @@ private fun formatPayUsdc(units: Long): String =
  * one 1-5, with a first-class "can't tell". Earns test USDC; bond is test USDC.
  */
 @Composable
-fun JudgmentScreen(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit) {
+fun JudgmentScreen(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit, onProveHuman: () -> Unit) {
     NavyBackground(Modifier.fillMaxSize().captureScreenMotion()) {
         Column(
             Modifier
@@ -63,7 +63,7 @@ fun JudgmentScreen(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit) {
             )
             JudgeStatsCard(s)
             if (s.judgePair == null) {
-                EmptyCard(s, vm, onBond)
+                EmptyCard(s, vm, onBond, onProveHuman)
             } else {
                 PairCard(s, vm)
             }
@@ -95,14 +95,29 @@ private fun JudgeStatsCard(s: PilotState) {
 }
 
 @Composable
-private fun EmptyCard(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit) {
+private fun EmptyCard(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit, onProveHuman: () -> Unit) {
     CapturePanel(Modifier.fillMaxWidth(), elevated = true) {
-        Text("No pairs to judge right now", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
-        if (!s.bonded) {
-            Button(onClick = onBond, modifier = Modifier.fillMaxWidth()) { Text("Deposit the USDC bond") }
-        }
-        Button(onClick = { vm.judgeNext() }, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) {
-            Text("Refresh")
+        when {
+            !s.livenessCompleted -> {
+                Text("Prove you're human", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
+                Text(
+                    "A quick on-device motion check (e.g. blink or turn your head). Images are processed on-device and not retained.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MutedGray,
+                )
+                Button(onClick = onProveHuman, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) {
+                    Text("Prove you're human")
+                }
+            }
+            !s.bonded -> {
+                Text("No pairs to judge right now", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
+                Button(onClick = onBond, modifier = Modifier.fillMaxWidth()) { Text("Deposit the USDC bond") }
+                Button(onClick = { vm.judgeNext() }, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) { Text("Refresh") }
+            }
+            else -> {
+                Text("No pairs to judge right now", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
+                Button(onClick = { vm.judgeNext() }, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) { Text("Refresh") }
+            }
         }
     }
 }

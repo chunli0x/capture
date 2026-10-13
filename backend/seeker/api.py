@@ -651,6 +651,12 @@ def create_app(settings: Settings, *, chain=None):
     def judge_next(actor: Auth):
         with database.transaction() as db:
             actor = lock(db, Actor, actor.wallet)
+            if not actor.liveness_completed:
+                return {
+                    "kind": "none",
+                    "calibrated": True,
+                    "reason": "prove you're human before judging",
+                }
             if not actor.bonded:
                 return {"kind": "none", "calibrated": True, "reason": "deposit the USDC bond to judge"}
             done = select(Judgment.pair_id).where(Judgment.wallet == actor.wallet)
