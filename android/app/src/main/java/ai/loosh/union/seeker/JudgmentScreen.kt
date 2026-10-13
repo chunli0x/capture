@@ -68,7 +68,7 @@ private fun JudgeStatsCard(s: PilotState) {
             color = CaptureInk,
         )
         Text(
-            "${s.judgeJudgedCount} judged · ${s.judgeStakedSkr} SKR staked · ${s.judgeWarnings} warnings",
+            "${s.judgeJudgedCount} judged · ${formatSkr(s.judgeStakedSkr)} SKR staked · ${s.judgeWarnings} warnings",
             style = MaterialTheme.typography.bodySmall,
             color = MutedGray,
         )

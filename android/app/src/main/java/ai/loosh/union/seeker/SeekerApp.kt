@@ -49,6 +49,7 @@ import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
     val s by vm.state.collectAsState()
     var showBond by remember { mutableStateOf(false) }
+    var showBalances by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("seeker.api", Context.MODE_PRIVATE) }
     var onboarded by remember { mutableStateOf(prefs.getBoolean("onboarded", false)) }
@@ -74,8 +75,14 @@ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
                 })
                 s.wallet.isEmpty() -> SignInScreen(s, vm, sender)
                 showBond -> BondScreen(s, vm, sender, onBack = { showBond = false })
+                showBalances -> BalanceScreen(s, vm, onBack = { showBalances = false })
                 else -> {
                     JudgmentScreen(s, vm, onBond = { showBond = true })
+                    TextButton(
+                        onClick = { showBalances = true },
+                        enabled = !s.busy,
+                        modifier = Modifier.align(Alignment.TopStart).safeDrawingPadding().padding(12.dp),
+                    ) { Text("Balances", color = MutedGray) }
                     TextButton(
                         onClick = { vm.logout() },
                         enabled = !s.busy,

@@ -848,6 +848,17 @@ def create_app(settings: Settings, *, chain=None):
             answered, correct = calibration_progress(db, actor.wallet)
             level = judge_level_info(actor.agreement_rate)
             in_progress = (not actor.calibrated) and 0 < answered < settings.calibration_n
+            earned = db.scalar(
+                select(func.coalesce(func.sum(Judgment.earned_skr), 0)).where(
+                    Judgment.wallet == actor.wallet
+                )
+            )
+            settled = db.scalar(
+                select(func.coalesce(func.sum(Judgment.earned_skr), 0)).where(
+                    Judgment.wallet == actor.wallet,
+                    Judgment.payout_signature.is_not(None),
+                )
+            )
             return {
                 "calibrated": actor.calibrated,
                 "calibration_progress": {
@@ -862,6 +873,8 @@ def create_app(settings: Settings, *, chain=None):
                 "rate_multiplier": level["rate_multiplier"],
                 "staked_skr": actor.staked_skr,
                 "warnings": actor.warnings,
+                "earned_skr": earned,
+                "settled_skr": settled,
             }
 
     @app.get("/batch/{batch_id}/dataset")
