@@ -11,6 +11,7 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -32,8 +34,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -167,19 +171,16 @@ private fun LivenessCamera(
     }
     DisposableEffect(faceDetector) { onDispose { faceDetector.close() } }
 
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Card(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
-            Text(
-                hint,
-                Modifier.padding(16.dp),
-                style = MaterialTheme.typography.titleMedium,
-            )
-        }
-
+    Box(modifier) {
         AndroidView(
-            modifier = Modifier.fillMaxWidth().weight(1f),
+            modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
-                val previewView = PreviewView(ctx)
+                // COMPATIBLE (TextureView) so the preview composites with the
+                // Compose overlay instead of punching through it on its own
+                // SurfaceView surface, which would hide the instruction card.
+                val previewView = PreviewView(ctx).apply {
+                    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                }
                 val providerFuture = ProcessCameraProvider.getInstance(ctx)
                 providerFuture.addListener({
                     val provider = providerFuture.get()
@@ -230,6 +231,19 @@ private fun LivenessCamera(
                 previewView
             },
         )
+
+        Card(
+            Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(12.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF181626)),
+        ) {
+            Text(
+                hint,
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                style = MaterialTheme.typography.titleLarge,
+                color = Color(0xFFFFF3D6),
+                textAlign = TextAlign.Center,
+            )
+        }
     }
 }
 
