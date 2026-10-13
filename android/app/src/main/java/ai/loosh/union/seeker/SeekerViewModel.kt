@@ -59,6 +59,8 @@ data class PilotState(
     val bondTestUsdcUnits: Long = 0,
     val bonded: Boolean = false,
     val bondFunded: Boolean = false,
+    val faucetMints: Int = 0,
+    val faucetMaxMints: Int = 5,
     val judgeStakedUsdc: Long = 0,
     val judgeWarnings: Int = 0,
     // --- Judgment product (RLHF preference judging) ---
@@ -260,8 +262,10 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun faucet() =
         run("Requesting test USDC", "Test USDC funded") {
-            post("/bond/faucet")
-            mutable.update { it.copy(bondFunded = true) }
+            val r = post("/bond/faucet")
+            mutable.update {
+                it.copy(bondFunded = true, faucetMints = r.optInt("mints", it.faucetMints + 1))
+            }
         }
 
     fun depositBond(sender: ActivityResultSender) =
@@ -320,6 +324,8 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application) 
                 bondTestUsdcUnits = me.optLong("bond_test_usdc_units", 0),
                 bonded = me.optBoolean("bonded", false),
                 bondFunded = me.optBoolean("usdc_funded", false),
+                faucetMints = me.optInt("faucet_mints", 0),
+                faucetMaxMints = me.optInt("faucet_max", 5),
                 judgeStakedUsdc = stats.optLong("staked_usdc", 0),
                 judgeWarnings = stats.optInt("warnings", 0),
                 judgePair = pair,

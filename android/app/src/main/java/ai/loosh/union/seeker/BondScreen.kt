@@ -80,25 +80,28 @@ private fun BondCard(s: PilotState, vm: SeekerViewModel, sender: ActivityResultS
         )
         when {
             s.bonded -> DoneRow("Bond deposited — you can judge now.")
-            s.bondFunded -> {
-                DoneRow("Test USDC funded.")
-                Button(
-                    onClick = { vm.depositBond(sender) },
-                    enabled = !s.busy,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Deposit bond") }
-            }
             else -> {
-                Button(
-                    onClick = { vm.faucet() },
-                    enabled = !s.busy,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Get test USDC") }
-                Text(
-                    "Fund test USDC first, then deposit the bond.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MutedGray,
-                )
+                if (s.bondFunded) {
+                    DoneRow("Test USDC funded.")
+                    Button(
+                        onClick = { vm.depositBond(sender) },
+                        enabled = !s.busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Deposit bond") }
+                }
+                if (s.faucetMints < s.faucetMaxMints) {
+                    Button(
+                        onClick = { vm.faucet() },
+                        enabled = !s.busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Get test USDC (${s.faucetMints}/${s.faucetMaxMints})") }
+                }
+                if (!s.bondFunded)
+                    Text(
+                        "Fund test USDC first, then deposit the bond.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MutedGray,
+                    )
             }
         }
     }

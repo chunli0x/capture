@@ -49,6 +49,10 @@ class Actor(Base):
     # usdc_funded == the devnet test-USDC faucet ran.
     bonded: Mapped[bool] = mapped_column(Boolean, default=False)
     usdc_funded: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Number of times this wallet has tapped the devnet test-USDC faucet
+    # (capped at faucet_max_mints). usdc_funded stays as the "funded at least
+    # once" flag for the deposit gate.
+    faucet_count: Mapped[int] = mapped_column(Integer, default=0)
     # ---- Judgment product (RLHF preference judging) ----
     # calibrated == passed the N-pair calibration gate (unpaid) and may stake +
     # judge. agreement_rate == rolling fraction of resolved judgments this judge

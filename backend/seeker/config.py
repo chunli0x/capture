@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     # deposit transaction fee and the bond/vault rent (the deposit is
     # client-signed with payer=worker, so the worker needs lamports). 0.05 SOL.
     faucet_sol_lamports: int = Field(default=50_000_000, gt=0)
+    # A wallet may tap the devnet test-USDC faucet this many times (each tap
+    # mints min_bond test USDC) before it is cut off.
+    faucet_max_mints: int = Field(default=5, gt=0)
 
     # ---- Judgment product (RLHF preference judging) ----
     # Consensus-gated pay in test USDC (1:1 USD, 6 decimals). All are starting

@@ -265,6 +265,8 @@ def create_app(settings: Settings, *, chain=None):
             "bond_test_usdc_units": settings.min_bond,
             "bonded": actor.bonded,
             "usdc_funded": actor.usdc_funded,
+            "faucet_mints": actor.faucet_count,
+            "faucet_max": settings.faucet_max_mints,
             "calibrated": actor.calibrated,
             "staked_usdc": actor.staked_usdc,
             "warnings": actor.warnings,
@@ -324,21 +326,31 @@ def create_app(settings: Settings, *, chain=None):
 
     @app.post("/bond/faucet")
     def bond_faucet(actor: Auth):
-        """Devnet test-USDC faucet ("Get test USDC"). Idempotent.
-
-        Mints the minimum bond on-chain (the treasury holds the USDC mint
-        authority) and only then records ``usdc_funded``; a chain outage fails
-        closed (503) so funding is never recorded for a mint that did not land."""
+        """Devnet test-USDC faucet ("Get test USDC"). A wallet may tap it up to
+        ``faucet_max_mints`` times (each tap mints the minimum bond and drops a
+        little SOL). Fails closed (503) so funding is never recorded for a mint
+        that did not land."""
         with database.transaction() as db:
             actor = lock(db, Actor, actor.wallet)
-            if actor.usdc_funded:
-                return {"funded": True, "already": True}
+            if actor.faucet_count >= settings.faucet_max_mints:
+                return {
+                    "funded": True,
+                    "already": True,
+                    "mints": actor.faucet_count,
+                    "max": settings.faucet_max_mints,
+                }
             try:
                 chain.faucet(actor.wallet)
             except ChainUnavailable as exc:
                 fail(503, f"Test-USDC faucet unavailable: {exc}")
             actor.usdc_funded = True
-        return {"funded": True, "already": False}
+            actor.faucet_count += 1
+        return {
+            "funded": True,
+            "already": False,
+            "mints": actor.faucet_count,
+            "max": settings.faucet_max_mints,
+        }
 
     @app.post("/bond/deposit")
     def bond_deposit(actor: Auth):
