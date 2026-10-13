@@ -7,6 +7,16 @@ two vision-model outputs and picks the better one (A/B preference) or rates a
 single output 1–5. Aggregated preferences become an RLHF preference dataset,
 with trust priced into every judgment through a slashable **test-USDC** stake.
 
+## Screenshots
+
+The Android and web clients share the same Pop Editorial design language.
+
+<p align="center">
+  <img src="docs/screenshots/01-judge-mountains.jpg" width="30%" alt="Judge: A/B preference" />
+  <img src="docs/screenshots/03-calibrate-guide.jpg" width="30%" alt="Calibrate: how to judge" />
+  <img src="docs/screenshots/05-balances.jpg" width="30%" alt="Balances: earnings and level ladder" />
+</p>
+
 ## The judgment product
 
 Humans judge a vision model's outputs for RLHF. The incentive is
@@ -98,7 +108,7 @@ systematic disagreement warns then slashes the USDC bond to a penalty vault.
 
 October 13 2026:
 
-- Deployed to **Solana devnet**; backend live at `https://capture.magnumopus.ai`.
+- Deployed to **Solana devnet**; the judgment API is live (devnet test tokens).
 - **46 backend tests** pass; the Anchor program's **6 unit tests** pass and the
   BPF build is clean.
 - **USDC everywhere** — payout, bond, and slash are a single test-USDC token.
@@ -119,8 +129,8 @@ Not done / honest caveats:
 
 ## Install the app
 
-The Android judgment client is downloadable at
-`https://capture.magnumopus.ai/capture.apk` — a devnet build, test tokens only.
+The Android judgment client ships as a debug APK (devnet build, test tokens
+only); the same flows are available in the web dapp.
 
 ## Repository layout
 
@@ -134,7 +144,7 @@ The Android judgment client is downloadable at
 ├── programs/           Anchor workspaces
 │   └── seeker-bounty/  on-chain USDC bond + warn/slash + batch-anchor program
 ├── scripts/            devnet bootstrap and demo helpers
-├── docs/               API contract
+├── docs/               API contract and screenshots
 └── .github/            CI workflows
 ```
 
