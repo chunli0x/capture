@@ -38,21 +38,31 @@ def meta(key, signer=False, writable=False):
     return AccountMeta(key, signer, writable)
 
 
+# The wallet may inject compute-budget instructions (setComputeUnitLimit /
+# setComputeUnitPrice) before signing a client-signed transaction. Those are
+# benign and not part of the operation, so they are excluded from the
+# fingerprint together with their program account.
+COMPUTE_BUDGET = Pubkey.from_string("ComputeBudget111111111111111111111111111111")
+
+
 def message_fingerprint(msg):
-    """Fingerprint a message excluding the recent_blockhash. A wallet may
-    refresh the blockhash before signing (the bond deposit is client-signed),
-    which changes the message bytes without changing the operation. The
-    fingerprint covers the header, account keys, and instructions — everything
-    that defines the operation — so a blockhash refresh does not fail confirm."""
+    """Identity of the operation a message encodes, excluding everything the
+    signing wallet may legally vary before it signs a client-signed transaction:
+
+    * the recent_blockhash (refreshed right before signing), and
+    * compute-budget instructions (setComputeUnitLimit / setComputeUnitPrice).
+
+    Only the meaningful instructions — their program id, resolved account
+    pubkeys, and data — are hashed, so a blockhash refresh or an injected
+    compute-budget instruction does not change the fingerprint."""
     h = hashlib.sha256()
-    h.update(bytes([msg.header.num_required_signatures]))
-    h.update(bytes([msg.header.num_readonly_signed_accounts]))
-    h.update(bytes([msg.header.num_readonly_unsigned_accounts]))
-    for k in msg.account_keys:
-        h.update(bytes(k))
     for i in msg.instructions:
-        h.update(bytes([i.program_id_index]))
-        h.update(bytes(i.accounts))
+        program = msg.account_keys[i.program_id_index]
+        if program == COMPUTE_BUDGET:
+            continue
+        h.update(bytes(program))
+        for idx in i.accounts:
+            h.update(bytes(msg.account_keys[idx]))
         h.update(bytes(i.data))
     return h.hexdigest()
 
@@ -471,15 +481,13 @@ class Chain:
                 base64.b64decode(result["transaction"][0], validate=True)
             )
             tx.verify()
-            if (
-                str(tx.signatures[0]) != signature
-                or message_fingerprint(tx.message) != prepared.message_hash
-            ):
-                raise ChainUnavailable(
-                    "Transaction does not match this prepared operation"
-                )
         except (ValueError, TypeError, TransactionError) as exc:
             raise ChainUnavailable("Invalid transaction confirmation") from exc
+        if (
+            str(tx.signatures[0]) != signature
+            or message_fingerprint(tx.message) != prepared.message_hash
+        ):
+            raise ChainUnavailable("Transaction does not match this prepared operation")
         return True
 
     def find_signature(self, prepared):
