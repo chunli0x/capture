@@ -107,6 +107,11 @@ private fun ExampleCard() {
             style = MaterialTheme.typography.bodySmall,
             color = MutedGray,
         )
+        Text(
+            "Video / frame sequence — coming soon.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MutedGray,
+        )
     }
 }
 

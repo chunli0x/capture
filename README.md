@@ -114,6 +114,8 @@ Not done / honest caveats:
   gate in the judging path.
 - Sybil resistance is partial: the bond raises the cost of fake accounts but
   does not eliminate them.
+- **Video / frame-sequence judging** is the next tier (motion and sequence
+  perception) and is planned but not yet live — the demo judges still images.
 
 ## Install the app
 

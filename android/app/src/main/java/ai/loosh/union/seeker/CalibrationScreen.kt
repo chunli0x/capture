@@ -93,6 +93,16 @@ private fun ExampleCard() {
             style = MaterialTheme.typography.bodySmall,
             color = MutedGray,
         )
+        Text(
+            "Video / frame sequence — COMING SOON",
+            style = MaterialTheme.typography.titleSmall,
+            color = CaptureInk,
+        )
+        Text(
+            "Judge a short motion clip instead of a still frame. The next tier.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MutedGray,
+        )
     }
 }
 
