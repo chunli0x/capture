@@ -113,46 +113,100 @@ fun TierIcon(level: Int, modifier: Modifier = Modifier) {
     }
 }
 
-/** One rung of the judge-accuracy ladder (incentive spec §4), editorial-styled. */
+/** A milestone marker on the racing track: passed = filled, active = you are
+ * here (larger + brighter), future = outlined. */
 @Composable
-fun JudgeTierRow(tier: JudgeTier, active: Boolean, modifier: Modifier = Modifier) {
-    val requirement = tier.rateThreshold?.let { "≥${agreementPercent(it)}% agreement" } ?: "No gate"
-    Row(
-        modifier.fillMaxWidth().padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
+private fun TrackMarker(tier: JudgeTier, active: Boolean, passed: Boolean) {
+    val size = if (active) 34.dp else 26.dp
+    val bg = when {
+        active -> CaptureAction
+        passed -> CaptureAccent
+        else -> CaptureSurface
+    }
+    val borderColor = when {
+        active || passed -> CaptureAccentDeep
+        else -> CaptureOutlineVariant
+    }
+    Box(
+        Modifier
+            .size(size)
+            .background(bg, CircleShape)
+            .border(if (active) 3.dp else 2.dp, borderColor, CircleShape),
+        contentAlignment = Alignment.Center,
     ) {
-        TierIcon(tier.level, Modifier.size(40.dp))
-        Column(Modifier.weight(1f).padding(start = 12.dp)) {
-            Text(
-                tier.name,
-                style = MaterialTheme.typography.titleSmall,
-                color = if (active) CaptureAccentBright else CaptureInk,
-            )
-            Text(requirement, style = MaterialTheme.typography.bodySmall, color = MutedGray)
+        when {
+            passed -> Text("✓", color = Color.White, style = MaterialTheme.typography.titleSmall)
+            active -> Text("✓", color = Color.White, style = MaterialTheme.typography.titleMedium)
+            else -> Text("${tier.level + 1}", color = MutedGray, style = MaterialTheme.typography.labelSmall)
         }
-        Text(
-            "×${"%.2f".format(tier.rateMultiplier)}",
-            style = MaterialTheme.typography.titleSmall,
-            color = CaptureInk,
-            modifier = Modifier
-                .background(CaptureSurface2, CaptureRadii.pill)
-                .border(1.dp, CaptureOutline, CaptureRadii.pill)
-                .padding(horizontal = 10.dp, vertical = 4.dp),
-        )
     }
 }
 
-/** The judge level ladder: agreement rate drives status and payout rate (§4). */
+/** The judge level ladder as a racing track: each level is a mark on a
+ * horizontal track the judge progresses through left to right (§4). */
 @Composable
 fun JudgeTierLadder(currentLevel: Int, modifier: Modifier = Modifier) {
     CapturePanel(modifier.fillMaxWidth()) {
         Text("LEVEL LADDER", style = MaterialTheme.typography.labelMedium, color = CaptureAccentBright)
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("LEVEL", style = MaterialTheme.typography.labelMedium, color = MutedGray, modifier = Modifier.weight(1f))
-            Text("AGREEMENT · RATE", style = MaterialTheme.typography.labelMedium, color = MutedGray)
-        }
-        JUDGE_TIERS.forEach { tier ->
-            JudgeTierRow(tier, active = tier.level == currentLevel)
+        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+            Box(Modifier.fillMaxWidth().height(56.dp)) {
+                // the track
+                Box(
+                    Modifier
+                        .align(Alignment.Center)
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .background(CaptureOutlineVariant, CaptureRadii.pill),
+                )
+                // progress fill up to the current mark
+                Box(
+                    Modifier
+                        .align(Alignment.CenterStart)
+                        .fillMaxWidth(((currentLevel + 0.5f) / JUDGE_TIERS.size).coerceIn(0f, 1f))
+                        .height(6.dp)
+                        .background(CaptureAccent, CaptureRadii.pill),
+                )
+                // the marks
+                Row(
+                    Modifier.fillMaxWidth().height(56.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    JUDGE_TIERS.forEach { tier ->
+                        val active = tier.level == currentLevel
+                        val passed = tier.level < currentLevel
+                        Column(
+                            Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Box(Modifier.height(16.dp), contentAlignment = Alignment.Center) {
+                                when {
+                                    active -> Text("YOU", style = MaterialTheme.typography.labelSmall, color = CaptureAccent)
+                                    tier.level == MAX_JUDGE_LEVEL -> Text("🏁", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                            TrackMarker(tier, active, passed)
+                        }
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth()) {
+                JUDGE_TIERS.forEach { tier ->
+                    val active = tier.level == currentLevel
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            tier.name,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (active) CaptureAccent else CaptureInk,
+                            maxLines = 1,
+                        )
+                        Text(
+                            "×${"%.2f".format(tier.rateMultiplier)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MutedGray,
+                        )
+                    }
+                }
+            }
         }
         Text(
             "Agreement rate: rolling last 100 judged pairs. Status is free; only the rate multiplier costs money.",
