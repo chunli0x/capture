@@ -4,17 +4,8 @@ import ai.loosh.union.*
 import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -38,6 +29,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
 
@@ -130,28 +123,47 @@ private fun TopMenu(
     onSignOut: () -> Unit,
     enabled: Boolean,
 ) {
-    Column {
+    Column(Modifier.background(CaptureBase).statusBarsPadding()) {
         Row(
-            Modifier
-                .fillMaxWidth()
-                .background(CaptureBase)
-                .padding(horizontal = 8.dp, vertical = 4.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "JUDGE",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = CaptureAccent,
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                )
-                TextButton(onClick = onBalances, enabled = enabled) { Text("Balances") }
-                TextButton(onClick = onCalibration, enabled = enabled) { Text("Calibrate") }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                CaptureMark(Modifier.size(28.dp))
+                Text("CAPTURE", style = MaterialTheme.typography.displaySmall.copy(fontSize = 18.sp, lineHeight = 22.sp), color = CaptureInk)
             }
-            TextButton(onClick = onSignOut, enabled = enabled) { Text("Sign out", color = MutedGray) }
+            Text(
+                "DEVNET · TEST USDC",
+                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.sp),
+                color = CaptureInk,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.weight(1f).background(CaptureYellow, CaptureRadii.pill)
+                    .border(CaptureDimensions.inkBorder, CaptureInk, CaptureRadii.pill)
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+            )
+            TextButton(onClick = onSignOut, enabled = enabled,
+                modifier = Modifier.heightIn(min = CaptureDimensions.touchTarget),
+                contentPadding = PaddingValues(horizontal = 4.dp)) {
+                Text("Sign out", color = MutedGray, style = MaterialTheme.typography.bodySmall)
+            }
         }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(CaptureOutline))
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            TextButton(onClick = onCalibration, enabled = enabled,
+                modifier = Modifier.weight(1f).heightIn(min = CaptureDimensions.touchTarget)) {
+                CaptureIcon(CaptureSymbol.EXPLORE, Modifier.size(22.dp), CaptureInk)
+                Spacer(Modifier.width(8.dp))
+                Text("Calibrate", color = CaptureInk, style = MaterialTheme.typography.titleMedium)
+            }
+            TextButton(onClick = onBalances, enabled = enabled,
+                modifier = Modifier.weight(1f).heightIn(min = CaptureDimensions.touchTarget)) {
+                CaptureIcon(CaptureSymbol.WALLET, Modifier.size(22.dp), CaptureInk)
+                Spacer(Modifier.width(8.dp))
+                Text("Balances", color = CaptureInk, style = MaterialTheme.typography.titleMedium)
+            }
+        }
+        Box(Modifier.fillMaxWidth().height(CaptureDimensions.inkBorder).background(CaptureOutline))
     }
 }
 

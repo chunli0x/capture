@@ -1,20 +1,11 @@
 package ai.loosh.union.seeker
 
-import ai.loosh.union.CaptureAccentBright
-import ai.loosh.union.CaptureInk
-import ai.loosh.union.MutedGray
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
+import ai.loosh.union.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -26,7 +17,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
@@ -52,8 +42,8 @@ fun JudgmentScreen(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit, onPro
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            CaptureWordmark()
             EditorialHeading("JUDGE.")
+            JudgeGuidanceCard()
             Text(
                 "Compare two model outputs and pick the better one. Consensus-aligned judges earn " +
                     "test USDC on devnet.",
@@ -66,6 +56,29 @@ fun JudgmentScreen(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit, onPro
                 EmptyCard(s, vm, onBond, onProveHuman)
             } else {
                 PairCard(s, vm)
+            }
+        }
+    }
+}
+
+/** Guidance only: reading these beats never gates an answer. */
+@Composable
+private fun JudgeGuidanceCard() {
+    CapturePanel(Modifier.fillMaxWidth()) {
+        val beats = listOf(
+            "Read" to "Review the task and both outputs.",
+            "Compare" to "Look closely at both images.",
+            "Choose" to "Pick the more natural output.",
+        )
+        beats.forEachIndexed { index, (title, detail) ->
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(Modifier.size(28.dp).background(CaptureYellow, CaptureRadii.pill), contentAlignment = Alignment.Center) {
+                    Text("${index + 1}", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.titleMedium, color = CaptureInk)
+                    Text(detail, style = MaterialTheme.typography.bodySmall, color = MutedGray)
+                }
             }
         }
     }
@@ -86,7 +99,8 @@ private fun JudgeStatsCard(s: PilotState) {
             color = MutedGray,
         )
         Text(
-            "Earn ${formatPayUsdc((s.judgeBaseUsdc * s.judgeRateMultiplier).toLong())} USDC per aligned answer · " +
+            "Earn ${formatPayUsdc((s.judgeBaseUsdc * s.judgeRateMultiplier).toLong())} USDC per aligned answer " +
+                "(${formatPayUsdc(s.judgeBaseUsdc)} base × ${"%.2f".format(s.judgeRateMultiplier)}) · " +
                 "${formatPayUsdc(s.judgeFlatUsdc)} USDC for can't tell",
             style = MaterialTheme.typography.bodySmall,
             color = CaptureInk,
@@ -105,18 +119,16 @@ private fun EmptyCard(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit, on
                     style = MaterialTheme.typography.bodySmall,
                     color = MutedGray,
                 )
-                Button(onClick = onProveHuman, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) {
-                    Text("Prove you're human")
-                }
+                ActionButton("Prove you're human", onClick = onProveHuman, enabled = !s.busy)
             }
             !s.bonded -> {
                 Text("No pairs to judge right now", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
-                Button(onClick = onBond, modifier = Modifier.fillMaxWidth()) { Text("Deposit the USDC bond") }
-                Button(onClick = { vm.judgeNext() }, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) { Text("Refresh") }
+                ActionButton("Deposit the USDC bond", onClick = onBond)
+                SecondaryButton("Refresh", onClick = { vm.judgeNext() }, enabled = !s.busy)
             }
             else -> {
                 Text("No pairs to judge right now", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
-                Button(onClick = { vm.judgeNext() }, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) { Text("Refresh") }
+                SecondaryButton("Refresh", onClick = { vm.judgeNext() }, enabled = !s.busy)
             }
         }
     }
@@ -152,57 +164,37 @@ private fun PairChoice(s: PilotState, vm: SeekerViewModel) {
         Text("Is this photo realistic?", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
         Text("Rate it 1–5. 1 = bad, 5 = good.", style = MaterialTheme.typography.bodySmall, color = MutedGray)
         OutputImage(pair.optString("output_a_url", ""), "Output", Modifier.fillMaxWidth(), report)
-        if (failCount > 0) {
-            OutlinedButton(
-                onClick = { vm.judgeNext() },
-                enabled = !s.busy,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Couldn't load the image — try another") }
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (r in 1..5) {
-                Button(
-                    onClick = { vm.submitJudgment(rating = r) },
-                    enabled = !s.busy && imagesReady,
-                    modifier = Modifier.weight(1f),
-                ) { Text("$r") }
-            }
-        }
-        OutlinedButton(
-            onClick = { vm.submitJudgment(choice = "cant_tell") },
-            enabled = !s.busy && imagesReady,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("Can't tell") }
     } else {
         Text("Which photo is more realistic?", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutputImage(pair.optString("output_a_url", ""), "A", Modifier.weight(1f), report)
             OutputImage(pair.optString("output_b_url", ""), "B", Modifier.weight(1f), report)
         }
-        if (failCount > 0) {
-            OutlinedButton(
-                onClick = { vm.judgeNext() },
-                enabled = !s.busy,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Couldn't load an image — try another") }
+    }
+    if (failCount > 0) {
+        SecondaryButton("Couldn't load the image — try another", onClick = { vm.judgeNext() }, enabled = !s.busy)
+    }
+    if (taskType == "rating") {
+        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (r in 1..5) {
+                ActionButton("$r", onClick = { vm.submitJudgment(rating = r) },
+                    enabled = !s.busy && imagesReady, modifier = Modifier.width(48.dp))
+            }
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = { vm.submitJudgment(choice = "a") },
-                enabled = !s.busy && imagesReady,
-                modifier = Modifier.weight(1f),
-            ) { Text("A") }
-            Button(
-                onClick = { vm.submitJudgment(choice = "b") },
-                enabled = !s.busy && imagesReady,
-                modifier = Modifier.weight(1f),
-            ) { Text("B") }
+    } else {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            ActionButton("A", onClick = { vm.submitJudgment(choice = "a") },
+                enabled = !s.busy && imagesReady, modifier = Modifier.weight(1f))
+            ActionButton("B", onClick = { vm.submitJudgment(choice = "b") },
+                enabled = !s.busy && imagesReady, modifier = Modifier.weight(1f))
         }
-        OutlinedButton(
-            onClick = { vm.submitJudgment(choice = "cant_tell") },
-            enabled = !s.busy && imagesReady,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("Can't tell") }
+    }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Unsure? Choose this.", style = MaterialTheme.typography.bodySmall, color = MutedGray,
+            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+        SecondaryButton("Can't tell", onClick = { vm.submitJudgment(choice = "cant_tell") },
+            enabled = !s.busy && imagesReady)
     }
 }
 

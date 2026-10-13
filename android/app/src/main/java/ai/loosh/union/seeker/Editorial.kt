@@ -5,7 +5,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -15,9 +14,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -113,107 +110,32 @@ fun TierIcon(level: Int, modifier: Modifier = Modifier) {
     }
 }
 
-/** A milestone marker on the racing track: passed = filled, active = you are
- * here (larger + brighter), future = outlined. */
-@Composable
-private fun TrackMarker(tier: JudgeTier, active: Boolean, passed: Boolean) {
-    val size = if (active) 34.dp else 26.dp
-    val bg = when {
-        active -> CaptureAction
-        passed -> CaptureAccent
-        else -> CaptureSurface
-    }
-    val borderColor = when {
-        active || passed -> CaptureAccentDeep
-        else -> CaptureOutlineVariant
-    }
-    Box(
-        Modifier
-            .size(size)
-            .background(bg, CircleShape)
-            .border(if (active) 3.dp else 2.dp, borderColor, CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
-        when {
-            passed -> Text("✓", color = Color.White, style = MaterialTheme.typography.titleSmall)
-            active -> Text("✓", color = Color.White, style = MaterialTheme.typography.titleMedium)
-            else -> Text("${tier.level + 1}", color = MutedGray, style = MaterialTheme.typography.labelSmall)
-        }
-    }
-}
-
-/** The judge level ladder as a racing track: each level is a mark on a
- * horizontal track the judge progresses through left to right (§4). */
+/** Five readable tiers; the current tier comes from the server-backed state. */
 @Composable
 fun JudgeTierLadder(currentLevel: Int, modifier: Modifier = Modifier) {
     CapturePanel(modifier.fillMaxWidth()) {
-        Text("LEVEL LADDER", style = MaterialTheme.typography.labelMedium, color = CaptureAccentBright)
-        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-            Box(Modifier.fillMaxWidth().height(56.dp)) {
-                // the track
-                Box(
-                    Modifier
-                        .align(Alignment.Center)
-                        .fillMaxWidth()
-                        .height(6.dp)
-                        .background(CaptureOutlineVariant, CaptureRadii.pill),
-                )
-                // progress fill up to the current mark
-                Box(
-                    Modifier
-                        .align(Alignment.CenterStart)
-                        .fillMaxWidth(((currentLevel + 0.5f) / JUDGE_TIERS.size).coerceIn(0f, 1f))
-                        .height(6.dp)
-                        .background(CaptureAccent, CaptureRadii.pill),
-                )
-                // the marks
-                Row(
-                    Modifier.fillMaxWidth().height(56.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    JUDGE_TIERS.forEach { tier ->
-                        val active = tier.level == currentLevel
-                        val passed = tier.level < currentLevel
-                        Column(
-                            Modifier.weight(1f),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            Box(Modifier.height(16.dp), contentAlignment = Alignment.Center) {
-                                when {
-                                    active -> Text("YOU", style = MaterialTheme.typography.labelSmall, color = CaptureAccent)
-                                    tier.level == MAX_JUDGE_LEVEL -> Text("🏁", style = MaterialTheme.typography.labelSmall)
-                                }
-                            }
-                            TrackMarker(tier, active, passed)
-                        }
-                    }
+        Text("LEVEL LADDER", style = MaterialTheme.typography.labelMedium, color = MutedGray)
+        JUDGE_TIERS.forEach { tier ->
+            val active = tier.level == currentLevel
+            Row(
+                Modifier.fillMaxWidth()
+                    .background(if (active) CaptureBase else CaptureSurface, CaptureRadii.sm)
+                    .padding(horizontal = 8.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                TierIcon(tier.level, Modifier.size(32.dp))
+                Text(tier.name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, color = CaptureInk)
+                if (active) {
+                    Text("YOU", style = MaterialTheme.typography.labelSmall, color = CaptureInk,
+                        modifier = Modifier.background(CaptureYellow, CaptureRadii.pill)
+                            .border(CaptureDimensions.inkBorder, CaptureInk, CaptureRadii.pill)
+                            .padding(horizontal = 8.dp, vertical = 4.dp))
                 }
-            }
-            Row(Modifier.fillMaxWidth()) {
-                JUDGE_TIERS.forEach { tier ->
-                    val active = tier.level == currentLevel
-                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            tier.name,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (active) CaptureAccent else CaptureInk,
-                            maxLines = 1,
-                        )
-                        Text(
-                            "×${"%.2f".format(tier.rateMultiplier)}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MutedGray,
-                        )
-                    }
-                }
+                Text("×${"%.2f".format(tier.rateMultiplier)}", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
             }
         }
-        Text(
-            "Agreement rate: rolling last 100 judged pairs. Status is free; only the rate multiplier costs money.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MutedGray,
-        )
+        Text("Agreement rate: rolling last 100 judged pairs.", style = MaterialTheme.typography.bodySmall, color = MutedGray)
+        Text("Status is free; only the rate multiplier costs money.", style = MaterialTheme.typography.bodySmall, color = MutedGray)
     }
 }
-
-

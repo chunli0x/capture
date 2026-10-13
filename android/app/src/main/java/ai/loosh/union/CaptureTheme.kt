@@ -25,13 +25,14 @@ val CaptureSurface2 = Color(0xFFFFF8E8)
 val CaptureSurface3 = CaptureBaseDeep
 val CaptureInk = Color(0xFF181626)
 val CaptureOnBase = CaptureInk
-val MutedGray = Color(0xFF6B7280)
+val CaptureMutedText = Color(0xFF52515F)
+val MutedGray = CaptureMutedText
 val CaptureInkFaint = Color(0xFF9CA3AF)
 val CaptureOutline = CaptureInk
 val CaptureOutlineVariant = CaptureInk.copy(alpha = .25f)
 val CaptureAccent = Color(0xFF3B82F6)
 val CaptureAccentBright = CaptureAccent
-val CaptureAction = Color(0xFF0066FF)
+val CaptureAction = Color(0xFF005FEA)
 val CaptureAccentDeep = Color(0xFF1D4ED8)
 val CaptureAccentTint = CaptureAccent.copy(alpha = .12f)
 val CaptureAccentBorder = CaptureAccent.copy(alpha = .35f)
@@ -68,10 +69,18 @@ object CaptureMotion {
 }
 object CaptureRadii {
     val sm = RoundedCornerShape(12.dp)
-    val md = RoundedCornerShape(16.dp)
+    val md = RoundedCornerShape(20.dp)
     val lg = RoundedCornerShape(20.dp)
     val xl = RoundedCornerShape(24.dp)
+    val button = RoundedCornerShape(28.dp)
     val pill = RoundedCornerShape(50)
+}
+object CaptureDimensions {
+    val inkBorder = 2.dp
+    val shadowX = 3.dp
+    val shadowY = 4.dp
+    val primaryButtonMinHeight = 52.dp
+    val touchTarget = 48.dp
 }
 val CaptureColors = lightColorScheme(
     primary = CaptureAction, onPrimary = Color.White,

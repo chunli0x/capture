@@ -80,7 +80,10 @@ data class PilotState(
     val calibrationRequired: Int = 10,
     val calibrationCorrect: Int = 0,
     val judgePair: JSONObject? = null,
-)
+) {
+    // The stats API exposes earned and settled; pending is their unpaid difference.
+    val judgePendingUsdc: Long get() = (judgeEarnedUsdc - judgeSettledUsdc).coerceAtLeast(0)
+}
 
 class SeekerViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences("seeker.api", 0)

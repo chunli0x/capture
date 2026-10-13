@@ -1,18 +1,9 @@
 package ai.loosh.union.seeker
 
-import ai.loosh.union.CaptureAccentBright
-import ai.loosh.union.CaptureInk
-import ai.loosh.union.MutedGray
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
+import ai.loosh.union.*
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,44 +41,37 @@ fun BalanceScreen(s: PilotState, vm: SeekerViewModel, onBack: () -> Unit) {
                 color = MutedGray,
             )
             BalanceCard(s)
-            JudgeTierLadder(judgeLevelFrom(s.judgeAgreementRate))
-            Button(onClick = { vm.refresh() }, enabled = !s.busy, modifier = Modifier.fillMaxWidth()) {
-                Text("Refresh")
-            }
-            Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-                Text("Back to judging")
-            }
+            JudgeTierLadder(s.judgeLevel)
+            SecondaryButton("Refresh", onClick = { vm.refresh() }, enabled = !s.busy)
+            ActionButton("Back to judging", onClick = onBack)
         }
     }
 }
 
 @Composable
 private fun BalanceCard(s: PilotState) {
-    CapturePanel(Modifier.fillMaxWidth(), elevated = true) {
-        Text("YOUR BALANCE", style = MaterialTheme.typography.labelMedium, color = CaptureAccentBright)
-        AmountRow("Earned", formatToken(s.judgeEarnedUsdc), "USDC")
-        val pending = (s.judgeEarnedUsdc - s.judgeSettledUsdc).coerceAtLeast(0)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            AmountRow("Pending", formatToken(pending), "USDC", Modifier.weight(1f))
-            AmountRow("Settled", formatToken(s.judgeSettledUsdc), "USDC", Modifier.weight(1f))
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            BalanceModule("Earned", s.judgeEarnedUsdc, CaptureSymbol.COINS, Modifier.weight(1f).fillMaxHeight())
+            BalanceModule("Pending", s.judgePendingUsdc, CaptureSymbol.CLOCK, Modifier.weight(1f).fillMaxHeight())
         }
-        AmountRow("Staked", formatToken(s.judgeStakedUsdc), "USDC")
+        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            BalanceModule("Settled", s.judgeSettledUsdc, CaptureSymbol.VERIFIED, Modifier.weight(1f).fillMaxHeight())
+            BalanceModule("Staked", s.judgeStakedUsdc, CaptureSymbol.LOCK, Modifier.weight(1f).fillMaxHeight())
+        }
         Text(
-            "Level ${s.judgeLevelName} · ×${"%.2f".format(s.judgeRateMultiplier)} rate · ${s.judgeWarnings} warning${if (s.judgeWarnings == 1) "" else "s"}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MutedGray,
+            "${s.judgeLevelName} · ×${"%.2f".format(s.judgeRateMultiplier)} rate · ${s.judgeWarnings} warning${if (s.judgeWarnings == 1) "" else "s"}",
+            style = MaterialTheme.typography.bodySmall, color = MutedGray,
         )
     }
 }
 
 @Composable
-private fun AmountRow(label: String, amount: String, unit: String, modifier: Modifier = Modifier) {
-    Column(modifier.padding(vertical = 6.dp)) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = MutedGray)
-        Text(
-            "$amount $unit",
-            style = MaterialTheme.typography.headlineSmall,
-            color = CaptureInk,
-        )
+private fun BalanceModule(label: String, amount: Long, symbol: CaptureSymbol, modifier: Modifier = Modifier) {
+    CapturePanel(modifier) {
+        CaptureIcon(symbol, Modifier.size(28.dp), CaptureAccent)
+        Text(label, style = MaterialTheme.typography.titleMedium, color = MutedGray)
+        Text(formatToken(amount), style = MaterialTheme.typography.headlineMedium, color = CaptureInk)
+        Text("USDC", style = MaterialTheme.typography.labelSmall, color = MutedGray)
     }
 }

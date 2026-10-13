@@ -2,6 +2,7 @@ package ai.loosh.union.seeker
 
 import ai.loosh.union.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -13,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
@@ -21,6 +23,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -59,11 +62,18 @@ fun ConstellationBackground(modifier: Modifier = Modifier) {
     }
 }
 
+/** Crisp offset ink, with no elevation blur. Apply before clipping the fill. */
+fun Modifier.captureFlatShadow(shape: Shape = CaptureRadii.md): Modifier = drawBehind {
+    val outline = shape.createOutline(size, layoutDirection, this)
+    translate(CaptureDimensions.shadowX.toPx(), CaptureDimensions.shadowY.toPx()) {
+        drawOutline(outline, CaptureInk)
+    }
+}
+
 @Composable
 fun CapturePanel(modifier: Modifier = Modifier, elevated: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
-    Column(modifier.clip(CaptureRadii.md).background(if (elevated) CaptureSurface2 else CaptureSurface)
-        .border(2.dp, CaptureOutline, CaptureRadii.md)) {
-        if (elevated) Box(Modifier.fillMaxWidth().height(1.dp).background(CaptureInk.copy(alpha = .06f)))
+    Column(modifier.captureFlatShadow().clip(CaptureRadii.md).background(CaptureSurface)
+        .border(CaptureDimensions.inkBorder, CaptureOutline, CaptureRadii.md)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
     }
 }
@@ -104,7 +114,7 @@ fun CaptureWordmark() {
 }
 
 /** Small, consistent line icons drawn as vectors, with accessible labels at call sites. */
-enum class CaptureSymbol { CAMERA, GALLERY, PERSON, RING, BOLT, STREAK, EXPLORE, ROUTE, VERIFIED, TARGET, BRANCH, LOCK, SURFACE, LIGHT, WEATHER, MOTION, OBJECT, PLACE, VIDEO, EYE, STARS, QUESTION_BUBBLE, FILMSTRIP, COINS, SCALES, INFO, ARROW_LEFT, ARROW_RIGHT, ARROW_DOWN }
+enum class CaptureSymbol { CAMERA, GALLERY, PERSON, RING, BOLT, STREAK, EXPLORE, ROUTE, VERIFIED, TARGET, BRANCH, LOCK, SURFACE, LIGHT, WEATHER, MOTION, OBJECT, PLACE, VIDEO, EYE, STARS, QUESTION_BUBBLE, FILMSTRIP, COINS, SCALES, INFO, ARROW_LEFT, ARROW_RIGHT, ARROW_DOWN, CLOCK, WALLET }
 
 @Composable
 fun CaptureIcon(symbol: CaptureSymbol, modifier: Modifier = Modifier, tint: Color = CaptureAccent, description: String? = null) {
@@ -180,6 +190,12 @@ fun CaptureIcon(symbol: CaptureSymbol, modifier: Modifier = Modifier, tint: Colo
             CaptureSymbol.ARROW_LEFT -> { path(10f,5f,3f,12f,10f,19f); line(3f,12f,21f,12f) }
             CaptureSymbol.ARROW_RIGHT -> { path(14f,5f,21f,12f,14f,19f); line(3f,12f,21f,12f) }
             CaptureSymbol.ARROW_DOWN -> { path(5f,14f,12f,21f,19f,14f); line(12f,3f,12f,21f) }
+            CaptureSymbol.CLOCK -> { circle(12f,12f,9f); path(12f,6f,12f,12f,16f,14f) }
+            CaptureSymbol.WALLET -> {
+                path(3f,7f,19f,7f,19f,21f,3f,21f,3f,7f,17f,3f,17f,7f)
+                path(19f,11f,14f,11f,14f,17f,21f,17f,21f,11f,19f,11f)
+                line(17f,14f,17.2f,14f)
+            }
             CaptureSymbol.RING -> circle(12f,12f,9f)
         }
     }
@@ -226,14 +242,28 @@ fun FloatingBottomBar(profile: Boolean, enabled: Boolean, onGallery: () -> Unit,
 @Composable
 fun ActionButton(
     label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true,
-    containerColor: Color = Color.Transparent, contentColor: Color = Color.White,
+    containerColor: Color = CaptureAction, contentColor: Color = Color.White,
 ) {
     val haptic = LocalHapticFeedback.current
     Button(onClick = { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); onClick() },
-        modifier = modifier.fillMaxWidth().heightIn(min = 56.dp)
-            .clip(CaptureRadii.pill).background(CaptureGradients.action, alpha = if (enabled) 1f else .35f),
-        enabled = enabled, shape = CaptureRadii.pill,
-        colors = ButtonDefaults.buttonColors(containerColor = containerColor, contentColor = contentColor, disabledContainerColor = Color.Transparent)) {
+        modifier = modifier.fillMaxWidth().heightIn(min = CaptureDimensions.primaryButtonMinHeight)
+            .widthIn(min = CaptureDimensions.touchTarget).captureFlatShadow(CaptureRadii.button),
+        enabled = enabled, shape = CaptureRadii.button,
+        border = BorderStroke(CaptureDimensions.inkBorder, CaptureInk),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = containerColor, contentColor = contentColor,
+            disabledContainerColor = ButtonGrey, disabledContentColor = ButtonGreyInk)) {
+        Text(label, style = MaterialTheme.typography.titleMedium)
+    }
+}
+
+@Composable
+fun SecondaryButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    OutlinedButton(onClick = onClick, enabled = enabled,
+        modifier = modifier.fillMaxWidth().heightIn(min = CaptureDimensions.primaryButtonMinHeight),
+        shape = CaptureRadii.button, border = BorderStroke(CaptureDimensions.inkBorder, CaptureInk),
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = CaptureInk),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)) {
         Text(label, style = MaterialTheme.typography.titleMedium)
     }
 }
