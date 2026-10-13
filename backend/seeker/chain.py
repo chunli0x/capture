@@ -38,6 +38,25 @@ def meta(key, signer=False, writable=False):
     return AccountMeta(key, signer, writable)
 
 
+def message_fingerprint(msg):
+    """Fingerprint a message excluding the recent_blockhash. A wallet may
+    refresh the blockhash before signing (the bond deposit is client-signed),
+    which changes the message bytes without changing the operation. The
+    fingerprint covers the header, account keys, and instructions — everything
+    that defines the operation — so a blockhash refresh does not fail confirm."""
+    h = hashlib.sha256()
+    h.update(bytes([msg.header.num_required_signatures]))
+    h.update(bytes([msg.header.num_readonly_signed_accounts]))
+    h.update(bytes([msg.header.num_readonly_unsigned_accounts]))
+    for k in msg.account_keys:
+        h.update(bytes(k))
+    for i in msg.instructions:
+        h.update(bytes([i.program_id_index]))
+        h.update(bytes(i.accounts))
+        h.update(bytes(i.data))
+    return h.hexdigest()
+
+
 def ata_instruction(payer, owner, mint):
     ata = get_associated_token_address(owner, mint)
     return Instruction(
@@ -201,7 +220,7 @@ class Chain:
         tx = Transaction.new_unsigned(msg)
         return {
             "transaction": base64.b64encode(bytes(tx)).decode(),
-            "message_hash": hashlib.sha256(bytes(msg)).hexdigest(),
+            "message_hash": message_fingerprint(msg),
             "last_valid_height": result["lastValidBlockHeight"],
         }
 
@@ -454,8 +473,7 @@ class Chain:
             tx.verify()
             if (
                 str(tx.signatures[0]) != signature
-                or hashlib.sha256(bytes(tx.message)).hexdigest()
-                != prepared.message_hash
+                or message_fingerprint(tx.message) != prepared.message_hash
             ):
                 raise ChainUnavailable(
                     "Transaction does not match this prepared operation"

@@ -5,7 +5,7 @@ import struct
 from types import SimpleNamespace
 
 import pytest
-from seeker.chain import Chain, ChainUnavailable, discriminator
+from seeker.chain import Chain, ChainUnavailable, discriminator, message_fingerprint
 from solders.hash import Hash
 from solders.keypair import Keypair
 from solders.message import Message
@@ -58,7 +58,7 @@ def test_exact_signed_message_confirmation(chain, payer):
     )
     tx = Transaction.new_unsigned(msg)
     tx.sign([payer], msg.recent_blockhash)
-    p = SimpleNamespace(message_hash=hashlib.sha256(bytes(msg)).hexdigest())
+    p = SimpleNamespace(message_hash=message_fingerprint(msg))
     result = {
         "meta": {"err": None},
         "transaction": [base64.b64encode(bytes(tx)).decode(), "base64"],
@@ -68,7 +68,7 @@ def test_exact_signed_message_confirmation(chain, payer):
     p.message_hash = "bad"
     with pytest.raises(ChainUnavailable):
         chain.confirm(p, str(tx.signatures[0]))
-    p.message_hash = hashlib.sha256(bytes(msg)).hexdigest()
+    p.message_hash = message_fingerprint(msg)
     result["meta"]["err"] = {"InstructionError": [0, "error"]}
     with pytest.raises(ChainUnavailable):
         chain.confirm(p, str(tx.signatures[0]))
@@ -82,7 +82,7 @@ def test_unsigned_or_other_signer_never_confirms(chain, payer):
         chain.build("deposit", str(payer.pubkey())), payer.pubkey(), Hash.new_unique()
     )
     tx = Transaction.new_unsigned(msg)
-    p = SimpleNamespace(message_hash=hashlib.sha256(bytes(msg)).hexdigest())
+    p = SimpleNamespace(message_hash=message_fingerprint(msg))
     chain.rpc = lambda *args: {
         "meta": {"err": None},
         "transaction": [base64.b64encode(bytes(tx)).decode(), "base64"],
@@ -175,7 +175,7 @@ def test_find_signature_paginates_beyond_first_100(chain, payer):
     tx.sign([payer], msg.recent_blockhash)
     p = SimpleNamespace(
         wallet=str(payer.pubkey()),
-        message_hash=hashlib.sha256(bytes(msg)).hexdigest(),
+        message_hash=message_fingerprint(msg),
     )
     target = str(tx.signatures[0])
 
