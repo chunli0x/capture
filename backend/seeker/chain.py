@@ -62,7 +62,7 @@ class Chain:
             bytes(json.loads(settings.verifier_key_file.read_text()))
         )
         self.config = self.pda(b"config")
-        self.penalty_vault = self.pda(b"penalty-vault", bytes(self.config))
+        self.penalty_vault = self.pda(b"penalty-vault", bytes(self.usdc))
         # Devnet treasury: holds the USDC mint authority (the faucet, the bond,
         # and the settle_usdc payout — one token, three jobs). Absent means the
         # on-chain mint is unavailable and the backend fails closed instead of

@@ -249,7 +249,7 @@ pub struct Initialize<'info> {
     #[account(init, payer=admin, space=8+Config::INIT_SPACE, seeds=[b"config"], bump)]
     pub config: Account<'info, Config>,
     pub usdc_mint: Account<'info, Mint>,
-    #[account(init, payer=admin, seeds=[b"penalty-vault", config.key().as_ref()], bump, token::mint=usdc_mint, token::authority=config)]
+    #[account(init, payer=admin, seeds=[b"penalty-vault", usdc_mint.key().as_ref()], bump, token::mint=usdc_mint, token::authority=config)]
     pub penalty_vault: Account<'info, TokenAccount>,
     #[account(constraint=program.programdata_address()? == Some(program_data.key()) @ Error::Unauthorized)]
     pub program: Program<'info, crate::program::SeekerBounty>,
@@ -335,7 +335,7 @@ pub struct Slash<'info> {
     pub bond: Account<'info, Bond>,
     #[account(mut, seeds=[b"bond-vault", worker.as_ref()], bump, token::mint=config.usdc_mint, token::authority=bond)]
     pub bond_vault: Account<'info, TokenAccount>,
-    #[account(mut, seeds=[b"penalty-vault", config.key().as_ref()], bump, token::mint=config.usdc_mint, token::authority=config)]
+    #[account(mut, seeds=[b"penalty-vault", config.usdc_mint.as_ref()], bump, token::mint=config.usdc_mint, token::authority=config)]
     pub penalty_vault: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
