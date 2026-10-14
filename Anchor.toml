@@ -8,7 +8,7 @@ skip-lint = false
 seeker_bounty = "5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV"
 
 [programs.devnet]
-seeker_bounty = "5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV"
+seeker_bounty = "8pY9dpwhe4Tbv9Ud9r13WCrNkugirsELNKA3hwfUUdpu"
 
 [registry]
 url = "https://api.apr.dev"

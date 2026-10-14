@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer};
 
 // Development identity only. Deploy with your own keypair and update all clients.
-declare_id!("5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV");
+declare_id!("8pY9dpwhe4Tbv9Ud9r13WCrNkugirsELNKA3hwfUUdpu");
 
 const COOLDOWN: i64 = 86_400;
 
