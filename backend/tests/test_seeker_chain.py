@@ -27,6 +27,7 @@ def chain(tmp_path):
             rpc_url="http://127.0.0.1:8899",
             min_bond=1_000_000,
             faucet_sol_lamports=50_000_000,
+            faucet_treasury_sol_floor=1_000_000_000,
         )
     )
 
@@ -231,6 +232,9 @@ def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
         if method == "getSignatureStatuses":
             # confirm success so settle_usdc's _confirm_sent passes
             return {"value": [{"err": None, "confirmationStatus": "finalized"}]}
+        if method == "getBalance":
+            # enough SOL to clear the faucet treasury floor check
+            return {"value": 10_000_000_000}
         raise AssertionError(f"unexpected rpc method: {method}")
 
     chain.rpc = fake_rpc
