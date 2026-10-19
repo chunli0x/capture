@@ -27,6 +27,7 @@ def chain(tmp_path):
             rpc_url="http://127.0.0.1:8899",
             min_bond=1_000_000,
             faucet_sol_lamports=50_000_000,
+            faucet_treasury_sol_floor=1_000_000_000,
         )
     )
 
@@ -223,12 +224,17 @@ def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
     def fake_rpc(method, params):
         sent.append((method, params))
         if method == "getLatestBlockhash":
-            return {"value": {"blockhash": str(Hash.new_unique())}}
+            return {"value": {"blockhash": str(Hash.new_unique()), "lastValidBlockHeight": 100}}
+        if method == "getAccountInfo":
+            return {"value": None}
         if method == "sendTransaction":
             return "sig_" + method
         if method == "getSignatureStatuses":
             # confirm success so settle_skr's _confirm_sent passes
             return {"value": [{"err": None, "confirmationStatus": "finalized"}]}
+        if method == "getBalance":
+            # enough SOL to clear the faucet treasury floor check
+            return {"value": 10_000_000_000}
         raise AssertionError(f"unexpected rpc method: {method}")
 
     chain.rpc = fake_rpc
@@ -236,10 +242,97 @@ def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
     sig = chain.faucet(str(worker.pubkey()))
     assert sig == "sig_sendTransaction"
     # Settlement mints test $SKR to the judge (mint authority = treasury).
-    sig = chain.settle_skr(str(worker.pubkey()), 100_000, memo="judgment-1")
-    assert sig == "sig_sendTransaction"
+    journal = []
+    sig = chain.settle_skr(str(worker.pubkey()), 100_000, memo="judgment-1", persist=journal.append)
+    assert sig == journal[0]["signature"]
+    assert str(Transaction.from_bytes(base64.b64decode(journal[0]["transaction"])).signatures[0]) == sig
 
     # Both produced exactly two sendTransaction calls (one each) and the
     # instructions serialized without a Keypair/Pubkey type mismatch.
     sends = [c for c in sent if c[0] == "sendTransaction"]
     assert len(sends) == 2
+
+
+def test_faucet_refuses_when_below_sol_floor(chain, tmp_path):
+    # Global faucet budget: refuse a tap that would drop the treasury below
+    # the SOL floor, so a swarm of fresh wallets cannot drain the devnet funder.
+    treasury = Keypair()
+    p = tmp_path / "treasury.json"
+    p.write_text(json.dumps(list(bytes(treasury))))
+    chain.treasury = treasury
+
+    def fake_rpc(method, params):
+        if method == "getBalance":
+            return {"value": 500_000_000}  # below floor (1 SOL) + tap (0.05)
+        raise AssertionError(f"unexpected rpc method: {method}")
+
+    chain.rpc = fake_rpc
+    with pytest.raises(ChainUnavailable):
+        chain.faucet(str(Keypair().pubkey()))
+
+
+def test_payment_journal_failure_prevents_broadcast(chain, payer):
+    chain.treasury = payer
+    calls = []
+
+    def rpc(method, params):
+        calls.append(method)
+        if method == "getAccountInfo":
+            return {"value": None}
+        if method == "getLatestBlockhash":
+            return {"value": {"blockhash": str(Hash.new_unique()), "lastValidBlockHeight": 100}}
+        raise AssertionError("Must not broadcast before durable journal commit")
+
+    chain.rpc = rpc
+
+    def persist(_):
+        raise RuntimeError("DB commit failed")
+
+    with pytest.raises(RuntimeError, match="DB commit failed"):
+        chain.settle_skr(str(payer.pubkey()), 100, "journal-test", persist=persist)
+    assert "sendTransaction" not in calls
+
+
+def test_corrupt_payment_receipt_fails_closed_without_broadcast(chain, payer):
+    chain.treasury = payer
+    chain.rpc = lambda method, params: {"value": {
+        "owner": str(chain.program),
+        "data": [base64.b64encode(discriminator("Payment", "account") + bytes(120)).decode(), "base64"],
+    }}
+    with pytest.raises(ChainUnavailable, match="does not match"):
+        chain.settle_skr(str(payer.pubkey()), 100, "bad-receipt", persist=lambda _: pytest.fail("must not rebuild"))
+
+
+def test_expired_payment_transaction_rebuilt_and_journaled_before_send(chain, payer):
+    chain.treasury = payer
+    journal, sends = [], []
+    height = 10
+    finalized = False
+
+    def rpc(method, params):
+        if method == "getAccountInfo":
+            return {"value": None}
+        if method == "getLatestBlockhash":
+            return {"value": {"blockhash": str(Hash.new_unique()), "lastValidBlockHeight": height + 100}}
+        if method == "getBlockHeight":
+            return height
+        if method == "sendTransaction":
+            assert journal[-1]["transaction"] == params[0]
+            sends.append(params[0])
+            return journal[-1]["signature"]
+        if method == "getSignatureStatuses":
+            if not finalized:
+                raise ChainUnavailable("not landed")
+            return {"value": [{"err": None, "confirmationStatus": "finalized"}]}
+        raise AssertionError(method)
+
+    chain.rpc = rpc
+    with pytest.raises(ChainUnavailable):
+        chain.settle_skr(str(payer.pubkey()), 100, "expiry", persist=journal.append)
+    height = 111
+    finalized = True
+    sig = chain.settle_skr(str(payer.pubkey()), 100, "expiry", persist=journal.append, prepared=journal[-1])
+    assert sig == journal[-1]["signature"]
+    assert len(journal) == 2 and len(sends) == 2 and sends[0] != sends[1]
+    txs = [Transaction.from_bytes(base64.b64decode(raw)) for raw in sends]
+    assert message_fingerprint(txs[0].message) == message_fingerprint(txs[1].message)

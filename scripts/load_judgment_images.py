@@ -1,0 +1,1 @@
+/home/hermes/capture-images/load_judgment_images.py

@@ -11,9 +11,9 @@ from .db import Base, connect
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 
-# Legacy USDC -> SKR column renames (revert of the USDC-everything change). A
-# USDC-era database has the old column names; rename them (preserving balances)
-# before the ADD COLUMN pass so the SKR names are present and continuity is kept.
+# Legacy USDC -> SKR column renames. Rename USDC-era columns (preserving
+# balances) before the ADD COLUMN pass. Existing SKR-era databases already
+# have the correct names and need no rename.
 RENAMES = [
     ("seeker_actors", "usdc_funded", "skr_funded"),
     ("seeker_actors", "staked_usdc", "staked_skr"),

@@ -46,10 +46,10 @@ class Actor(Base):
     # liveness session (see /liveness/complete). Proof-of-human, not bank-grade.
     liveness_completed: Mapped[bool] = mapped_column(Boolean, default=False)
     # Bond gate (all server-recorded): bonded == the devnet bond was deposited;
-    # skr_funded == the devnet test-$SKR faucet ran.
+    # skr_funded == the devnet test $SKR faucet ran.
     bonded: Mapped[bool] = mapped_column(Boolean, default=False)
     skr_funded: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Number of times this wallet has tapped the devnet test-$SKR faucet
+    # Number of times this wallet has tapped the devnet test $SKR faucet
     # (capped at faucet_max_mints). skr_funded stays as the "funded at least
     # once" flag for the deposit gate.
     faucet_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -57,7 +57,7 @@ class Actor(Base):
     # calibrated == passed the N-pair calibration gate (unpaid) and may stake +
     # judge. agreement_rate == rolling fraction of resolved judgments this judge
     # was aligned on (last judge_window). judged_count == resolved judgments
-    # participated in. staked_skr == the $SKR bond escrowed on deposit (mirror).
+    # participated in. staked_skr == the SKR bond escrowed on deposit (mirror).
     # warnings == mirror of the on-chain bond.warnings ladder (0 clean, 1 warned,
     # >= 2 slashed).
     calibrated: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -158,6 +158,15 @@ class Judgment(Base):
     # are persisted BEFORE broadcast so a partial payout can never be lost or
     # double-paid (finding 10 #1); cleared once the mint confirms.
     settling: Mapped[bool] = mapped_column(Boolean, default=False)
+    # judgment_id is also the unique, immutable on-chain resolution ID.
+    liability_legacy: Mapped[bool] = mapped_column(Boolean, default=False)
+    liability_reserved: Mapped[bool] = mapped_column(Boolean, default=False)
+    enforcement_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    enforcement_penalty: Mapped[bool] = mapped_column(Boolean, default=False)
+    enforcement_complete: Mapped[bool] = mapped_column(Boolean, default=False)
+    payout_transaction: Mapped[str | None] = mapped_column(String(4096))
+    payout_pending_signature: Mapped[str | None] = mapped_column(String(88))
+    payout_last_valid_height: Mapped[int | None] = mapped_column(BigInteger)
     submitted_at: Mapped[int] = mapped_column(BigInteger, default=now)
 
 

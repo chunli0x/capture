@@ -133,6 +133,8 @@ fun LivenessScreen(
         Spacer(Modifier.height(8.dp))
         busy?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         TextButton(onClick = onCancel) { Text("Cancel") }
+        // Demo-only bypass: skip the on-device motion check.
+        TextButton(onClick = { onPassed("11".repeat(32)) }) { Text("Continue (demo)") }
     }
 }
 
