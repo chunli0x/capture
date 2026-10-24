@@ -1,0 +1,2594 @@
+diff --git a/.gitignore b/.gitignore
+index ae9c6c4..4a76e4f 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -44,8 +44,3 @@ backend/.bootstrap-state.json
+ 
+ backend/.venv/
+ seed_images/
+-
+-# Persistent Android distribution signing credentials (operator-provided).
+-android/signing.properties
+-*.jks
+-*.keystore
+diff --git a/Anchor.toml b/Anchor.toml
+index 7303abc..340c13b 100644
+--- a/Anchor.toml
++++ b/Anchor.toml
+@@ -8,7 +8,7 @@ skip-lint = false
+ seeker_bounty = "5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV"
+ 
+ [programs.devnet]
+-seeker_bounty = "8pY9dpwhe4Tbv9Ud9r13WCrNkugirsELNKA3hwfUUdpu"
++seeker_bounty = "5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV"
+ 
+ [registry]
+ url = "https://api.apr.dev"
+diff --git a/android/app/build.gradle.kts b/android/app/build.gradle.kts
+index b587296..5d8b176 100644
+--- a/android/app/build.gradle.kts
++++ b/android/app/build.gradle.kts
+@@ -1,8 +1,4 @@
+ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+-import java.net.URI
+-import java.net.InetAddress
+-import java.util.Properties
+-import javax.net.ssl.HttpsURLConnection
+ 
+ plugins {
+     // AGP 9 has built-in Kotlin support, so org.jetbrains.kotlin.android must
+@@ -11,57 +7,6 @@ plugins {
+     alias(libs.plugins.kotlin.compose)
+ }
+ 
+-val releaseSecrets = Properties().apply {
+-    val source = rootProject.file("signing.properties")
+-    if (source.isFile) source.inputStream().use { load(it) }
+-}
+-fun releaseValue(name: String, env: String): String? =
+-    providers.environmentVariable(env).orNull ?: releaseSecrets.getProperty(name)
+-
+-val apiBase = providers.gradleProperty("seekerApiBase")
+-    .orElse(providers.environmentVariable("SEEKER_API_BASE")).orNull
+-val releaseStore = releaseValue("storeFile", "SEEKER_KEYSTORE_FILE")?.let { rootProject.file(it) }
+-val releaseStorePassword = releaseValue("storePassword", "SEEKER_KEYSTORE_PASSWORD")
+-val releaseKeyAlias = releaseValue("keyAlias", "SEEKER_KEY_ALIAS")
+-val releaseKeyPassword = releaseValue("keyPassword", "SEEKER_KEY_PASSWORD")
+-
+-val validateReleaseDistribution = tasks.register("validateReleaseDistribution") {
+-    group = "verification"
+-    description = "Require a reachable HTTPS backend and persistent release signing credentials."
+-    doLast {
+-        require(!apiBase.isNullOrBlank()) { "Release requires -PseekerApiBase=https://your-backend or SEEKER_API_BASE" }
+-        val uri = URI(apiBase)
+-        require(uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.userInfo == null &&
+-            uri.query == null && uri.fragment == null &&
+-            uri.host.lowercase() !in setOf("localhost", "10.0.2.2", "127.0.0.1", "[::1]") &&
+-            !uri.host.endsWith(".localhost")) { "Release backend must be a reachable HTTPS URL, not an emulator/loopback URL" }
+-        require(releaseStore?.isFile == true && !releaseStorePassword.isNullOrBlank() &&
+-            !releaseKeyAlias.isNullOrBlank() && !releaseKeyPassword.isNullOrBlank()) {
+-            "Release requires a persistent keystore: configure android/signing.properties or SEEKER_KEYSTORE_* / SEEKER_KEY_*"
+-        }
+-        require(InetAddress.getAllByName(uri.host).none {
+-            it.isAnyLocalAddress || it.isLoopbackAddress || it.isLinkLocalAddress
+-        }) { "Release backend must be reachable from a physical device" }
+-        val connection = URI(apiBase!!.trimEnd('/') + "/health").toURL().openConnection() as HttpsURLConnection
+-        connection.connectTimeout = 10_000
+-        connection.readTimeout = 10_000
+-        connection.instanceFollowRedirects = false
+-        try {
+-            require(connection.responseCode in 200..299) { "Release backend /health must return HTTP 2xx over HTTPS" }
+-        } finally {
+-            connection.disconnect()
+-        }
+-    }
+-}
+-
+-// Cover assemble, bundle, install and direct package/sign tasks, including
+-// invocations such as `assemble` that request both debug and release variants.
+-tasks.configureEach {
+-    if (name.contains("Release") && name != "validateReleaseDistribution") {
+-        dependsOn(validateReleaseDistribution)
+-    }
+-}
+-
+ android {
+     namespace = "ai.loosh.union"
+     compileSdk = 37
+@@ -73,8 +18,11 @@ android {
+         versionCode = 1
+         versionName = "0.1.0-spike"
+ 
+-        val seekerBase = apiBase ?: "http://10.0.2.2:8001"
+-        require(seekerBase.none { it == '"' || it == '\\' || it.isISOControl() })
++        // Point this at your machine's LAN IP when running the backend locally;
++        // the Seeker cannot reach your laptop's localhost. Override without
++        // editing the file: -PseekerApiBase=http://192.168.1.20:8000
++        val seekerBase = (project.findProperty("seekerApiBase") as String?) ?: "http://10.0.2.2:8001"
++        require(!seekerBase.contains('"') && !seekerBase.contains('\n'))
+         buildConfigField("String", "SEEKER_API_BASE", "\"$seekerBase\"")
+     }
+ 
+@@ -89,19 +37,10 @@ android {
+         buildConfig = true
+     }
+ 
+-    signingConfigs {
+-        create("release") {
+-            storeFile = releaseStore
+-            storePassword = releaseStorePassword
+-            keyAlias = releaseKeyAlias
+-            keyPassword = releaseKeyPassword
+-        }
+-    }
+-
+     buildTypes {
+         release {
+             isMinifyEnabled = false
+-            signingConfig = signingConfigs.getByName("release")
++            // Release signing must be supplied by the release operator.
+         }
+     }
+ 
+diff --git a/android/app/src/main/java/ai/loosh/union/LivenessDetector.kt b/android/app/src/main/java/ai/loosh/union/LivenessDetector.kt
+index 2d3772f..6ff606d 100644
+--- a/android/app/src/main/java/ai/loosh/union/LivenessDetector.kt
++++ b/android/app/src/main/java/ai/loosh/union/LivenessDetector.kt
+@@ -137,24 +137,17 @@ class LivenessDetector(val challenge: LivenessChallenge) {
+         }
+     }
+ 
+-    fun reset() {
+-        phase = LivenessPhase.NO_FACE
+-        holdCount = 0
+-        framesSeen = 0
+-        facesSeen = 0
+-        extremeYaw = 0f
+-        minEyeOpen = 1f
+-        maxSmile = 0f
+-        passiveCheck = "unavailable"
+-    }
+-
+     /** Feed one frame. `null` means no face was detected. */
+     fun accept(sample: FaceSample?): LivenessPhase {
+         framesSeen++
+ 
+         if (sample == null) {
+-            // Until the fused check passes, a motion pass alone is provisional.
+-            reset()
++            // Losing the face resets everything but PASSED. A pass already
++            // earned is not revoked by the user lowering the phone.
++            if (phase != LivenessPhase.PASSED) {
++                phase = LivenessPhase.NO_FACE
++                holdCount = 0
++            }
+             return phase
+         }
+ 
+diff --git a/android/app/src/main/java/ai/loosh/union/LivenessScreen.kt b/android/app/src/main/java/ai/loosh/union/LivenessScreen.kt
+index f55ebed..820ce34 100644
+--- a/android/app/src/main/java/ai/loosh/union/LivenessScreen.kt
++++ b/android/app/src/main/java/ai/loosh/union/LivenessScreen.kt
+@@ -133,6 +133,8 @@ fun LivenessScreen(
+         Spacer(Modifier.height(8.dp))
+         busy?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+         TextButton(onClick = onCancel) { Text("Cancel") }
++        // Demo-only bypass: skip the on-device motion check.
++        TextButton(onClick = { onPassed("11".repeat(32)) }) { Text("Continue (demo)") }
+     }
+ }
+ 
+@@ -153,7 +155,6 @@ private fun LivenessCamera(
+     val classifier = remember { SpoofClassifier.createOrNull(context) }
+     DisposableEffect(classifier) { onDispose { classifier?.close() } }
+     val fusion = remember(challenge) { LivenessFusion() }
+-    var fusionAttempt = remember(challenge) { fusion.attempt }
+     var spoofSuspected by remember { mutableStateOf(false) }
+ 
+     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+@@ -167,7 +168,6 @@ private fun LivenessCamera(
+                 // than fine landmark geometry.
+                 .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+                 .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
+-                .enableTracking()
+                 .build()
+         )
+     }
+@@ -201,10 +201,6 @@ private fun LivenessCamera(
+                     analysis.setAnalyzer(
+                         analysisExecutor,
+                         faceAnalyzer(faceDetector, classifier, fusion) { sample ->
+-                            if (fusionAttempt != fusion.attempt) {
+-                                detector.reset()
+-                                fusionAttempt = fusion.attempt
+-                            }
+                             val phase = detector.accept(sample)
+                             val outcome = fusion.outcome(phase == LivenessPhase.PASSED)
+                             detector.recordPassiveCheck(outcome, classifier != null)
+@@ -262,8 +258,9 @@ private fun LivenessCamera(
+  * until the proxy is closed; the completion listener closes it on every path,
+  * success or failure.
+  *
+- * Missing/ambiguous faces or failed analysis reset the motion attempt and its
+- * passive evidence together. Face tracking also prevents evidence transfer.
++ * A frame that fails to analyse is a dropped frame, not a failed challenge -
++ * it reports no sample rather than a missing face, so a transient decode error
++ * cannot reset someone's progress.
+  */
+ @androidx.annotation.OptIn(ExperimentalGetImage::class)
+ private fun faceAnalyzer(
+@@ -271,58 +268,46 @@ private fun faceAnalyzer(
+     classifier: SpoofClassifier?,
+     fusion: LivenessFusion,
+     onSample: (FaceSample?) -> Unit,
+-): ImageAnalysis.Analyzer {
+-    var trackedFace: Int? = null
+-    return ImageAnalysis.Analyzer { proxy ->
+-        val media = proxy.image
+-        if (media == null) {
+-            fusion.reset()
+-            onSample(null)
+-            proxy.close()
+-            return@Analyzer
+-        }
+-        faceDetector.process(InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees))
+-            .addOnSuccessListener { faces ->
+-                val face = faces.singleOrNull()
+-                if (face == null || face.trackingId == null || trackedFace != face.trackingId) fusion.reset()
+-                trackedFace = face?.trackingId
+-                var verdict: SpoofVerdict? = null
+-                if (face != null && classifier != null) {
+-                    // A failed crop/score breaks continuity; it cannot retain live evidence.
+-                    runCatching {
+-                        proxy.toBitmap().let { frame ->
+-                            val box = FaceBox(
+-                                face.boundingBox.left, face.boundingBox.top,
+-                                face.boundingBox.right, face.boundingBox.bottom,
+-                            )
+-                            val crop = spoofCropRect(box, frame.width, frame.height)
+-                            val cropped = Bitmap.createBitmap(
+-                                frame, crop.left, crop.top,
+-                                crop.width.coerceAtLeast(1), crop.height.coerceAtLeast(1),
+-                            )
+-                            val scaled = Bitmap.createScaledBitmap(
+-                                cropped, SpoofModel.INPUT_SIDE, SpoofModel.INPUT_SIDE, true
+-                            )
+-                            verdict = classifier.classify(scaled)
+-                        }
+-                    }
+-                }
+-                if (classifier != null) fusion.observe(verdict)
+-                onSample(
+-                    face?.takeIf { classifier == null || verdict?.live == true }?.let {
+-                        FaceSample(
+-                            leftEyeOpen = it.leftEyeOpenProbability,
+-                            rightEyeOpen = it.rightEyeOpenProbability,
+-                            headYawDeg = it.headEulerAngleY,
+-                            smiling = it.smilingProbability,
++) = ImageAnalysis.Analyzer { proxy ->
++    val media = proxy.image
++    if (media == null) {
++        proxy.close()
++        return@Analyzer
++    }
++    faceDetector.process(InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees))
++        .addOnSuccessListener { faces ->
++            val face = faces.firstOrNull()
++            if (face != null && classifier != null) {
++                // Best effort: a frame we cannot crop or score is simply not
++                // evidence either way, never counted as a spoof.
++                runCatching {
++                    proxy.toBitmap()?.let { frame ->
++                        val box = FaceBox(
++                            face.boundingBox.left, face.boundingBox.top,
++                            face.boundingBox.right, face.boundingBox.bottom,
++                        )
++                        val crop = spoofCropRect(box, frame.width, frame.height)
++                        val cropped = Bitmap.createBitmap(
++                            frame, crop.left, crop.top,
++                            crop.width.coerceAtLeast(1), crop.height.coerceAtLeast(1),
+                         )
++                        val scaled = Bitmap.createScaledBitmap(
++                            cropped, SpoofModel.INPUT_SIDE, SpoofModel.INPUT_SIDE, true
++                        )
++                        classifier.classify(scaled)?.let(fusion::observe)
+                     }
+-                )
+-            }
+-            .addOnFailureListener {
+-                fusion.reset()
+-                onSample(null)
++                }
+             }
+-            .addOnCompleteListener { proxy.close() }
+-    }
++            onSample(
++                face?.let {
++                    FaceSample(
++                        leftEyeOpen = it.leftEyeOpenProbability,
++                        rightEyeOpen = it.rightEyeOpenProbability,
++                        headYawDeg = it.headEulerAngleY,
++                        smiling = it.smilingProbability,
++                    )
++                }
++            )
++        }
++        .addOnCompleteListener { proxy.close() }
+ }
+diff --git a/android/app/src/main/java/ai/loosh/union/SpoofDetector.kt b/android/app/src/main/java/ai/loosh/union/SpoofDetector.kt
+index 79de763..6e9ca4d 100644
+--- a/android/app/src/main/java/ai/loosh/union/SpoofDetector.kt
++++ b/android/app/src/main/java/ai/loosh/union/SpoofDetector.kt
+@@ -181,56 +181,27 @@ enum class LivenessOutcome { PENDING, PASSED, SPOOF_SUSPECTED }
+  * cheap - hold a real face up for an instant mid-replay - so the classifier's
+  * verdict is taken over the frames during which the motion actually happened.
+  */
+-class LivenessFusion(
+-    private val minLiveFrames: Int = 5,
+-    private val maxGapMs: Long = 750,
+-    private val clockMs: () -> Long = { System.nanoTime() / 1_000_000 },
+-) {
++class LivenessFusion(private val minLiveFrames: Int = 5) {
+     private var liveFrames = 0
+     private var spoofFrames = 0
+-    private var lastFrameMs: Long? = null
+-    var attempt: Long = 0
+-        private set
+ 
+-    init {
+-        require(minLiveFrames > 0 && maxGapMs > 0)
++    fun observe(verdict: SpoofVerdict) {
++        if (verdict.live) liveFrames++ else spoofFrames++
+     }
+ 
+-    fun reset() {
+-        liveFrames = 0
+-        spoofFrames = 0
+-        lastFrameMs = null
+-        attempt++
+-    }
+-
+-    val expired: Boolean
+-        get() = lastFrameMs?.let { clockMs() - it > maxGapMs } ?: false
+-
+-    fun observe(verdict: SpoofVerdict?) {
+-        if (verdict == null) {
+-            reset()
+-            return
+-        }
+-        if (expired) reset()
+-        lastFrameMs = clockMs()
+-        if (verdict.live) {
+-            liveFrames++
+-        } else {
+-            liveFrames = 0
+-            spoofFrames++
+-            attempt++ // motion must restart with the next continuous live run
+-        }
+-    }
+-
+-    val sawEnoughLiveFrames: Boolean get() = !expired && liveFrames >= minLiveFrames
++    val sawEnoughLiveFrames: Boolean get() = liveFrames >= minLiveFrames
+ 
+-    // Rejection is latched for this motion attempt. A new face/attempt resets
+-    // both checks; a few live frames cannot erase sustained spoof evidence.
+-    val spoofSuspected: Boolean get() = spoofFrames >= minLiveFrames
++    /**
++     * True when the classifier has seen more spoof frames than live ones and
++     * enough of them to mean something. Reported separately from "not yet
++     * passed" so the UI can say *why* rather than silently never succeeding.
++     */
++    val spoofSuspected: Boolean
++        get() = spoofFrames >= minLiveFrames && spoofFrames > liveFrames
+ 
+     fun outcome(motionPassed: Boolean): LivenessOutcome = when {
+-        spoofSuspected -> LivenessOutcome.SPOOF_SUSPECTED
+         motionPassed && sawEnoughLiveFrames -> LivenessOutcome.PASSED
++        spoofSuspected -> LivenessOutcome.SPOOF_SUSPECTED
+         else -> LivenessOutcome.PENDING
+     }
+ }
+diff --git a/android/app/src/main/java/ai/loosh/union/seeker/BalanceScreen.kt b/android/app/src/main/java/ai/loosh/union/seeker/BalanceScreen.kt
+index cbdbf54..07942cc 100644
+--- a/android/app/src/main/java/ai/loosh/union/seeker/BalanceScreen.kt
++++ b/android/app/src/main/java/ai/loosh/union/seeker/BalanceScreen.kt
+@@ -20,7 +20,7 @@ fun formatToken(units: Long): String {
+     return if (tokens == floor(tokens)) "%.0f".format(tokens) else "%.2f".format(tokens)
+ }
+ 
+-/** The balances page: what a judge has earned (USDC) and staked (USDC), plus the
++/** The balances page: what a judge has earned ($SKR) and staked ($SKR), plus the
+  *  level ladder. Test tokens on devnet, not real value. */
+ @Composable
+ fun BalanceScreen(s: PilotState, vm: SeekerViewModel, onBack: () -> Unit) {
+@@ -36,7 +36,7 @@ fun BalanceScreen(s: PilotState, vm: SeekerViewModel, onBack: () -> Unit) {
+             CaptureWordmark()
+             EditorialHeading("BALANCES.")
+             Text(
+-                "Earned in test USDC, staked in test USDC — devnet only, not real value.",
++                "Earned in test \$SKR, staked in test \$SKR — devnet only, not real value.",
+                 style = MaterialTheme.typography.bodyMedium,
+                 color = MutedGray,
+             )
+@@ -52,12 +52,12 @@ fun BalanceScreen(s: PilotState, vm: SeekerViewModel, onBack: () -> Unit) {
+ private fun BalanceCard(s: PilotState) {
+     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+         Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+-            BalanceModule("Earned", s.judgeEarnedUsdc, CaptureSymbol.COINS, Modifier.weight(1f).fillMaxHeight())
+-            BalanceModule("Pending", s.judgePendingUsdc, CaptureSymbol.CLOCK, Modifier.weight(1f).fillMaxHeight())
++            BalanceModule("Earned", s.judgeEarnedSkr, CaptureSymbol.COINS, Modifier.weight(1f).fillMaxHeight())
++            BalanceModule("Pending", s.judgePendingSkr, CaptureSymbol.CLOCK, Modifier.weight(1f).fillMaxHeight())
+         }
+         Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+-            BalanceModule("Settled", s.judgeSettledUsdc, CaptureSymbol.VERIFIED, Modifier.weight(1f).fillMaxHeight())
+-            BalanceModule("Staked", s.judgeStakedUsdc, CaptureSymbol.LOCK, Modifier.weight(1f).fillMaxHeight())
++            BalanceModule("Settled", s.judgeSettledSkr, CaptureSymbol.VERIFIED, Modifier.weight(1f).fillMaxHeight())
++            BalanceModule("Staked", s.judgeStakedSkr, CaptureSymbol.LOCK, Modifier.weight(1f).fillMaxHeight())
+         }
+         Text(
+             "${s.judgeLevelName} · ×${"%.2f".format(s.judgeRateMultiplier)} rate · ${s.judgeWarnings} warning${if (s.judgeWarnings == 1) "" else "s"}",
+@@ -72,6 +72,6 @@ private fun BalanceModule(label: String, amount: Long, symbol: CaptureSymbol, mo
+         CaptureIcon(symbol, Modifier.size(28.dp), CaptureAccent)
+         Text(label, style = MaterialTheme.typography.titleMedium, color = MutedGray)
+         Text(formatToken(amount), style = MaterialTheme.typography.headlineMedium, color = CaptureInk)
+-        Text("USDC", style = MaterialTheme.typography.labelSmall, color = MutedGray)
++        Text("\$SKR", style = MaterialTheme.typography.labelSmall, color = MutedGray)
+     }
+ }
+diff --git a/android/app/src/main/java/ai/loosh/union/seeker/BondScreen.kt b/android/app/src/main/java/ai/loosh/union/seeker/BondScreen.kt
+index 1b842bd..70b6d3e 100644
+--- a/android/app/src/main/java/ai/loosh/union/seeker/BondScreen.kt
++++ b/android/app/src/main/java/ai/loosh/union/seeker/BondScreen.kt
+@@ -25,7 +25,7 @@ import androidx.compose.ui.unit.dp
+ import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
+ 
+ /**
+- * The bond gate for the judgment product: deposit the minimum test-USDC stake
++ * The bond gate for the judgment product: deposit the minimum test-$SKR stake
+  * before judging. The bond is a real on-chain escrow, slashed only for
+  * systematic disagreement with the consensus ladder.
+  */
+@@ -49,7 +49,7 @@ fun BondScreen(
+             CaptureWordmark()
+             Text("Stake to judge", style = MaterialTheme.typography.displaySmall, color = CaptureInk)
+             Text(
+-                "Judging requires posting a test-USDC bond, a real on-chain escrow. It is " +
++                "Judging requires posting a test-\$SKR bond, a real on-chain escrow. It is " +
+                     "slashed only for systematic disagreement; withdraw what remains later.",
+                 style = MaterialTheme.typography.bodyMedium,
+                 color = MutedGray,
+@@ -68,7 +68,7 @@ fun BondScreen(
+ private fun BondCard(s: PilotState, vm: SeekerViewModel, sender: ActivityResultSender) {
+     CapturePanel(Modifier.fillMaxWidth(), elevated = true) {
+         Text(
+-            "DEPOSIT THE MINIMUM TEST-USDC BOND",
++            "DEPOSIT THE MINIMUM TEST-\$SKR BOND",
+             style = MaterialTheme.typography.labelMedium,
+             color = CaptureAccentBright,
+         )
+@@ -82,7 +82,7 @@ private fun BondCard(s: PilotState, vm: SeekerViewModel, sender: ActivityResultS
+             s.bonded -> DoneRow("Bond deposited — you can judge now.")
+             else -> {
+                 if (s.bondFunded) {
+-                    DoneRow("Test USDC funded.")
++                    DoneRow("Test \$SKR funded.")
+                     Button(
+                         onClick = { vm.depositBond(sender) },
+                         enabled = !s.busy,
+@@ -94,11 +94,11 @@ private fun BondCard(s: PilotState, vm: SeekerViewModel, sender: ActivityResultS
+                         onClick = { vm.faucet() },
+                         enabled = !s.busy,
+                         modifier = Modifier.fillMaxWidth(),
+-                    ) { Text("Get test USDC (${s.faucetMints}/${s.faucetMaxMints})") }
++                    ) { Text("Get test \$SKR (${s.faucetMints}/${s.faucetMaxMints})") }
+                 }
+                 if (!s.bondFunded)
+                     Text(
+-                        "Fund test USDC first, then deposit the bond.",
++                        "Fund test \$SKR first, then deposit the bond.",
+                         style = MaterialTheme.typography.labelSmall,
+                         color = MutedGray,
+                     )
+diff --git a/android/app/src/main/java/ai/loosh/union/seeker/CalibrationScreen.kt b/android/app/src/main/java/ai/loosh/union/seeker/CalibrationScreen.kt
+index 5768318..63b6fc4 100644
+--- a/android/app/src/main/java/ai/loosh/union/seeker/CalibrationScreen.kt
++++ b/android/app/src/main/java/ai/loosh/union/seeker/CalibrationScreen.kt
+@@ -94,7 +94,7 @@ private fun CalibrationAppBar(onBack: () -> Unit) {
+             )
+         }
+         Text(
+-            "DEVNET · TEST USDC",
++            "DEVNET · TEST \$SKR",
+             style = MaterialTheme.typography.labelSmall,
+             color = CaptureInk,
+             textAlign = TextAlign.Center,
+@@ -195,7 +195,7 @@ private fun ExampleCards(s: PilotState) {
+         CapturePanel(Modifier.fillMaxWidth(), elevated = true) {
+             TopicHeading(3, "Can't tell", CaptureSymbol.QUESTION_BUBBLE, CaptureCoral)
+             Text(
+-                "Always an option. Pays $${formatPayUsdc(s.judgeFlatUsdc)} and reroutes the pair.",
++                "Always an option. Pays $${formatPaySkr(s.judgeFlatSkr)} and reroutes the pair.",
+                 style = MaterialTheme.typography.bodyLarge, color = CaptureInk,
+             )
+         }
+@@ -253,11 +253,11 @@ private fun PayCard(s: PilotState) {
+         PayRow(CaptureSymbol.COINS, "Aligned judgment")
+         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+             Text(
+-                "$${formatPayUsdc(s.judgeBaseUsdc)} × ${String.format(Locale.US, "%.2f", s.judgeRateMultiplier)} = " +
+-                    "$${formatPayUsdc((s.judgeBaseUsdc * s.judgeRateMultiplier).toLong())}",
++                "$${formatPaySkr(s.judgeBaseSkr)} × ${String.format(Locale.US, "%.2f", s.judgeRateMultiplier)} = " +
++                    "$${formatPaySkr((s.judgeBaseSkr * s.judgeRateMultiplier).toLong())}",
+                 style = MaterialTheme.typography.headlineMedium, color = CaptureInk,
+             )
+-            Text("USDC", style = MaterialTheme.typography.labelMedium, color = CaptureInk)
++            Text("\$SKR", style = MaterialTheme.typography.labelMedium, color = CaptureInk)
+         }
+         Text(
+             "Multiplier applies to aligned judgments: ×1.00 = base pay; ×2.00 = double.",
+@@ -265,9 +265,9 @@ private fun PayCard(s: PilotState) {
+         )
+         HorizontalDivider(color = CaptureInk)
+         PayRow(CaptureSymbol.SCALES, "Disagreement pays $0")
+-        PayRow(CaptureSymbol.QUESTION_BUBBLE, "\"Can't tell\": $${formatPayUsdc(s.judgeFlatUsdc)} flat", CaptureCoral)
++        PayRow(CaptureSymbol.QUESTION_BUBBLE, "\"Can't tell\": $${formatPaySkr(s.judgeFlatSkr)} flat", CaptureCoral)
+         HorizontalDivider(color = CaptureInk)
+-        PayRow(CaptureSymbol.INFO, "Paid in test USDC on devnet — not real value.")
++        PayRow(CaptureSymbol.INFO, "Paid in test \$SKR on devnet — not real value.")
+     }
+ }
+ 
+@@ -287,7 +287,7 @@ private fun StandingCard(s: PilotState) {
+             Metric("Level", s.judgeLevelName, Modifier.weight(1f))
+         }
+         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+-            Metric("Earned", "${formatToken(s.judgeEarnedUsdc)} USDC", Modifier.weight(1f))
++            Metric("Earned", "${formatToken(s.judgeEarnedSkr)} \$SKR", Modifier.weight(1f))
+             Metric("Warnings", "${s.judgeWarnings}", Modifier.weight(1f))
+         }
+     }
+diff --git a/android/app/src/main/java/ai/loosh/union/seeker/JudgeLeveling.kt b/android/app/src/main/java/ai/loosh/union/seeker/JudgeLeveling.kt
+index 04f2ef8..9b1222a 100644
+--- a/android/app/src/main/java/ai/loosh/union/seeker/JudgeLeveling.kt
++++ b/android/app/src/main/java/ai/loosh/union/seeker/JudgeLeveling.kt
+@@ -6,7 +6,7 @@ import kotlin.math.roundToInt
+  * The judge accuracy ladder (parallel to [Leveling.kt], which stays capture-only).
+  *
+  * Keyed on *agreement rate only* — the fraction of a judge's resolved judgments
+- * they aligned with the crowd. Payout is `judge_base_usdc × multiplier` per aligned
++ * they aligned with the crowd. Payout is `judge_base_skr × multiplier` per aligned
+  * judgment. Kept free of Android so every decision is JVM-testable.
+  */
+ 
+diff --git a/android/app/src/main/java/ai/loosh/union/seeker/JudgmentScreen.kt b/android/app/src/main/java/ai/loosh/union/seeker/JudgmentScreen.kt
+index 788ed0a..a7dfb8a 100644
+--- a/android/app/src/main/java/ai/loosh/union/seeker/JudgmentScreen.kt
++++ b/android/app/src/main/java/ai/loosh/union/seeker/JudgmentScreen.kt
+@@ -22,13 +22,13 @@ import androidx.compose.ui.draw.clip
+ import androidx.compose.ui.layout.ContentScale
+ import coil3.compose.AsyncImage
+ 
+-/** Formats USDC base units with sub-cent precision for pay rates (0.005 USDC). */
+-internal fun formatPayUsdc(units: Long): String =
++/** Formats $SKR base units with sub-cent precision for pay rates (0.005 $SKR). */
++internal fun formatPaySkr(units: Long): String =
+     "%.3f".format(units / 1_000_000.0).trimEnd('0').trimEnd('.')
+ 
+ /**
+  * The judgment product screen: a judge compares two model outputs (A/B) or rates
+- * one 1-5, with a first-class "can't tell". Earns test USDC; bond is test USDC.
++ * one 1-5, with a first-class "can't tell". Earns test $SKR; bond is test $SKR.
+  */
+ @Composable
+ fun JudgmentScreen(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit, onProveHuman: () -> Unit) {
+@@ -46,7 +46,7 @@ fun JudgmentScreen(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit, onPro
+             JudgeGuidanceCard()
+             Text(
+                 "Compare two model outputs and pick the better one. Consensus-aligned judges earn " +
+-                    "test USDC on devnet.",
++                    "test \$SKR on devnet.",
+                 style = MaterialTheme.typography.bodyMedium,
+                 color = MutedGray,
+                 textAlign = TextAlign.Center,
+@@ -94,14 +94,14 @@ private fun JudgeStatsCard(s: PilotState) {
+             color = CaptureInk,
+         )
+         Text(
+-            "${s.judgeJudgedCount} judged · ${formatToken(s.judgeStakedUsdc)} USDC staked · ${s.judgeWarnings} warnings",
++            "${s.judgeJudgedCount} judged · ${formatToken(s.judgeStakedSkr)} \$SKR staked · ${s.judgeWarnings} warnings",
+             style = MaterialTheme.typography.bodySmall,
+             color = MutedGray,
+         )
+         Text(
+-            "Earn ${formatPayUsdc((s.judgeBaseUsdc * s.judgeRateMultiplier).toLong())} USDC per aligned answer " +
+-                "(${formatPayUsdc(s.judgeBaseUsdc)} base × ${"%.2f".format(s.judgeRateMultiplier)}) · " +
+-                "${formatPayUsdc(s.judgeFlatUsdc)} USDC for can't tell",
++            "Earn ${formatPaySkr((s.judgeBaseSkr * s.judgeRateMultiplier).toLong())} \$SKR per aligned answer " +
++                "(${formatPaySkr(s.judgeBaseSkr)} base × ${"%.2f".format(s.judgeRateMultiplier)}) · " +
++                "${formatPaySkr(s.judgeFlatSkr)} \$SKR for can't tell",
+             style = MaterialTheme.typography.bodySmall,
+             color = CaptureInk,
+         )
+@@ -123,7 +123,7 @@ private fun EmptyCard(s: PilotState, vm: SeekerViewModel, onBond: () -> Unit, on
+             }
+             !s.bonded -> {
+                 Text("No pairs to judge right now", style = MaterialTheme.typography.titleMedium, color = CaptureInk)
+-                ActionButton("Deposit the USDC bond", onClick = onBond)
++                ActionButton("Deposit the \$SKR bond", onClick = onBond)
+                 SecondaryButton("Refresh", onClick = { vm.judgeNext() }, enabled = !s.busy)
+             }
+             else -> {
+diff --git a/android/app/src/main/java/ai/loosh/union/seeker/OnboardingScreen.kt b/android/app/src/main/java/ai/loosh/union/seeker/OnboardingScreen.kt
+index 7ccd8b9..b1980d7 100644
+--- a/android/app/src/main/java/ai/loosh/union/seeker/OnboardingScreen.kt
++++ b/android/app/src/main/java/ai/loosh/union/seeker/OnboardingScreen.kt
+@@ -45,7 +45,7 @@ fun OnboardingScreen(onDone: () -> Unit) {
+             CaptureWordmark()
+             EditorialHeading("HOW IT WORKS.")
+             Text(
+-                "You judge a vision model's outputs. Agree with the crowd and earn test USDC on devnet.",
++                "You judge a vision model's outputs. Agree with the crowd and earn test \$SKR on devnet.",
+                 style = MaterialTheme.typography.bodyMedium,
+                 color = CaptureInk,
+                 textAlign = TextAlign.Start,
+@@ -63,7 +63,7 @@ fun OnboardingScreen(onDone: () -> Unit) {
+ private fun FlowCard() {
+     CapturePanel(Modifier.fillMaxWidth()) {
+         Text("WHAT YOU DO", style = MaterialTheme.typography.labelMedium, color = CaptureAccentBright)
+-        Step("1. Stake", "Deposit a slashable test-USDC bond.")
++        Step("1. Stake", "Deposit a slashable test-\$SKR bond.")
+         Step("2. Judge", "Compare two outputs (A/B) or rate one 1-5.")
+         Step("3. Earn", "Aligned judgments pay. Dissenters earn nothing.")
+     }
+@@ -144,7 +144,7 @@ private fun EarningsCard() {
+             color = CaptureInk,
+         )
+         Text(
+-            "Test USDC on devnet — not real value.",
++            "Test \$SKR on devnet — not real value.",
+             style = MaterialTheme.typography.labelSmall,
+             color = MutedGray,
+         )
+diff --git a/android/app/src/main/java/ai/loosh/union/seeker/SeekerApp.kt b/android/app/src/main/java/ai/loosh/union/seeker/SeekerApp.kt
+index 9de346d..7e10792 100644
+--- a/android/app/src/main/java/ai/loosh/union/seeker/SeekerApp.kt
++++ b/android/app/src/main/java/ai/loosh/union/seeker/SeekerApp.kt
+@@ -35,8 +35,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
+ import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
+ 
+ /**
+- * The judgment product app: sign in, stake, judge, and earn test USDC for
+- * consensus-aligned preferences (slashable bond in test USDC).
++ * The judgment product app: sign in, stake, judge, and earn test $SKR for
++ * consensus-aligned preferences (slashable bond in test $SKR).
+  */
+ @Composable
+ fun SeekerApp(sender: ActivityResultSender, vm: SeekerViewModel = viewModel()) {
+@@ -134,7 +134,7 @@ private fun TopMenu(
+                 Text("CAPTURE", style = MaterialTheme.typography.displaySmall.copy(fontSize = 18.sp, lineHeight = 22.sp), color = CaptureInk)
+             }
+             Text(
+-                "DEVNET · TEST USDC",
++                "DEVNET · TEST \$SKR",
+                 style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.sp),
+                 color = CaptureInk,
+                 textAlign = TextAlign.Center,
+@@ -183,7 +183,7 @@ private fun SignInScreen(s: PilotState, vm: SeekerViewModel, sender: ActivityRes
+             EditorialHeading("SIGN IN.")
+             Text(
+                 "Compare two model outputs and pick the better one. Consensus-aligned judges " +
+-                    "earn test USDC on devnet.",
++                    "earn test \$SKR on devnet.",
+                 style = MaterialTheme.typography.bodyMedium,
+                 color = CaptureInk,
+             )
+diff --git a/android/app/src/main/java/ai/loosh/union/seeker/SeekerViewModel.kt b/android/app/src/main/java/ai/loosh/union/seeker/SeekerViewModel.kt
+index 8755a66..130fd57 100644
+--- a/android/app/src/main/java/ai/loosh/union/seeker/SeekerViewModel.kt
++++ b/android/app/src/main/java/ai/loosh/union/seeker/SeekerViewModel.kt
+@@ -55,15 +55,15 @@ data class PilotState(
+     val error: String? = null,
+     val status: AsyncStatus = AsyncStatus.Idle,
+     val transient: String? = null,
+-    // --- Bond (test-USDC stake) ---
+-    val bondTestUsdcUnits: Long = 0,
++    // --- Bond (test-$SKR stake) ---
++    val bondTestSkrUnits: Long = 0,
+     val bonded: Boolean = false,
+     val bondFunded: Boolean = false,
+     val livenessCompleted: Boolean = false,
+     val livenessChallenge: String? = null,
+     val faucetMints: Int = 0,
+     val faucetMaxMints: Int = 5,
+-    val judgeStakedUsdc: Long = 0,
++    val judgeStakedSkr: Long = 0,
+     val judgeWarnings: Int = 0,
+     // --- Judgment product (RLHF preference judging) ---
+     val judgeCalibrated: Boolean = false,
+@@ -72,17 +72,17 @@ data class PilotState(
+     val judgeLevel: Int = 0,
+     val judgeLevelName: String = "Scout",
+     val judgeRateMultiplier: Double = 1.0,
+-    val judgeBaseUsdc: Long = 0,
+-    val judgeFlatUsdc: Long = 0,
+-    val judgeEarnedUsdc: Long = 0,
+-    val judgeSettledUsdc: Long = 0,
++    val judgeBaseSkr: Long = 0,
++    val judgeFlatSkr: Long = 0,
++    val judgeEarnedSkr: Long = 0,
++    val judgeSettledSkr: Long = 0,
+     val calibrationCompleted: Int = 0,
+     val calibrationRequired: Int = 10,
+     val calibrationCorrect: Int = 0,
+     val judgePair: JSONObject? = null,
+ ) {
+     // The stats API exposes earned and settled; pending is their unpaid difference.
+-    val judgePendingUsdc: Long get() = (judgeEarnedUsdc - judgeSettledUsdc).coerceAtLeast(0)
++    val judgePendingSkr: Long get() = (judgeEarnedSkr - judgeSettledSkr).coerceAtLeast(0)
+ }
+ 
+ class SeekerViewModel(application: Application) : AndroidViewModel(application) {
+@@ -266,10 +266,10 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application)
+             }
+         }
+ 
+-    // --- Bond (test-USDC stake) ---
++    // --- Bond (test-$SKR stake) ---
+ 
+     fun faucet() =
+-        run("Requesting test USDC", "Test USDC funded") {
++        run("Requesting test \$SKR", "Test \$SKR funded") {
+             val r = post("/bond/faucet")
+             mutable.update {
+                 it.copy(bondFunded = true, faucetMints = r.optInt("mints", it.faucetMints + 1))
+@@ -356,13 +356,13 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application)
+         val pair = if (next.optString("kind", "none") == "none") null else next
+         mutable.update {
+             it.copy(
+-                bondTestUsdcUnits = me.optLong("bond_test_usdc_units", 0),
++                bondTestSkrUnits = me.optLong("bond_test_skr_units", 0),
+                 bonded = me.optBoolean("bonded", false),
+-                bondFunded = me.optBoolean("usdc_funded", false),
++                bondFunded = me.optBoolean("skr_funded", false),
+                 livenessCompleted = me.optBoolean("liveness_completed", false),
+                 faucetMints = me.optInt("faucet_mints", 0),
+                 faucetMaxMints = me.optInt("faucet_max", 5),
+-                judgeStakedUsdc = stats.optLong("staked_usdc", 0),
++                judgeStakedSkr = stats.optLong("staked_skr", 0),
+                 judgeWarnings = stats.optInt("warnings", 0),
+                 judgePair = pair,
+                 judgeCalibrated = stats.optBoolean("calibrated", false),
+@@ -371,10 +371,10 @@ class SeekerViewModel(application: Application) : AndroidViewModel(application)
+                 judgeLevel = level,
+                 judgeLevelName = stats.optString("level_name", judgeLevelName(level)),
+                 judgeRateMultiplier = stats.optDouble("rate_multiplier", judgeRateMultiplier(level)),
+-                judgeBaseUsdc = stats.optLong("base_usdc", 0),
+-                judgeFlatUsdc = stats.optLong("flat_usdc", 0),
+-                judgeEarnedUsdc = stats.optLong("earned_usdc", 0),
+-                judgeSettledUsdc = stats.optLong("settled_usdc", 0),
++                judgeBaseSkr = stats.optLong("base_skr", 0),
++                judgeFlatSkr = stats.optLong("flat_skr", 0),
++                judgeEarnedSkr = stats.optLong("earned_skr", 0),
++                judgeSettledSkr = stats.optLong("settled_skr", 0),
+                 calibrationCompleted = progress?.optInt("completed", 0) ?: 0,
+                 calibrationRequired = progress?.optInt("required", 10) ?: 10,
+                 calibrationCorrect = progress?.optInt("correct", 0) ?: 0,
+diff --git a/android/app/src/test/java/ai/loosh/union/LivenessDetectorTest.kt b/android/app/src/test/java/ai/loosh/union/LivenessDetectorTest.kt
+index 22b35d1..f419ac8 100644
+--- a/android/app/src/test/java/ai/loosh/union/LivenessDetectorTest.kt
++++ b/android/app/src/test/java/ai/loosh/union/LivenessDetectorTest.kt
+@@ -91,12 +91,12 @@ class LivenessDetectorTest {
+     }
+ 
+     @Test
+-    fun `provisional motion pass is reset when face leaves`() {
++    fun `a pass survives the face leaving the frame`() {
+         val detector = LivenessDetector(LivenessChallenge.BLINK)
+         detector.hold(face(eyes = 0.95f))
+         detector.hold(face(eyes = 0.05f))
+         detector.hold(face(eyes = 0.95f))
+-        assertEquals(LivenessPhase.NO_FACE, detector.hold(null, frames = 10))
++        assertEquals(LivenessPhase.PASSED, detector.hold(null, frames = 10))
+     }
+ 
+     @Test
+diff --git a/android/app/src/test/java/ai/loosh/union/SpoofDetectorTest.kt b/android/app/src/test/java/ai/loosh/union/SpoofDetectorTest.kt
+index c604297..51fdca8 100644
+--- a/android/app/src/test/java/ai/loosh/union/SpoofDetectorTest.kt
++++ b/android/app/src/test/java/ai/loosh/union/SpoofDetectorTest.kt
+@@ -206,13 +206,11 @@ class SpoofDetectorTest {
+     }
+ 
+     @Test
+-    fun `bad frames invalidate historical live evidence`() {
+-        // A continuous recent run must be earned again after a bad frame.
++    fun `a mostly-live run with a few bad frames still passes`() {
++        // Real capture is noisy; one dark frame must not fail an honest user.
+         val fusion = LivenessFusion(minLiveFrames = 5)
+         repeat(20) { fusion.observe(live) }
+         repeat(3) { fusion.observe(spoof) }
+-        assertEquals(LivenessOutcome.PENDING, fusion.outcome(motionPassed = true))
+-        repeat(5) { fusion.observe(live) }
+         assertEquals(LivenessOutcome.PASSED, fusion.outcome(motionPassed = true))
+     }
+ 
+@@ -232,46 +230,4 @@ class SpoofDetectorTest {
+         assertEquals(1, SpoofModel.LIVE_CLASS)
+         assertEquals(2.7f, SpoofModel.CROP_SCALE, 1e-6f)
+     }
+-    @Test
+-    fun `spoof dominates historical and subsequent live frames`() {
+-        val fusion = LivenessFusion()
+-        repeat(5) { fusion.observe(live) }
+-        repeat(10) { fusion.observe(spoof) }
+-        repeat(5) { fusion.observe(live) }
+-        assertEquals(LivenessOutcome.SPOOF_SUSPECTED, fusion.outcome(true))
+-    }
+-
+-    @Test
+-    fun `lost face and missing classification reset evidence`() {
+-        val fusion = LivenessFusion()
+-        repeat(5) { fusion.observe(live) }
+-        val attempt = fusion.attempt
+-        fusion.observe(null)
+-        assertTrue(fusion.attempt > attempt)
+-        fusion.observe(live)
+-        assertEquals(LivenessOutcome.PENDING, fusion.outcome(true))
+-    }
+-
+-    @Test
+-    fun `frame gap expires evidence and starts a new motion attempt`() {
+-        var now = 0L
+-        val fusion = LivenessFusion(clockMs = { now })
+-        repeat(5) { fusion.observe(live) }
+-        val attempt = fusion.attempt
+-        now = 751
+-        assertEquals(LivenessOutcome.PENDING, fusion.outcome(true))
+-        fusion.observe(live)
+-        assertTrue(fusion.attempt > attempt)
+-        assertEquals(LivenessOutcome.PENDING, fusion.outcome(true))
+-    }
+-
+-    @Test
+-    fun `spoof frame restarts motion attempt`() {
+-        val fusion = LivenessFusion()
+-        fusion.observe(live)
+-        val attempt = fusion.attempt
+-        fusion.observe(spoof)
+-        assertTrue(fusion.attempt > attempt)
+-    }
+-
+ }
+diff --git a/android/signing.properties.example b/android/signing.properties.example
+deleted file mode 100644
+index ab6eff5..0000000
+--- a/android/signing.properties.example
++++ /dev/null
+@@ -1,6 +0,0 @@
+-# Copy to signing.properties (ignored); reuse and back up the same keystore.
+-# Relative paths are resolved against android/.
+-storeFile=release.jks
+-storePassword=REPLACE_ME
+-keyAlias=capture
+-keyPassword=REPLACE_ME
+diff --git a/backend/.env.example b/backend/.env.example
+index 29973e5..08f09c6 100644
+--- a/backend/.env.example
++++ b/backend/.env.example
+@@ -22,7 +22,7 @@ SEEKER_OPERATOR_KEY=CHANGE_ME_operator_key_at_least_32_characters_long
+ SEEKER_MEDIA_KEY=CHANGE_ME_base64_of_32_random_bytes_REPLACE_ME=
+ 
+ # --- Public devnet program + token addresses (NOT secrets) ------------------
+-SEEKER_PROGRAM_ID=8pY9dpwhe4Tbv9Ud9r13WCrNkugirsELNKA3hwfUUdpu
++SEEKER_PROGRAM_ID=5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV
+ SEEKER_USDC_MINT=TXtqUVPDj6JuDoeyFJvwuUqy5jGYTgF98kEkbeN6U8Z
+ SEEKER_SKR_MINT=3aGKaVL7GpcTcTuKjkyirnVeyNG1JGFNyGGueu8mAGbM
+ 
+diff --git a/backend/migrations/0011_judgment.py b/backend/migrations/0011_judgment.py
+index d62c1b6..95db26e 100644
+--- a/backend/migrations/0011_judgment.py
++++ b/backend/migrations/0011_judgment.py
+@@ -1,7 +1,7 @@
+ """Migration 0011 — judgment product (RLHF preference judging) columns.
+ 
+ The judgment product (Capture pivot) adds per-judge columns to ``seeker_actors``:
+-calibration state, rolling agreement rate, resolved-judgment count, staked USDC
++calibration state, rolling agreement rate, resolved-judgment count, staked $SKR
+ mirror, and the on-chain warning-ladder mirror. The new judgment/calibration
+ tables themselves are created by ``create_all`` (additive); only these Actor
+ columns need an ALTER TABLE on an existing deployment.
+@@ -11,6 +11,6 @@ COLUMNS = [
+     ("seeker_actors", "calibrated", "BOOLEAN DEFAULT FALSE"),
+     ("seeker_actors", "agreement_rate", "DOUBLE PRECISION DEFAULT 0.0"),
+     ("seeker_actors", "judged_count", "INTEGER DEFAULT 0"),
+-    ("seeker_actors", "staked_usdc", "BIGINT DEFAULT 0"),
++    ("seeker_actors", "staked_skr", "BIGINT DEFAULT 0"),
+     ("seeker_actors", "warnings", "INTEGER DEFAULT 0"),
+ ]
+diff --git a/backend/migrations/0012_skr_payout_journal.py b/backend/migrations/0012_skr_payout_journal.py
+index f7427e2..f52f0b8 100644
+--- a/backend/migrations/0012_skr_payout_journal.py
++++ b/backend/migrations/0012_skr_payout_journal.py
+@@ -1,6 +1,6 @@
+-"""Migration 0012 — durable USDC payout journal (finding 10 #1).
++"""Migration 0012 — durable $SKR payout journal (finding 10 #1).
+ 
+-Adds ``judgments.settling``: an earned-USDC obligation that is committed to the
++Adds ``judgments.settling``: an earned-$SKR obligation that is committed to the
+ ledger before its mint transaction broadcasts. Without it, a partial payout (one
+ judge paid, the next settle raises ChainUnavailable) is lost — the pair returns
+ to ``collecting`` and a later re-resolution pays the already-paid judge again.
+diff --git a/backend/migrations/0014_faucet_count.py b/backend/migrations/0014_faucet_count.py
+index ad30e4c..de51864 100644
+--- a/backend/migrations/0014_faucet_count.py
++++ b/backend/migrations/0014_faucet_count.py
+@@ -1,8 +1,8 @@
+ """Migration 0014 — faucet mint counter.
+ 
+-Adds ``seeker_actors.faucet_count`` so the devnet test-USDC faucet can be
++Adds ``seeker_actors.faucet_count`` so the devnet test-$SKR faucet can be
+ capped at ``faucet_max_mints`` taps per wallet instead of a single idempotent
+-mint. ``usdc_funded`` stays as the "funded at least once" flag for the deposit
++mint. ``skr_funded`` stays as the "funded at least once" flag for the deposit
+ gate; ``faucet_count`` is the running tally.
+ """
+ 
+diff --git a/backend/seeker/api.py b/backend/seeker/api.py
+index 3063531..4dccf63 100644
+--- a/backend/seeker/api.py
++++ b/backend/seeker/api.py
+@@ -189,7 +189,7 @@ def create_app(settings: Settings, *, chain=None):
+                 # Judgment product honesty (test tokens + provenance anchors).
+                 "test_tokens": True,
+                 "dataset_bias": "majority-preference",
+-                "usdc_mint": settings.usdc_mint,
++                "skr_mint": settings.skr_mint,
+                 "program_id": settings.program_id,
+                 "treasury": (
+                     str(chain.treasury.pubkey())
+@@ -201,7 +201,7 @@ def create_app(settings: Settings, *, chain=None):
+                     if getattr(chain, "verifier", None) is not None
+                     else None
+                 ),
+-                "usdc_payout": (
++                "skr_payout": (
+                     "ready" if getattr(chain, "treasury", None) is not None else "unavailable"
+                 ),
+             },
+@@ -263,13 +263,13 @@ def create_app(settings: Settings, *, chain=None):
+             "wallet": actor.wallet,
+             "over_18": actor.over_18,
+             "liveness_completed": actor.liveness_completed or not settings.liveness_required,
+-            "bond_test_usdc_units": settings.min_bond,
++            "bond_test_skr_units": settings.min_bond,
+             "bonded": actor.bonded,
+-            "usdc_funded": actor.usdc_funded,
++            "skr_funded": actor.skr_funded,
+             "faucet_mints": actor.faucet_count,
+             "faucet_max": settings.faucet_max_mints,
+             "calibrated": actor.calibrated,
+-            "staked_usdc": actor.staked_usdc,
++            "staked_skr": actor.staked_skr,
+             "warnings": actor.warnings,
+             **level,
+         }
+@@ -327,7 +327,7 @@ def create_app(settings: Settings, *, chain=None):
+ 
+     @app.post("/bond/faucet")
+     def bond_faucet(actor: Auth):
+-        """Devnet test-USDC faucet ("Get test USDC"). A wallet may tap it up to
++        """Devnet test $SKR faucet ("Get test $SKR"). A wallet may tap it up to
+         ``faucet_max_mints`` times (each tap mints the minimum bond and drops a
+         little SOL). Fails closed (503) so funding is never recorded for a mint
+         that did not land."""
+@@ -343,8 +343,8 @@ def create_app(settings: Settings, *, chain=None):
+             try:
+                 chain.faucet(actor.wallet)
+             except ChainUnavailable as exc:
+-                fail(503, f"Test-USDC faucet unavailable: {exc}")
+-            actor.usdc_funded = True
++                fail(503, f"Test $SKR faucet unavailable: {exc}")
++            actor.skr_funded = True
+             actor.faucet_count += 1
+         return {
+             "funded": True,
+@@ -360,8 +360,8 @@ def create_app(settings: Settings, *, chain=None):
+         message via /transactions/{id}/confirm."""
+         with database.transaction() as db:
+             actor = lock(db, Actor, actor.wallet)
+-            if not actor.usdc_funded:
+-                fail(409, "Get test USDC first")
++            if not actor.skr_funded:
++                fail(409, "Get test $SKR first")
+             return prepare(db, "deposit", actor.wallet, actor)
+ 
+     @app.post("/bond/withdraw")
+@@ -385,8 +385,8 @@ def create_app(settings: Settings, *, chain=None):
+         with database.transaction() as db:
+             actor = lock(db, Actor, actor.wallet)
+             if action == "deposit":
+-                if not actor.usdc_funded:
+-                    fail(409, "Get test USDC first")
++                if not actor.skr_funded:
++                    fail(409, "Get test $SKR first")
+             else:
+                 if not actor.bonded:
+                     fail(403, "Bond deposit required")
+@@ -521,7 +521,7 @@ def create_app(settings: Settings, *, chain=None):
+             .where(
+                 Judgment.wallet == wallet,
+                 Judgment.choice == "cant_tell",
+-                Judgment.earned_usdc > 0,
++                Judgment.earned_skr > 0,
+             )
+         ) or 0
+ 
+@@ -554,7 +554,7 @@ def create_app(settings: Settings, *, chain=None):
+                         "signature": j.payout_pending_signature,
+                         "last_valid_height": j.payout_last_valid_height}
+         try:
+-            sig = chain.settle_usdc(j.wallet, j.earned_usdc, memo=j.judgment_id,
++            sig = chain.settle_skr(j.wallet, j.earned_skr, memo=j.judgment_id,
+                                    persist=persist, prepared=prepared)
+         except ChainUnavailable:
+             return False
+@@ -585,7 +585,7 @@ def create_app(settings: Settings, *, chain=None):
+                 if warnings >= 2:
+                     actor.bonded = False
+                     actor.calibrated = False
+-                    actor.staked_usdc = 0
++                    actor.staked_skr = 0
+ 
+     def _maybe_anchor_batch(pair_id):
+         """When a batch is fully resolved, compute its Merkle root and commit it
+@@ -648,7 +648,7 @@ def create_app(settings: Settings, *, chain=None):
+                     "reason": "prove you're human before judging",
+                 }
+             if not actor.bonded:
+-                return {"kind": "none", "calibrated": True, "reason": "deposit the USDC bond to judge"}
++                return {"kind": "none", "calibrated": True, "reason": "deposit the SKR bond to judge"}
+             done = select(Judgment.pair_id).where(Judgment.wallet == actor.wallet)
+             pair = db.scalars(
+                 select(JudgmentPair)
+@@ -717,7 +717,7 @@ def create_app(settings: Settings, *, chain=None):
+             )).all()
+         settled = [_settle_judgment_obligation(j, pair_id) for j in obligations]
+         if not all(settled):
+-            fail(503, "USDC payout pending for some judges; retry to reconcile")
++            fail(503, "$SKR payout pending for some judges; retry to reconcile")
+         with database.transaction() as db:
+             pair = lock(db, JudgmentPair, pair_id)
+             if pair.status == "resolving":
+@@ -759,7 +759,7 @@ def create_app(settings: Settings, *, chain=None):
+             ))
+             # A participant can reconcile even if this resolution slashed them.
+             if not actor.bonded and existing is None:
+-                fail(403, "Deposit the USDC bond to judge")
++                fail(403, "Deposit the SKR bond to judge")
+             if pair.status != "resolved":
+                 reserve_legacy(db, chain, pair_id)
+             reconcile = pair.status in ("resolving", "enforcing", "resolved")
+@@ -768,11 +768,11 @@ def create_app(settings: Settings, *, chain=None):
+                 if existing is None:
+                     try:
+                         if chain.bond_warnings(wallet) >= 2:
+-                            fail(403, "Bond is slashed; deposit a fresh USDC bond to judge")
++                            fail(403, "Bond is slashed; deposit a fresh SKR bond to judge")
+                         if chain.bond_vault_balance(wallet) < settings.min_bond:
+-                            fail(403, "Bond vault is empty; deposit the USDC bond to judge")
++                            fail(403, "Bond vault is empty; deposit the SKR bond to judge")
+                     except ChainUnavailable:
+-                        fail(403, "Bond is not active on-chain; deposit the USDC bond to judge")
++                        fail(403, "Bond is not active on-chain; deposit the SKR bond to judge")
+                     existing = Judgment(pair_id=pair_id, wallet=wallet, choice=choice, rating=rating)
+                     db.add(existing)
+                     db.flush()
+@@ -801,7 +801,7 @@ def create_app(settings: Settings, *, chain=None):
+                         # Actor is locked, serializing the per-wallet cap.
+                         earned = _flat_payments_recent(db, wallet, settings.judge_flat_cap)
+                         if settings.judge_flat_cap == 0 or earned < settings.judge_flat_cap:
+-                            j.earned_usdc = settings.judge_flat_usdc
++                            j.earned_skr = settings.judge_flat_skr
+                             j.settling = True
+                 db.flush()
+                 substantive = _substantive_judgments(db, pair_id, pair.task_type)
+@@ -812,13 +812,13 @@ def create_app(settings: Settings, *, chain=None):
+                         pair.k += 1
+                     else:
+                         payouts = {
+-                            w: int(settings.judge_base_usdc * judge_rate_multiplier(judge_level_for(rolling_agreement(db, w))))
++                            w: int(settings.judge_base_skr * judge_rate_multiplier(judge_level_for(rolling_agreement(db, w))))
+                             for w in aligned
+                         }
+                         for vote in substantive:
+                             vote.aligned = vote.wallet in aligned
+                             if vote.aligned:
+-                                vote.earned_usdc = payouts[vote.wallet]
++                                vote.earned_skr = payouts[vote.wallet]
+                                 vote.settling = True
+                         pair.status = "resolving"
+                         pair.preference, pair.agreement, pair.confidence = winner, agreement, confidence
+@@ -829,7 +829,7 @@ def create_app(settings: Settings, *, chain=None):
+         if reconcile:
+             return _settle_and_finalize(pair_id)
+         if j.settling and not _settle_judgment_obligation(j, pair_id):
+-            fail(503, "USDC payout pending; retry to reconcile")
++            fail(503, "$SKR payout pending; retry to reconcile")
+         _process_enforcement(pair_id)
+         return {"status": status}
+ 
+@@ -841,12 +841,12 @@ def create_app(settings: Settings, *, chain=None):
+             level = judge_level_info(actor.agreement_rate)
+             in_progress = (not actor.calibrated) and 0 < answered < settings.calibration_n
+             earned = db.scalar(
+-                select(func.coalesce(func.sum(Judgment.earned_usdc), 0)).where(
++                select(func.coalesce(func.sum(Judgment.earned_skr), 0)).where(
+                     Judgment.wallet == actor.wallet
+                 )
+             )
+             settled = db.scalar(
+-                select(func.coalesce(func.sum(Judgment.earned_usdc), 0)).where(
++                select(func.coalesce(func.sum(Judgment.earned_skr), 0)).where(
+                     Judgment.wallet == actor.wallet,
+                     Judgment.payout_signature.is_not(None),
+                 )
+@@ -863,12 +863,12 @@ def create_app(settings: Settings, *, chain=None):
+                 "level": level["level"],
+                 "level_name": level["level_name"],
+                 "rate_multiplier": level["rate_multiplier"],
+-                "base_usdc": settings.judge_base_usdc,
+-                "flat_usdc": settings.judge_flat_usdc,
+-                "staked_usdc": actor.staked_usdc,
++                "base_skr": settings.judge_base_skr,
++                "flat_skr": settings.judge_flat_skr,
++                "staked_skr": actor.staked_skr,
+                 "warnings": actor.warnings,
+-                "earned_usdc": earned,
+-                "settled_usdc": settled,
++                "earned_skr": earned,
++                "settled_skr": settled,
+             }
+ 
+     @app.get("/batch/{batch_id}/dataset")
+@@ -978,11 +978,11 @@ def create_app(settings: Settings, *, chain=None):
+             if p.action == "deposit":
+                 worker = lock(db, Actor, p.wallet)
+                 worker.bonded = True
+-                worker.staked_usdc = settings.min_bond
++                worker.staked_skr = settings.min_bond
+             elif p.action == "withdraw":
+                 worker = lock(db, Actor, p.wallet)
+                 worker.bonded = False
+-                worker.staked_usdc = 0
++                worker.staked_skr = 0
+             return tx_view(p)
+ 
+     @app.post("/transactions/{pid}/confirm")
+diff --git a/backend/seeker/chain.py b/backend/seeker/chain.py
+index 54bc49e..977d018 100644
+--- a/backend/seeker/chain.py
++++ b/backend/seeker/chain.py
+@@ -88,14 +88,14 @@ class Chain:
+     def __init__(self, settings):
+         self.settings = settings
+         self.program = Pubkey.from_string(settings.program_id)
+-        self.usdc = Pubkey.from_string(settings.usdc_mint)
++        self.skr = Pubkey.from_string(settings.skr_mint)
+         self.verifier = Keypair.from_bytes(
+             bytes(json.loads(settings.verifier_key_file.read_text()))
+         )
+         self.config = self.pda(b"config")
+-        self.penalty_vault = self.pda(b"penalty-vault", bytes(self.usdc))
+-        # Devnet treasury: holds the USDC mint authority (the faucet, the bond,
+-        # and the settle_usdc payout — one token, three jobs). Absent means the
++        self.penalty_vault = self.pda(b"penalty-vault", bytes(self.skr))
++        # Devnet treasury: holds the $SKR mint authority (the faucet, the bond,
++        # and the settle_skr payout — one token, three jobs). Absent means the
+         # on-chain mint is unavailable and the backend fails closed instead of
+         # fabricating it.
+         self.treasury = self._load_key(getattr(settings, "treasury_key_file", None))
+@@ -145,13 +145,13 @@ class Chain:
+         if not account or account["owner"] != str(self.program):
+             raise ChainUnavailable("Escrow program has not been initialized")
+         raw = base64.b64decode(account["data"][0], validate=True)
+-        # Config layout (single USDC mint): discriminator(8) + admin(32) +
+-        # verifier(32) + usdc_mint(32) + min_bond(8) + slash_authority(32)
++        # Config layout (single $SKR mint): discriminator(8) + admin(32) +
++        # verifier(32) + skr_mint(32) + min_bond(8) + slash_authority(32)
+         # == 144 bytes. slash_authority is the verifier key (the backend reuses
+         # it; no separate authority keypair).
+         expected = (
+             bytes(self.verifier.pubkey())
+-            + bytes(self.usdc)
++            + bytes(self.skr)
+             + struct.pack("<Q", self.settings.min_bond)
+             + bytes(self.verifier.pubkey())
+         )
+@@ -170,17 +170,17 @@ class Chain:
+         who = Pubkey.from_string(wallet)
+         worker = who
+         bond = self.pda(b"bond", bytes(worker))
+-        bond_vault = self.pda(b"bond-vault", bytes(worker), bytes(self.usdc))
++        bond_vault = self.pda(b"bond-vault", bytes(worker), bytes(self.skr))
+         prefix = []
+         if action in {"deposit", "withdraw"}:
+-            prefix = [ata_instruction(who, who, self.usdc)]
++            prefix = [ata_instruction(who, who, self.skr)]
+             accounts = [
+                 meta(who, True, action == "deposit"),
+                 meta(self.config),
+-                meta(self.usdc),
++                meta(self.skr),
+                 meta(bond, writable=action == "deposit"),
+                 meta(bond_vault, writable=True),
+-                meta(get_associated_token_address(who, self.usdc), writable=True),
++                meta(get_associated_token_address(who, self.skr), writable=True),
+                 meta(TOKEN_PROGRAM_ID),
+             ]
+             if action == "deposit":
+@@ -298,12 +298,12 @@ class Chain:
+         return raw[-1]
+ 
+     def bond_vault_balance(self, wallet):
+-        """Read the worker's on-chain bond-vault USDC balance (base units).
++        """Read the worker's on-chain bond-vault $SKR balance (base units).
+         Raises ChainUnavailable if the vault cannot be read — fail closed."""
+         vault = self.pda(
+             b"bond-vault",
+             bytes(Pubkey.from_string(wallet)),
+-            bytes(self.usdc),
++            bytes(self.skr),
+         )
+         result = self.rpc(
+             "getTokenAccountBalance",
+@@ -326,26 +326,26 @@ class Chain:
+         return sig
+ 
+     def faucet(self, wallet):
+-        """Mint the minimum test-USDC bond and drop a little SOL so the worker
+-        can pay the deposit fee + bond/vault rent. The treasury is the USDC
++        """Mint the minimum test SKR bond and drop a little SOL so the worker
++        can pay the deposit fee + bond/vault rent. The treasury is the $SKR
+         mint authority AND the SOL funder. Raises ChainUnavailable when the
+         treasury keypair is not configured."""
+         if self.treasury is None:
+-            raise ChainUnavailable("USDC treasury (mint authority) is not configured")
++            raise ChainUnavailable("$SKR treasury (mint authority) is not configured")
+         worker = Pubkey.from_string(wallet)
+         payer = self.treasury
+         # Global faucet budget: keep a SOL floor in the treasury for payouts,
+         # so a swarm of fresh wallets cannot drain the devnet funder.
+         treasury_sol = self.rpc("getBalance", [str(payer.pubkey())])["value"]
+         if treasury_sol - self.settings.faucet_sol_lamports < self.settings.faucet_treasury_sol_floor:
+-            raise ChainUnavailable("test USDC faucet SOL budget exhausted")
+-        instructions = [ata_instruction(payer.pubkey(), worker, self.usdc)]
++            raise ChainUnavailable("test $SKR faucet SOL budget exhausted")
++        instructions = [ata_instruction(payer.pubkey(), worker, self.skr)]
+         instructions.append(
+             mint_to(
+                 MintToParams(
+                     program_id=TOKEN_PROGRAM_ID,
+-                    mint=self.usdc,
+-                    dest=get_associated_token_address(worker, self.usdc),
++                    mint=self.skr,
++                    dest=get_associated_token_address(worker, self.skr),
+                     mint_authority=payer.pubkey(),
+                     amount=self.settings.min_bond,
+                     signers=[payer.pubkey()],
+@@ -393,7 +393,7 @@ class Chain:
+         ix = Instruction(self.program, discriminator("reserve_judgment") + bytes(worker) + rid, [
+             meta(self.verifier.pubkey(), True, True), meta(self.config),
+             meta(self.pda(b"bond", bytes(worker)), writable=True),
+-            meta(self.pda(b"bond-vault", bytes(worker), bytes(self.usdc))),
++            meta(self.pda(b"bond-vault", bytes(worker), bytes(self.skr))),
+             meta(liability, writable=True), meta(SYSTEM),
+         ])
+         sig = self._sign_and_send([ix], self.verifier)
+@@ -413,14 +413,14 @@ class Chain:
+         ix = Instruction(self.program, discriminator("resolve_judgment") + bytes(worker) + rid + bytes([penalize]), [
+             meta(self.verifier.pubkey(), True, True), meta(self.config),
+             meta(self.pda(b"bond", bytes(worker)), writable=True),
+-            meta(self.pda(b"bond-vault", bytes(worker), bytes(self.usdc)), writable=True),
++            meta(self.pda(b"bond-vault", bytes(worker), bytes(self.skr)), writable=True),
+             meta(liability, writable=True), meta(self.penalty_vault, writable=True), meta(TOKEN_PROGRAM_ID), meta(SYSTEM),
+         ])
+         sig = self._sign_and_send([ix], self.verifier)
+         self._confirm_sent(sig)
+         return self.bond_warnings(wallet)
+ 
+-    def settle_usdc(self, wallet, amount, memo, *, persist, prepared=None):
++    def settle_skr(self, wallet, amount, memo, *, persist, prepared=None):
+         """Verify a receipt on retry; journal signed bytes before any broadcast.
+ 
+         The program atomically mints and creates an immutable, fully bound
+@@ -428,22 +428,22 @@ class Chain:
+         late submissions cannot mint twice, because they share that receipt.
+         """
+         if self.treasury is None:
+-            raise ChainUnavailable("USDC treasury (mint authority) is not configured")
++            raise ChainUnavailable("$SKR treasury (mint authority) is not configured")
+         worker, payer = Pubkey.from_string(wallet), self.treasury
+         payment_id = hashlib.sha256(memo.encode()).digest()[:16]
+-        receipt = self.pda(b"payment-v2", bytes(self.usdc), bytes(worker), struct.pack("<Q", amount), payment_id)
+-        instructions = [ata_instruction(payer.pubkey(), worker, self.usdc), Instruction(
++        receipt = self.pda(b"payment-v2", bytes(self.skr), bytes(worker), struct.pack("<Q", amount), payment_id)
++        instructions = [ata_instruction(payer.pubkey(), worker, self.skr), Instruction(
+             self.program,
+             discriminator("record_payment") + payment_id + bytes(worker) + struct.pack("<Q", amount),
+-            [meta(payer.pubkey(), True, True), meta(self.config), meta(self.usdc, writable=True),
+-             meta(receipt, writable=True), meta(get_associated_token_address(worker, self.usdc), writable=True),
++            [meta(payer.pubkey(), True, True), meta(self.config), meta(self.skr, writable=True),
++             meta(receipt, writable=True), meta(get_associated_token_address(worker, self.skr), writable=True),
+              meta(SYSTEM), meta(TOKEN_PROGRAM_ID)],
+         )]
+         fingerprint = message_fingerprint(Message.new_with_blockhash(instructions, payer.pubkey(), Hash.default()))
+         raw = self._account_data(receipt)
+         if raw is not None:
+             expected = (discriminator("Payment", "account") + bytes(payer.pubkey()) + bytes(worker)
+-                        + bytes(self.usdc) + struct.pack("<Q", amount) + payment_id)
++                        + bytes(self.skr) + struct.pack("<Q", amount) + payment_id)
+             if raw != expected:
+                 raise ChainUnavailable("Payment receipt does not match obligation")
+             return self.find_signature(SimpleNamespace(message_hash=fingerprint), address=receipt)
+@@ -454,8 +454,8 @@ class Chain:
+         if self._account_data(legacy) is not None:
+             old = [instructions[0], Instruction(self.program, discriminator("record_payment") + payment_id,
+                 [meta(payer.pubkey(), True, True), meta(legacy, writable=True), meta(SYSTEM)]),
+-                mint_to(MintToParams(program_id=TOKEN_PROGRAM_ID, mint=self.usdc,
+-                    dest=get_associated_token_address(worker, self.usdc), mint_authority=payer.pubkey(),
++                mint_to(MintToParams(program_id=TOKEN_PROGRAM_ID, mint=self.skr,
++                    dest=get_associated_token_address(worker, self.skr), mint_authority=payer.pubkey(),
+                     amount=amount, signers=[payer.pubkey()])), Instruction(MEMO_PROGRAM, memo.encode(), [])]
+             old_hash = message_fingerprint(Message.new_with_blockhash(old, payer.pubkey(), Hash.default()))
+             return self.find_signature(SimpleNamespace(message_hash=old_hash), address=legacy)
+diff --git a/backend/seeker/config.py b/backend/seeker/config.py
+index 35ca77f..00fc460 100644
+--- a/backend/seeker/config.py
++++ b/backend/seeker/config.py
+@@ -12,10 +12,11 @@ class Settings(BaseSettings):
+     rpc_url: str = "https://api.devnet.solana.com"
+     cluster: str = "devnet"
+     program_id: str
+-    usdc_mint: str
++    # Required: SEEKER_SKR_MINT supplies the devnet test $SKR mint (6 decimals).
++    skr_mint: str
+     verifier_key_file: Path
+-    # Devnet treasury: holds the USDC mint authority (the faucet, the bond, and
+-    # the settle_usdc payout — one token, three jobs). Optional (0600,
++    # Devnet treasury: holds the $SKR mint authority (the faucet, the bond, and
++    # the settle_skr payout; one token, three jobs). Optional (0600,
+     # gitignored). Unset -> the on-chain mint is unavailable and the backend
+     # fails closed instead of fabricating it.
+     treasury_key_file: Path | None = None
+@@ -25,8 +26,8 @@ class Settings(BaseSettings):
+     # deposit transaction fee and the bond/vault rent (the deposit is
+     # client-signed with payer=worker, so the worker needs lamports). 0.05 SOL.
+     faucet_sol_lamports: int = Field(default=50_000_000, gt=0)
+-    # A wallet may tap the devnet test-USDC faucet this many times (each tap
+-    # mints min_bond test USDC) before it is cut off.
++    # A wallet may tap the devnet test $SKR faucet this many times (each tap
++    # mints min_bond test $SKR) before it is cut off.
+     faucet_max_mints: int = Field(default=5, gt=0)
+     # Global faucet budget: keep at least this much SOL in the treasury for
+     # payouts. A tap is refused when it would drop the treasury below this
+@@ -34,20 +35,20 @@ class Settings(BaseSettings):
+     faucet_treasury_sol_floor: int = Field(default=1_000_000_000, gt=0)
+ 
+     # ---- Judgment product (RLHF preference judging) ----
+-    # Consensus-gated pay in test USDC (1:1 USD, 6 decimals). All are starting
++    # Consensus-gated pay in test $SKR (6 decimals, not real value). All are starting
+     # hypotheses (incentive spec §8): tune against real agreement data, not once.
+     judge_k: int = Field(default=3, gt=0)
+     calibration_n: int = Field(default=10, gt=0)
+     judge_window: int = Field(default=100, gt=0)
+     judge_slash_floor: float = 0.45
+     judge_slash_min_judged: int = Field(default=20, gt=0)
+-    # Payout in USDC base units (6 decimals). The treasury keypair is the USDC
+-    # mint authority; settlement mints test USDC to the judge. USDC is also the
++    # Payout in $SKR base units (6 decimals). The treasury keypair is the $SKR
++    # mint authority; settlement mints test $SKR to the judge. $SKR is also the
+     # bond (the slashable collateral). So:
+-    #   judge_base_usdc = 0.02 USDC  = $0.02 per aligned judgment (× level multiplier)
+-    #   judge_flat_usdc = 0.005 USDC = $0.005 flat "can't tell"
+-    judge_base_usdc: int = Field(default=20_000, gt=0)
+-    judge_flat_usdc: int = Field(default=5_000, gt=0)
++    #   judge_base_skr = 0.02 $SKR per aligned judgment (× level multiplier)
++    #   judge_flat_skr = 0.005 $SKR flat "can't tell"
++    judge_base_skr: int = Field(default=20_000, gt=0)
++    judge_flat_skr: int = Field(default=5_000, gt=0)
+     # Cap on flat "can't tell" payments a judge can earn per rolling window,
+     # to bound abstention farming (finding #12): three colluding judges can
+     # otherwise send "can't tell" on every fresh pair and collect flat without
+diff --git a/backend/seeker/db.py b/backend/seeker/db.py
+index 806fa63..2d4b8ca 100644
+--- a/backend/seeker/db.py
++++ b/backend/seeker/db.py
+@@ -46,24 +46,24 @@ class Actor(Base):
+     # liveness session (see /liveness/complete). Proof-of-human, not bank-grade.
+     liveness_completed: Mapped[bool] = mapped_column(Boolean, default=False)
+     # Bond gate (all server-recorded): bonded == the devnet bond was deposited;
+-    # usdc_funded == the devnet test-USDC faucet ran.
++    # skr_funded == the devnet test $SKR faucet ran.
+     bonded: Mapped[bool] = mapped_column(Boolean, default=False)
+-    usdc_funded: Mapped[bool] = mapped_column(Boolean, default=False)
+-    # Number of times this wallet has tapped the devnet test-USDC faucet
+-    # (capped at faucet_max_mints). usdc_funded stays as the "funded at least
++    skr_funded: Mapped[bool] = mapped_column(Boolean, default=False)
++    # Number of times this wallet has tapped the devnet test $SKR faucet
++    # (capped at faucet_max_mints). skr_funded stays as the "funded at least
+     # once" flag for the deposit gate.
+     faucet_count: Mapped[int] = mapped_column(Integer, default=0)
+     # ---- Judgment product (RLHF preference judging) ----
+     # calibrated == passed the N-pair calibration gate (unpaid) and may stake +
+     # judge. agreement_rate == rolling fraction of resolved judgments this judge
+     # was aligned on (last judge_window). judged_count == resolved judgments
+-    # participated in. staked_usdc == the USDC bond escrowed on deposit (mirror).
++    # participated in. staked_skr == the SKR bond escrowed on deposit (mirror).
+     # warnings == mirror of the on-chain bond.warnings ladder (0 clean, 1 warned,
+     # >= 2 slashed).
+     calibrated: Mapped[bool] = mapped_column(Boolean, default=False)
+     agreement_rate: Mapped[float] = mapped_column(Float, default=0.0)
+     judged_count: Mapped[int] = mapped_column(Integer, default=0)
+-    staked_usdc: Mapped[int] = mapped_column(BigInteger, default=0)
++    staked_skr: Mapped[int] = mapped_column(BigInteger, default=0)
+     warnings: Mapped[int] = mapped_column(Integer, default=0)
+ 
+ 
+@@ -151,9 +151,9 @@ class Judgment(Base):
+     # "cant_tell"/"tie" vote). Consumed judgments do not re-trigger a reroute
+     # and are excluded from the final consensus denominator.
+     consumed: Mapped[bool] = mapped_column(Boolean, default=False)
+-    earned_usdc: Mapped[int] = mapped_column(BigInteger, default=0)
++    earned_skr: Mapped[int] = mapped_column(BigInteger, default=0)
+     payout_signature: Mapped[str | None] = mapped_column(String(88))
+-    # settling == the earned_usdc obligation was committed to the ledger but its
++    # settling == the earned_skr obligation was committed to the ledger but its
+     # mint transaction has not yet been confirmed on-chain. Payout obligations
+     # are persisted BEFORE broadcast so a partial payout can never be lost or
+     # double-paid (finding 10 #1); cleared once the mint confirms.
+diff --git a/backend/seeker/judge_leveling.py b/backend/seeker/judge_leveling.py
+index 9dff02a..c6cf30f 100644
+--- a/backend/seeker/judge_leveling.py
++++ b/backend/seeker/judge_leveling.py
+@@ -5,7 +5,7 @@ they aligned with the crowd. This is a different meaning from the capture
+ ladder (which gates on accepted-count + acceptance-rate), so it lives in its
+ own module and must not reuse `leveling.py`'s table.
+ 
+-Payout is ``judge_base_usdc × multiplier`` per aligned judgment. Status (level)
++Payout is ``judge_base_skr × multiplier`` per aligned judgment. Status (level)
+ is free; only the multiplier costs money.
+ """
+ 
+diff --git a/backend/seeker/migrate.py b/backend/seeker/migrate.py
+index 13e051b..9848294 100644
+--- a/backend/seeker/migrate.py
++++ b/backend/seeker/migrate.py
+@@ -11,14 +11,14 @@ from .db import Base, connect
+ 
+ MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
+ 
+-# Legacy SKR -> USDC column renames (finding #1). An existing SKR-era database
+-# has the old column names; rename them (preserving balances) before the ADD
+-# COLUMN pass so the new names are present and continuity is kept.
++# Legacy USDC -> SKR column renames. Rename USDC-era columns (preserving
++# balances) before the ADD COLUMN pass. Existing SKR-era databases already
++# have the correct names and need no rename.
+ RENAMES = [
+-    ("seeker_actors", "skr_funded", "usdc_funded"),
+-    ("seeker_actors", "staked_skr", "staked_usdc"),
+-    ("judgments", "earned_skr", "earned_usdc"),
+-    ("judgments", "settled_skr", "settled_usdc"),
++    ("seeker_actors", "usdc_funded", "skr_funded"),
++    ("seeker_actors", "staked_usdc", "staked_skr"),
++    ("judgments", "earned_usdc", "earned_skr"),
++    ("judgments", "settled_usdc", "settled_skr"),
+ ]
+ 
+ 
+diff --git a/backend/tests/test_judgment.py b/backend/tests/test_judgment.py
+index 2f4755c..614e10c 100644
+--- a/backend/tests/test_judgment.py
++++ b/backend/tests/test_judgment.py
+@@ -1,5 +1,5 @@
+ """Judgment product (RLHF preference judging) — consensus, calibration, ladder,
+-USDC payout, reroute, and the agreement-floor slash trigger."""
++$SKR payout, reroute, and the agreement-floor slash trigger."""
+ 
+ import base64
+ 
+@@ -17,7 +17,7 @@ from solders.keypair import Keypair
+ class FakeChain:
+     def __init__(self):
+         self.prepared = []
+-        self.settled_usdc = []  # (wallet, amount) from settle_usdc
++        self.settled_skr = []  # (wallet, amount) from settle_skr
+         self.issued = []       # (action, wallet, amount) from issue
+         self.posted = []       # (batch_id, root) from post_batch
+         self.warnings = 0
+@@ -69,12 +69,12 @@ class FakeChain:
+             assert self.resolutions[resolution_id] == penalize
+         return self.bond_warnings(wallet)
+ 
+-    def settle_usdc(self, wallet, amount, memo=None, *, persist, prepared=None):
++    def settle_skr(self, wallet, amount, memo=None, *, persist, prepared=None):
+         if memo not in self.payments:
+             sig = str(Keypair().sign_message(memo.encode()))
+             persist({"transaction": "SIGNED-TEST-TX", "signature": sig, "last_valid_height": 100})
+             self.payments[memo] = sig
+-            self.settled_usdc.append((wallet, amount))
++            self.settled_skr.append((wallet, amount))
+         return self.payments[memo]
+ 
+     def faucet(self, wallet):
+@@ -93,7 +93,7 @@ def pilot(tmp_path):
+         local_sqlite=True,
+         domain="pilot.test",
+         program_id=str(Keypair().pubkey()),
+-        usdc_mint=str(Keypair().pubkey()),
++        skr_mint=str(Keypair().pubkey()),
+         verifier_key_file=tmp_path / "unused",
+     )
+     app = create_app(settings, chain=chain)
+@@ -186,28 +186,28 @@ def ready_judge(c, app, h, calib_ids):
+ # ---- calibration gate ----
+ 
+ 
+-def test_usdc_wire_contract_matches_storage(pilot):
++def test_skr_wire_contract_matches_storage(pilot):
+     c, app, headers, keys, _chain, settings = pilot
+     health = c.get("/health").json()
+-    assert health["usdc_mint"] == settings.usdc_mint
+-    assert health["usdc_payout"] == "unavailable"
++    assert health["skr_mint"] == settings.skr_mint
++    assert health["skr_payout"] == "unavailable"
+     assert health["test_tokens"] is True
+-    assert not any("skr" in key for key in health)
++    assert not any("usdc" in key for key in health)
+ 
+     bond(c, headers[0])
+     me = c.get("/me", headers=headers[0]).json()
+     stats = c.get("/judge/stats", headers=headers[0]).json()
+-    assert me["bond_test_usdc_units"] == settings.min_bond
+-    assert me["usdc_funded"] is True
+-    assert me["staked_usdc"] == stats["staked_usdc"] == settings.min_bond
+-    assert stats["base_usdc"] == 20_000
+-    assert stats["flat_usdc"] == 5_000
+-    assert stats["earned_usdc"] == stats["settled_usdc"] == 0
+-    assert not any("skr" in key for key in me | stats)
++    assert me["bond_test_skr_units"] == settings.min_bond
++    assert me["skr_funded"] is True
++    assert me["staked_skr"] == stats["staked_skr"] == settings.min_bond
++    assert stats["base_skr"] == 20_000
++    assert stats["flat_skr"] == 5_000
++    assert stats["earned_skr"] == stats["settled_skr"] == 0
++    assert not any("usdc" in key for key in me | stats)
+     with app.state.database.transaction() as db:
+         actor = db.get(Actor, str(keys[0].pubkey()))
+-        assert actor.usdc_funded is True
+-        assert actor.staked_usdc == settings.min_bond
++        assert actor.skr_funded is True
++        assert actor.staked_skr == settings.min_bond
+ 
+ 
+ def test_deposit_does_not_require_calibration(pilot):
+@@ -254,9 +254,9 @@ def test_consensus_majority_pays_aligned(pilot):
+     assert abs(body["agreement"] - 2 / 3) < 1e-6
+ 
+     w0, w1, w2 = [str(k.pubkey()) for k in keys[:3]]
+-    base = settings.judge_base_usdc
+-    assert sorted(chain.settled_usdc) == sorted([(w0, base), (w1, base)])
+-    assert all(w != w2 for w, _ in chain.settled_usdc)
++    base = settings.judge_base_skr
++    assert sorted(chain.settled_skr) == sorted([(w0, base), (w1, base)])
++    assert all(w != w2 for w, _ in chain.settled_skr)
+ 
+ 
+ def test_cant_tell_reroutes_and_pays_flat(pilot):
+@@ -272,7 +272,7 @@ def test_cant_tell_reroutes_and_pays_flat(pilot):
+     assert r.json()["status"] == "rerouted"
+     # The "can't tell" judge earned the flat rate; nobody was resolved as aligned.
+     w2 = str(keys[2].pubkey())
+-    assert (w2, settings.judge_flat_usdc) in chain.settled_usdc
++    assert (w2, settings.judge_flat_skr) in chain.settled_skr
+ 
+ 
+ def test_tie_reroutes(pilot):
+@@ -298,7 +298,7 @@ def test_rating_median_alignment(pilot):
+     r = c.post(f"/judge/{pid}", headers=h[2], json={"rating": 2})
+     assert r.json()["status"] == "resolved"
+     w0, w1, w2 = [str(k.pubkey()) for k in keys[:3]]
+-    assert sorted(chain.settled_usdc) == sorted([(w0, settings.judge_base_usdc), (w1, settings.judge_base_usdc)])
++    assert sorted(chain.settled_skr) == sorted([(w0, settings.judge_base_skr), (w1, settings.judge_base_skr)])
+ 
+ 
+ # ---- agreement-floor slash trigger ----
+@@ -389,7 +389,7 @@ def test_tie_vote_is_neutral_not_dissent(pilot):
+         assert a.judged_count == 0
+         assert a.agreement_rate == 0.0
+     # No judge was paid for the unresolved pair.
+-    assert _chain.settled_usdc == []
++    assert _chain.settled_skr == []
+ 
+ 
+ def test_calibration_correctness_hidden_mid_gate(pilot):
+@@ -406,7 +406,7 @@ def test_calibration_correctness_hidden_mid_gate(pilot):
+ 
+ 
+ def test_payout_obligation_persisted_before_broadcast(pilot):
+-    """A failed settle must leave the earned_usdc obligation journaled (settling
++    """A failed settle must leave the earned_skr obligation journaled (settling
+     flag) so a retry reconciles it, not re-creates it (finding #1)."""
+     c, app, h, keys, chain, settings = pilot
+     ids = seed_calibration(app, settings.calibration_n)
+@@ -422,7 +422,7 @@ def test_payout_obligation_persisted_before_broadcast(pilot):
+             raise ChainUnavailable("boom")
+         return str(Keypair().sign_message(b"ok"))
+ 
+-    chain.settle_usdc = flaky_settle
++    chain.settle_skr = flaky_settle
+     c.post(f"/judge/{pid}", headers=h[0], json={"choice": "a"})
+     c.post(f"/judge/{pid}", headers=h[1], json={"choice": "a"})
+     r = c.post(f"/judge/{pid}", headers=h[2], json={"choice": "b"})
+@@ -436,7 +436,7 @@ def test_payout_obligation_persisted_before_broadcast(pilot):
+             if j.settling
+         ]
+         assert len(settling) >= 1
+-        assert settling[0].earned_usdc == settings.judge_base_usdc
++        assert settling[0].earned_skr == settings.judge_base_skr
+ 
+ 
+ def test_direct_submission_requires_liveness_even_with_bond(pilot):
+@@ -448,7 +448,7 @@ def test_direct_submission_requires_liveness_even_with_bond(pilot):
+     assert "human" in response.json()["detail"]
+     with app.state.database.transaction() as db:
+         assert db.query(Judgment).count() == 0
+-    assert not chain.reservations and not chain.settled_usdc
++    assert not chain.reservations and not chain.settled_skr
+     settings.liveness_required = False
+     assert c.post(f"/judge/{pid}", headers=h[0], json={"choice": "a"}).status_code == 200
+ 
+@@ -458,7 +458,7 @@ def test_retry_after_mint_confirmation_loss_does_not_deadlock_or_double_pay(pilo
+     settings.liveness_required = False
+     bond(c, h[0])
+     pid = seed_pair(app, k=1)
+-    original = chain.settle_usdc
++    original = chain.settle_skr
+ 
+     def lost_confirmation(wallet, amount, memo, **kwargs):
+         signature = original(wallet, amount, memo, **kwargs)
+@@ -469,16 +469,16 @@ def test_retry_after_mint_confirmation_loss_does_not_deadlock_or_double_pay(pilo
+             assert j.settling and j.payout_signature is None
+         raise ChainUnavailable("confirmation lost after successful mint")
+ 
+-    chain.settle_usdc = lost_confirmation
++    chain.settle_skr = lost_confirmation
+     assert c.post(f"/judge/{pid}", headers=h[0], json={"choice": "a"}).status_code == 503
+-    assert len(chain.settled_usdc) == 1
+-    chain.settle_usdc = original
++    assert len(chain.settled_skr) == 1
++    chain.settle_skr = original
+     # SQLite BEGIN IMMEDIATE would self-deadlock here with the old retry path.
+     from concurrent.futures import ThreadPoolExecutor
+     with ThreadPoolExecutor(max_workers=2) as pool:
+         results = [pool.submit(c.post, f"/judge/{pid}", headers=h[0], json={"choice": "a"}) for _ in range(2)]
+         assert all(f.result(timeout=5).status_code == 200 for f in results)
+-    assert len(chain.settled_usdc) == 1
++    assert len(chain.settled_skr) == 1
+     with app.state.database.transaction() as db:
+         assert db.get(JudgmentPair, pid).status == "resolved"
+         assert db.get(Actor, str(keys[0].pubkey())).judged_count == 1
+@@ -556,7 +556,7 @@ def test_neutral_payout_and_release_retry(pilot):
+     assert c.post(f"/judge/{pid}", headers=h[0], json={"choice": "cant_tell"}).status_code == 503
+     chain.resolve_judgment = original
+     assert c.post(f"/judge/{pid}", headers=h[0], json={"choice": "cant_tell"}).status_code == 200
+-    assert len(chain.settled_usdc) == 1 and not chain.reservations
++    assert len(chain.settled_skr) == 1 and not chain.reservations
+ 
+ 
+ def test_migration_preserves_legacy_votes_and_reserves_before_consensus(pilot):
+@@ -579,7 +579,7 @@ def test_migration_preserves_legacy_votes_and_reserves_before_consensus(pilot):
+     response = c.post(f"/judge/{pid}", headers=h[1], json={"choice": "a"})
+     assert response.status_code == 200, response.text
+     assert response.json()["status"] == "resolved"
+-    assert len(chain.settled_usdc) == 2
++    assert len(chain.settled_skr) == 2
+     with app.state.database.transaction() as db:
+         assert all(j.liability_reserved and not j.liability_legacy for j in db.query(Judgment).all())
+         assert db.get(Actor, str(keys[0].pubkey())).judged_count == 1
+@@ -624,7 +624,7 @@ def test_second_resolution_slashes_once_and_slashed_judge_can_reconcile(pilot):
+     wallet = str(keys[2].pubkey())
+     with app.state.database.transaction() as db:
+         actor = db.get(Actor, wallet)
+-        assert actor.warnings == 2 and not actor.bonded and actor.staked_usdc == 0
++        assert actor.warnings == 2 and not actor.bonded and actor.staked_skr == 0
+         assert actor.judged_count == 2
+     assert c.post(f"/judge/{pid}", headers=h[2], json={"choice": "b"}).status_code == 200
+     assert chain.issued.count(("warn", wallet, None)) == 2
+diff --git a/backend/tests/test_seeker_chain.py b/backend/tests/test_seeker_chain.py
+index 4ec655c..092a40f 100644
+--- a/backend/tests/test_seeker_chain.py
++++ b/backend/tests/test_seeker_chain.py
+@@ -21,7 +21,7 @@ def chain(tmp_path):
+     return Chain(
+         SimpleNamespace(
+             program_id="5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV",
+-            usdc_mint=str(Keypair().pubkey()),
++            skr_mint=str(Keypair().pubkey()),
+             verifier_key_file=p,
+             cluster="localnet",
+             rpc_url="http://127.0.0.1:8899",
+@@ -99,7 +99,7 @@ def test_environment_binds_config_mints_verifier_and_network(chain):
+         discriminator("Config", "account")
+         + bytes(Keypair().pubkey())  # admin (not checked)
+         + bytes(chain.verifier.pubkey())
+-        + bytes(chain.usdc)
++        + bytes(chain.skr)
+         + struct.pack("<Q", 1_000_000)
+         + bytes(chain.verifier.pubkey())  # slash_authority == verifier
+     )
+@@ -132,7 +132,7 @@ def test_environment_rejects_stale_config(chain):
+         discriminator("Config", "account")
+         + bytes(Keypair().pubkey())
+         + bytes(chain.verifier.pubkey())
+-        + bytes(chain.usdc)
++        + bytes(chain.skr)
+         + struct.pack("<Q", 1_000_000)
+     )
+     account = {
+@@ -162,7 +162,7 @@ def test_warn_slash_instruction_layout(chain, payer):
+     assert len(ix.accounts) == 6
+     assert ix.accounts[0].pubkey == chain.verifier.pubkey() and ix.accounts[0].is_signer
+     assert ix.accounts[2].pubkey == chain.pda(b"bond", bytes(payer.pubkey()))
+-    assert ix.accounts[3].pubkey == chain.pda(b"bond-vault", bytes(payer.pubkey()), bytes(chain.usdc))
++    assert ix.accounts[3].pubkey == chain.pda(b"bond-vault", bytes(payer.pubkey()), bytes(chain.skr))
+     assert ix.accounts[3].is_writable
+     assert ix.accounts[4].pubkey == chain.penalty_vault and ix.accounts[4].is_writable
+     assert ix.accounts[5].pubkey == TOKEN_PROGRAM_ID
+@@ -212,7 +212,7 @@ def test_find_signature_paginates_beyond_first_100(chain, payer):
+ def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
+     # Regression: the treasury is a Keypair (not a Pubkey), and the SPL
+     # instruction params take pubkeys while _sign_and_send signs with the
+-    # Keypair. This exercises both faucet and settle_usdc end to end.
++    # Keypair. This exercises both faucet and settle_skr end to end.
+     treasury = Keypair()
+     p = tmp_path / "treasury.json"
+     p.write_text(json.dumps(list(bytes(treasury))))
+@@ -230,7 +230,7 @@ def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
+         if method == "sendTransaction":
+             return "sig_" + method
+         if method == "getSignatureStatuses":
+-            # confirm success so settle_usdc's _confirm_sent passes
++            # confirm success so settle_skr's _confirm_sent passes
+             return {"value": [{"err": None, "confirmationStatus": "finalized"}]}
+         if method == "getBalance":
+             # enough SOL to clear the faucet treasury floor check
+@@ -238,12 +238,12 @@ def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
+         raise AssertionError(f"unexpected rpc method: {method}")
+ 
+     chain.rpc = fake_rpc
+-    # Faucet mints min_bond USDC to the worker (mint authority = treasury).
++    # Faucet mints min_bond $SKR to the worker (mint authority = treasury).
+     sig = chain.faucet(str(worker.pubkey()))
+     assert sig == "sig_sendTransaction"
+-    # Settlement mints test USDC to the judge (mint authority = treasury).
++    # Settlement mints test $SKR to the judge (mint authority = treasury).
+     journal = []
+-    sig = chain.settle_usdc(str(worker.pubkey()), 100_000, memo="judgment-1", persist=journal.append)
++    sig = chain.settle_skr(str(worker.pubkey()), 100_000, memo="judgment-1", persist=journal.append)
+     assert sig == journal[0]["signature"]
+     assert str(Transaction.from_bytes(base64.b64decode(journal[0]["transaction"])).signatures[0]) == sig
+ 
+@@ -253,6 +253,24 @@ def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
+     assert len(sends) == 2
+ 
+ 
++def test_faucet_refuses_when_below_sol_floor(chain, tmp_path):
++    # Global faucet budget: refuse a tap that would drop the treasury below
++    # the SOL floor, so a swarm of fresh wallets cannot drain the devnet funder.
++    treasury = Keypair()
++    p = tmp_path / "treasury.json"
++    p.write_text(json.dumps(list(bytes(treasury))))
++    chain.treasury = treasury
++
++    def fake_rpc(method, params):
++        if method == "getBalance":
++            return {"value": 500_000_000}  # below floor (1 SOL) + tap (0.05)
++        raise AssertionError(f"unexpected rpc method: {method}")
++
++    chain.rpc = fake_rpc
++    with pytest.raises(ChainUnavailable):
++        chain.faucet(str(Keypair().pubkey()))
++
++
+ def test_payment_journal_failure_prevents_broadcast(chain, payer):
+     chain.treasury = payer
+     calls = []
+@@ -271,7 +289,7 @@ def test_payment_journal_failure_prevents_broadcast(chain, payer):
+         raise RuntimeError("DB commit failed")
+ 
+     with pytest.raises(RuntimeError, match="DB commit failed"):
+-        chain.settle_usdc(str(payer.pubkey()), 100, "journal-test", persist=persist)
++        chain.settle_skr(str(payer.pubkey()), 100, "journal-test", persist=persist)
+     assert "sendTransaction" not in calls
+ 
+ 
+@@ -282,7 +300,7 @@ def test_corrupt_payment_receipt_fails_closed_without_broadcast(chain, payer):
+         "data": [base64.b64encode(discriminator("Payment", "account") + bytes(120)).decode(), "base64"],
+     }}
+     with pytest.raises(ChainUnavailable, match="does not match"):
+-        chain.settle_usdc(str(payer.pubkey()), 100, "bad-receipt", persist=lambda _: pytest.fail("must not rebuild"))
++        chain.settle_skr(str(payer.pubkey()), 100, "bad-receipt", persist=lambda _: pytest.fail("must not rebuild"))
+ 
+ 
+ def test_expired_payment_transaction_rebuilt_and_journaled_before_send(chain, payer):
+@@ -310,10 +328,10 @@ def test_expired_payment_transaction_rebuilt_and_journaled_before_send(chain, pa
+ 
+     chain.rpc = rpc
+     with pytest.raises(ChainUnavailable):
+-        chain.settle_usdc(str(payer.pubkey()), 100, "expiry", persist=journal.append)
++        chain.settle_skr(str(payer.pubkey()), 100, "expiry", persist=journal.append)
+     height = 111
+     finalized = True
+-    sig = chain.settle_usdc(str(payer.pubkey()), 100, "expiry", persist=journal.append, prepared=journal[-1])
++    sig = chain.settle_skr(str(payer.pubkey()), 100, "expiry", persist=journal.append, prepared=journal[-1])
+     assert sig == journal[-1]["signature"]
+     assert len(journal) == 2 and len(sends) == 2 and sends[0] != sends[1]
+     txs = [Transaction.from_bytes(base64.b64decode(raw)) for raw in sends]
+diff --git a/backend/tests/test_seeker_runtime.py b/backend/tests/test_seeker_runtime.py
+index 5975b92..008d7a0 100644
+--- a/backend/tests/test_seeker_runtime.py
++++ b/backend/tests/test_seeker_runtime.py
+@@ -53,8 +53,8 @@ def runtime(tmp_path):
+     key.write_text(json.dumps(list(bytes(verifier))))
+     chain = Chain(
+         SimpleNamespace(
+-            program_id="8pY9dpwhe4Tbv9Ud9r13WCrNkugirsELNKA3hwfUUdpu",
+-            usdc_mint=str(Keypair().pubkey()),
++            program_id="5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV",
++            skr_mint=str(Keypair().pubkey()),
+             verifier_key_file=key,
+             min_bond=100,
+             cluster="localnet",
+@@ -64,7 +64,7 @@ def runtime(tmp_path):
+     svm.add_program(chain.program, SO.read_bytes())
+     for k in (admin, worker, other, verifier):
+         svm.airdrop(k.pubkey(), 10_000_000_000)
+-    for mint in (chain.usdc,):
++    for mint in (chain.skr,):
+         svm.set_account(mint, mint_account(admin.pubkey()))
+         for k in (admin, worker, other):
+             svm.set_account(
+@@ -75,13 +75,13 @@ def runtime(tmp_path):
+         discriminator("Config", "account")
+         + bytes(admin.pubkey())
+         + bytes(verifier.pubkey())
+-        + bytes(chain.usdc)
++        + bytes(chain.skr)
+         + struct.pack("<Q", 100)
+         + bytes(verifier.pubkey())  # slash_authority == verifier
+     )
+     svm.set_account(chain.config, Account(10_000_000, cfg, chain.program))
+-    # penalty_vault: program-owned USDC token account (authority == config).
+-    svm.set_account(chain.penalty_vault, token_account(chain.usdc, chain.config, 0))
++    # penalty_vault: program-owned $SKR token account (authority == config).
++    svm.set_account(chain.penalty_vault, token_account(chain.skr, chain.config, 0))
+     clock = svm.get_clock()
+     clock.unix_timestamp = 100
+     svm.set_clock(clock)
+@@ -129,17 +129,17 @@ def balance(rt, wallet, mint):
+ def test_bond_deposit_withdraw_roundtrip(runtime):
+     rt = runtime
+     svm, c, _admin, worker, _other, _verifier = rt
+-    assert balance(rt, worker.pubkey(), c.usdc) == 10_000
++    assert balance(rt, worker.pubkey(), c.skr) == 10_000
+     ok(send(rt, "deposit", worker))
+-    # deposit escrows min_bond (100) USDC into the bond vault.
+-    assert balance(rt, worker.pubkey(), c.usdc) == 9_900
++    # deposit escrows min_bond (100) $SKR into the bond vault.
++    assert balance(rt, worker.pubkey(), c.skr) == 9_900
+     # Withdraw is locked until the cooldown elapses (unlock_at = deposit + 1 day).
+     bad(send(rt, "withdraw", worker))
+     clock = svm.get_clock()
+     clock.unix_timestamp = 86_501
+     svm.set_clock(clock)
+     ok(send(rt, "withdraw", worker))
+-    assert balance(rt, worker.pubkey(), c.usdc) == 10_000
++    assert balance(rt, worker.pubkey(), c.skr) == 10_000
+ 
+ 
+ def test_warn_then_slash_ladder_drains_bond_to_penalty_vault(runtime):
+@@ -193,7 +193,7 @@ def test_initializer_requires_program_upgrade_authority(runtime):
+             [
+                 meta(who.pubkey(), True, True),
+                 meta(c.config, writable=True),
+-                meta(c.usdc),
++                meta(c.skr),
+                 meta(c.penalty_vault, writable=True),
+                 meta(c.program),
+                 meta(data_address),
+@@ -212,183 +212,3 @@ def test_initializer_requires_program_upgrade_authority(runtime):
+     ok(initialize(admin))
+     assert svm.get_account(c.config).data[8:40] == bytes(admin.pubkey())
+     bad(initialize(other))
+-
+-
+-def send_instructions(runtime, instructions, signer):
+-    svm = runtime[0]
+-    svm.expire_blockhash()
+-    msg = Message.new_with_blockhash(instructions, signer.pubkey(), svm.latest_blockhash())
+-    tx = Transaction.new_unsigned(msg)
+-    tx.sign([signer], msg.recent_blockhash)
+-    return svm.send_transaction(tx)
+-
+-
+-def liability_instruction(runtime, worker, rid, *, penalize=None, authority=None):
+-    _svm, c, _admin, _worker, _other, verifier = runtime
+-    authority = authority or verifier
+-    accounts = [meta(authority.pubkey(), True, True), meta(c.config),
+-                meta(c.pda(b"bond", bytes(worker)), writable=True),
+-                meta(c.pda(b"bond-vault", bytes(worker), bytes(c.usdc)), writable=penalize is not None),
+-                meta(c.pda(b"liability", bytes(worker), rid), writable=True)]
+-    if penalize is None:
+-        accounts += [meta(SYSTEM)]
+-        data = discriminator("reserve_judgment") + bytes(worker) + rid
+-    else:
+-        accounts += [meta(c.penalty_vault, writable=True), meta(TOKEN_PROGRAM_ID), meta(SYSTEM)]
+-        data = discriminator("resolve_judgment") + bytes(worker) + rid + bytes([penalize])
+-    return Instruction(c.program, data, accounts)
+-
+-
+-def pending(runtime, worker):
+-    _svm, c, *_ = runtime
+-    data = runtime[0].get_account(c.pda(b"bond", bytes(worker))).data
+-    return struct.unpack("<I", data[40:44])[0]
+-
+-
+-def test_open_liabilities_lock_withdrawal_until_each_resolution(runtime):
+-    svm, c, _admin, worker, other, verifier = runtime
+-    ok(send(runtime, "deposit", worker))
+-    first, second = b"1" * 16, b"2" * 16
+-    reserve = liability_instruction(runtime, worker.pubkey(), first)
+-    bad(send_instructions(runtime, [liability_instruction(runtime, worker.pubkey(), first, authority=other)], other))
+-    assert pending(runtime, worker.pubkey()) == 0
+-    ok(send_instructions(runtime, [reserve], verifier))
+-    ok(send_instructions(runtime, [reserve], verifier))
+-    assert pending(runtime, worker.pubkey()) == 1
+-    ok(send_instructions(runtime, [liability_instruction(runtime, worker.pubkey(), second)], verifier))
+-    clock = svm.get_clock()
+-    clock.unix_timestamp = 86_501
+-    svm.set_clock(clock)
+-    bad(send(runtime, "withdraw", worker))
+-    release = liability_instruction(runtime, worker.pubkey(), first, penalize=False)
+-    bad(send_instructions(runtime, [liability_instruction(runtime, worker.pubkey(), first, penalize=False, authority=other)], other))
+-    ok(send_instructions(runtime, [release], verifier))
+-    ok(send_instructions(runtime, [release], verifier))
+-    assert pending(runtime, worker.pubkey()) == 1
+-    bad(send(runtime, "withdraw", worker))
+-    ok(send_instructions(runtime, [liability_instruction(runtime, worker.pubkey(), second, penalize=False)], verifier))
+-    assert pending(runtime, worker.pubkey()) == 0
+-    ok(send(runtime, "withdraw", worker))
+-    bad(send_instructions(runtime, [liability_instruction(runtime, worker.pubkey(), b"3" * 16)], verifier))
+-
+-
+-def test_resolution_warn_and_slash_are_atomic_and_idempotent(runtime):
+-    svm, c, _admin, worker, _other, verifier = runtime
+-    ok(send(runtime, "deposit", worker))
+-    ids = [bytes([n]) * 16 for n in (1, 2, 3)]
+-    for rid in ids:
+-        ok(send_instructions(runtime, [liability_instruction(runtime, worker.pubkey(), rid)], verifier))
+-    first = liability_instruction(runtime, worker.pubkey(), ids[0], penalize=True)
+-    ok(send_instructions(runtime, [first], verifier))
+-    ok(send_instructions(runtime, [first], verifier))
+-    bond = c.pda(b"bond", bytes(worker.pubkey()))
+-    assert svm.get_account(bond).data[52] == 1
+-    assert pending(runtime, worker.pubkey()) == 2
+-    second = liability_instruction(runtime, worker.pubkey(), ids[1], penalize=True)
+-    ok(send_instructions(runtime, [second], verifier))
+-    ok(send_instructions(runtime, [second], verifier))
+-    assert svm.get_account(bond).data[52] == 255
+-    assert struct.unpack("<Q", svm.get_account(c.penalty_vault).data[64:72])[0] == 100
+-    assert pending(runtime, worker.pubkey()) == 1
+-    # Fresh deposits cannot erase outstanding liabilities after a slash.
+-    bad(send(runtime, "deposit", worker))
+-    ok(send_instructions(runtime, [liability_instruction(runtime, worker.pubkey(), ids[2], penalize=False)], verifier))
+-    ok(send(runtime, "deposit", worker))
+-    assert svm.get_account(bond).data[52] == 0
+-    # Replaying the old penalty cannot slash this new deposit.
+-    ok(send_instructions(runtime, [second], verifier))
+-    assert svm.get_account(bond).data[52] == 0
+-    bad(send_instructions(runtime, [liability_instruction(runtime, worker.pubkey(), ids[0], penalize=False)], verifier))
+-
+-
+-def test_cancelled_submission_tombstone_blocks_late_reservation(runtime):
+-    _svm, _c, _admin, worker, _other, verifier = runtime
+-    ok(send(runtime, "deposit", worker))
+-    rid = b"c" * 16
+-    ok(send_instructions(runtime, [liability_instruction(runtime, worker.pubkey(), rid, penalize=False)], verifier))
+-    bad(send_instructions(runtime, [liability_instruction(runtime, worker.pubkey(), rid)], verifier))
+-    assert pending(runtime, worker.pubkey()) == 0
+-
+-
+-def payment_instruction(runtime, signer, recipient, amount, payment_id, *, mint=None, receipt=None, destination=None):
+-    c = runtime[1]
+-    mint = mint or c.usdc
+-    receipt = receipt or c.pda(b"payment-v2", bytes(mint), bytes(recipient), struct.pack("<Q", amount), payment_id)
+-    destination = destination or get_associated_token_address(recipient, mint)
+-    return Instruction(c.program, discriminator("record_payment") + payment_id + bytes(recipient) + struct.pack("<Q", amount), [
+-        meta(signer.pubkey(), True, True), meta(c.config), meta(mint, writable=True),
+-        meta(receipt, writable=True), meta(destination, writable=True), meta(SYSTEM), meta(TOKEN_PROGRAM_ID),
+-    ])
+-
+-
+-def test_payment_receipt_requires_mint_authority_and_proves_exact_atomic_mint(runtime):
+-    svm, c, admin, worker, other, _verifier = runtime
+-    pid = b"p" * 16
+-    receipt = c.pda(b"payment-v2", bytes(c.usdc), bytes(worker.pubkey()), struct.pack("<Q", 25), pid)
+-    bad(send_instructions(runtime, [payment_instruction(runtime, other, worker.pubkey(), 25, pid)], other))
+-    assert svm.get_account(receipt) is None
+-    assert balance(runtime, worker.pubkey(), c.usdc) == 10_000
+-    # The address is bound independently to amount, recipient and mint.
+-    bad(send_instructions(runtime, [payment_instruction(runtime, admin, worker.pubkey(), 26, pid, receipt=receipt)], admin))
+-    bad(send_instructions(runtime, [payment_instruction(runtime, admin, other.pubkey(), 25, pid, receipt=receipt)], admin))
+-    other_mint = Pubkey.new_unique()
+-    svm.set_account(other_mint, mint_account(admin.pubkey()))
+-    svm.set_account(get_associated_token_address(worker.pubkey(), other_mint), token_account(other_mint, worker.pubkey(), 0))
+-    bad(send_instructions(runtime, [payment_instruction(runtime, admin, worker.pubkey(), 25, pid, mint=other_mint)], admin))
+-    # Wrong destination fails without leaving a receipt behind.
+-    bad(send_instructions(runtime, [payment_instruction(runtime, admin, worker.pubkey(), 25, pid,
+-        destination=get_associated_token_address(other.pubkey(), c.usdc))], admin))
+-    assert svm.get_account(receipt) is None
+-    ix = payment_instruction(runtime, admin, worker.pubkey(), 25, pid)
+-    ok(send_instructions(runtime, [ix], admin))
+-    assert balance(runtime, worker.pubkey(), c.usdc) == 10_025
+-    assert svm.get_account(receipt).data == (discriminator("Payment", "account") + bytes(admin.pubkey())
+-        + bytes(worker.pubkey()) + bytes(c.usdc) + struct.pack("<Q", 25) + pid)
+-    bad(send_instructions(runtime, [ix], admin))
+-    assert balance(runtime, worker.pubkey(), c.usdc) == 10_025
+-
+-
+-def test_chain_retry_recovers_finalized_receipt_after_confirmation_loss(runtime):
+-    import base64
+-    from seeker.chain import ChainUnavailable
+-    svm, chain, admin, worker, _other, _verifier = runtime
+-    chain.treasury = admin
+-    sent, journal = {}, []
+-    confirmation_available = False
+-
+-    def rpc(method, params):
+-        if method == "getAccountInfo":
+-            account = svm.get_account(Pubkey.from_string(params[0]))
+-            return {"value": None if account is None else {
+-                "owner": str(account.owner), "data": [base64.b64encode(account.data).decode(), "base64"],
+-            }}
+-        if method == "getLatestBlockhash":
+-            svm.expire_blockhash()
+-            return {"value": {"blockhash": str(svm.latest_blockhash()), "lastValidBlockHeight": 100}}
+-        if method == "sendTransaction":
+-            assert journal, "signed transaction must be persisted BEFORE broadcast"
+-            assert journal[-1]["transaction"] == params[0]
+-            tx = Transaction.from_bytes(base64.b64decode(params[0]))
+-            ok(svm.send_transaction(tx))
+-            sig = str(tx.signatures[0])
+-            sent[sig] = params[0]
+-            return sig
+-        if method == "getSignatureStatuses":
+-            if not confirmation_available:
+-                raise ChainUnavailable("confirmation transport lost")
+-            return {"value": [{"err": None, "confirmationStatus": "finalized"}]}
+-        if method == "getSignaturesForAddress":
+-            return [{"signature": sig, "err": None} for sig in sent]
+-        if method == "getTransaction":
+-            return {"meta": {"err": None}, "transaction": [sent[params[0]], "base64"]}
+-        raise AssertionError(method)
+-
+-    chain.rpc = rpc
+-    with pytest.raises(ChainUnavailable, match="confirmation transport"):
+-        chain.settle_usdc(str(worker.pubkey()), 25, "retry-test", persist=journal.append)
+-    assert balance(runtime, worker.pubkey(), chain.usdc) == 10_025
+-    confirmation_available = True
+-    sig = chain.settle_usdc(str(worker.pubkey()), 25, "retry-test", persist=journal.append, prepared=journal[-1])
+-    assert sig == journal[-1]["signature"]
+-    assert len(sent) == 1 and len(journal) == 1
+-    assert balance(runtime, worker.pubkey(), chain.usdc) == 10_025
+diff --git a/docs/HIGH-SEVERITY-FIXES.md b/docs/HIGH-SEVERITY-FIXES.md
+deleted file mode 100644
+index 8a2edec..0000000
+--- a/docs/HIGH-SEVERITY-FIXES.md
++++ /dev/null
+@@ -1,114 +0,0 @@
+-# Capture USDC security fixes and operator rollout
+-
+-These changes mirror SKR commits `7d28cf6`, `f1d42cb`, and `cb00bd9` into
+-the Capture USDC (Colosseum) build. USDC field names and the existing migration
+-direction into USDC columns are preserved. No program deployment is performed by
+-building or testing this repository.
+-
+-## Program and backend
+-
+-Judgment submission enforces the configured liveness gate, including direct
+-POSTs that bypass fetching work. The existing `liveness_required` demo switch
+-is preserved.
+-
+-The new program is required for fixes 2, 3, 4, and 6. `record_payment` now takes
+-payment ID, recipient, and amount, verifies the mint authority of the configured
+-USDC mint, and performs the mint CPI itself. Its `payment-v2` PDA binds mint,
+-recipient, amount, and ID. Do not append a second SPL mint instruction. Config
+-and Bond account layouts and the program address are unchanged. Existing
+-`payment` PDAs remain untouched.
+-
+-`reserve_judgment` creates one liability PDA per worker and judgment ID, checks
+-the funded bond, and increments `pending` atomically. `resolve_judgment` records
+-one immutable enforcement result, atomically warns/slashes when required, and
+-releases that liability. A cancellation can create a resolved tombstone before
+-a delayed reservation lands. Replays cannot increment, release, warn, or slash
+-twice. Depositing into a slashed bond cannot erase remaining liabilities.
+-
+-The backend persists submission IDs before reservation and signed payout bytes,
+-signatures, and expiry heights before broadcasting. Only reserved votes count
+-toward consensus. Payout retries verify the exact finalized receipt and locate
+-the matching finalized transaction. A legacy receipt alone is insufficient:
+-its original successful transaction must match the exact mint instructions.
+-Mismatched/poisoned legacy receipts require operator investigation; the backend
+-fails closed rather than risking a second mint.
+-
+-Statistics and enforcement decisions are journaled together, using the unique
+-judgment ID as the resolution ID. Pairs remain `enforcing` after a failed
+-warning/slash/release. Reposting the same judgment retries pending work outside
+-the submission transaction, including after that judge has been slashed. Neutral
+-payouts/releases are also retryable. On-chain results, not the DB mirror, prevent
+-duplicate effects after transport errors or DB commit failures.
+-
+-For an existing installation, the operator should:
+-
+-1. Stop the old API and let its in-flight transactions finalize before upgrading.
+-2. Back up the database and upgrade the program using the existing program ID
+-   and the operator's intended program/upgrade-authority keys.
+-3. Apply schema changes with `cd backend && python -m seeker.migrate`.
+-4. While the API is stopped, run `python -m seeker.liabilities` with the normal
+-   backend environment. **This command writes on-chain.** It reserves existing
+-   accepted, unresolved votes. It is idempotent. If a legacy bond was already
+-   withdrawn/slashed, resolve that historical liability operationally before
+-   reopening; do not mark it reserved without an on-chain reservation.
+-5. Start the updated API. Pending settlement/enforcement can be reconciled by
+-   reposting the original judgment. The API also backfills legacy reservations
+-   when a pair is accessed, but backfilling before reopening closes the upgrade
+-   window for all outstanding votes.
+-
+-Old pairs already marked resolved have no historical enforcement journal. Do
+-not blindly replay their penalties; review them against their chain history.
+-This change cannot reconstruct whether the old code swallowed an enforcement
+-failure. No existing resolved records are silently given new penalties.
+-
+-## Android distribution
+-
+-Debug defaults still support the emulator. Every release task depends on
+-`validateReleaseDistribution`: an explicit HTTPS API base is required, with no
+-loopback/emulator host, URL credentials, query, or fragment. DNS and TLS must
+-work and `<base>/health` must return HTTP 2xx without a redirect. Network failure
+-blocks distribution rather than producing an APK pointing at an unreachable
+-backend.
+-
+-Copy `android/signing.properties.example` to the ignored
+-`android/signing.properties` and supply the persistent release keystore path,
+-store password, alias, and key password. Reuse and back up the same keystore for
+-future updates. No production keystore is generated or committed here.
+-Alternatively set `SEEKER_KEYSTORE_FILE`, `SEEKER_KEYSTORE_PASSWORD`,
+-`SEEKER_KEY_ALIAS`, and `SEEKER_KEY_PASSWORD` in the build environment.
+-
+-Build with the operator's reachable backend, for example:
+-
+-```sh
+-cd android
+-./gradlew assembleRelease -PseekerApiBase=https://capture.example.org
+-```
+-
+-`SEEKER_API_BASE` can supply the URL instead. Release signs with the persistent
+-`release` signing config. Missing credentials block the build.
+-
+-Anti-spoof fusion requires five consecutive recent live frames. A spoof frame
+-breaks the run and restarts motion; sustained spoof evidence takes precedence
+-and remains latched until a new attempt. Face loss, ambiguous/missing tracking,
+-failed classification, and gaps over 750 ms reset evidence and motion together.
+-The existing classifier-unavailable fallback is unchanged; server-side device
+-attestation remains outside this change.
+-
+-## Verification (2026-10-14)
+-
+-- Backend: `SEEKER_LOCAL_SQLITE=true PYTHONDONTWRITEBYTECODE=1 /home/hermes/tap-ci/backend/.venv/bin/python -m pytest -q`
+-  from `backend/`: **63 passed**, with no skips. Includes compiled SBF/SPL CPI
+-  execution in LiteSVM, concurrent retries, transport failures, migration
+-  coverage, and the USDC API/storage contract.
+-- Rust: `cargo test -p seeker-bounty --lib`: **7 passed**.
+-- `anchor build`: **succeeded**, including SBF and IDL generation. It emitted
+-  a warning that the generated local build keypair differs from the declared
+-  program ID; the configured program identity was preserved.
+-- Android: `ANDROID_HOME=/home/hermes/android-sdk ./gradlew testDebugUnitTest --no-daemon`
+-  from `android/`: **64 passed**, with no skips.
+-- Release validation: **5 checks passed**. Missing URL, HTTP/emulator URL,
+-  missing persistent signing credentials, and unreachable HTTPS were rejected.
+-  A local HTTPS `/health` fixture with a trusted test certificate and temporary
+-  persistent test keystore was accepted. Fixture keys were removed afterward.
+-
+-No on-chain deployment or liability backfill was run.
+diff --git a/programs/seeker-bounty/src/lib.rs b/programs/seeker-bounty/src/lib.rs
+index 2025fb6..b6fb7e2 100644
+--- a/programs/seeker-bounty/src/lib.rs
++++ b/programs/seeker-bounty/src/lib.rs
+@@ -1,8 +1,8 @@
+ use anchor_lang::prelude::*;
+-use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer};
++use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
+ 
+ // Development identity only. Deploy with your own keypair and update all clients.
+-declare_id!("8pY9dpwhe4Tbv9Ud9r13WCrNkugirsELNKA3hwfUUdpu");
++declare_id!("5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV");
+ 
+ const COOLDOWN: i64 = 86_400;
+ 
+@@ -21,14 +21,16 @@ pub mod seeker_bounty {
+         min_bond: u64,
+     ) -> Result<()> {
+         require!(
+-            min_bond > 0 && verifier != Pubkey::default() && slash_authority != Pubkey::default(),
++            min_bond > 0
++                && verifier != Pubkey::default()
++                && slash_authority != Pubkey::default(),
+             Error::Invalid
+         );
+-        require!(ctx.accounts.usdc_mint.decimals == 6, Error::Invalid);
++        require!(ctx.accounts.skr_mint.decimals == 6, Error::Invalid);
+         ctx.accounts.config.set_inner(Config {
+             admin: ctx.accounts.admin.key(),
+             verifier,
+-            usdc_mint: ctx.accounts.usdc_mint.key(),
++            skr_mint: ctx.accounts.skr_mint.key(),
+             min_bond,
+             slash_authority,
+         });
+@@ -51,8 +53,8 @@ pub mod seeker_bounty {
+         // slashable but not yet slashed; resetting it there would let a worker
+         // dodge the slash with a one-base-unit deposit (finding #5).
+         if bond.warnings == TERMINAL_WARNINGS {
+-            require!(bond.pending == 0, Error::Pending);
+             bond.warnings = 0;
++            bond.pending = 0;
+         }
+         bond.unlock_at = Clock::get()?
+             .unix_timestamp
+@@ -171,131 +173,23 @@ pub mod seeker_bounty {
+         Ok(())
+     }
+ 
+-    /// The receipt and mint are atomic: a receipt proves the exact payment.
++    /// Record a payment id so a settle_skr retry is idempotent (finding D).
++    /// The mint authority records the id BEFORE minting; a retry whose payment
++    /// account already exists must skip the mint. Append-only via `init`.
+     pub fn record_payment(
+         ctx: Context<RecordPayment>,
+         payment_id: [u8; 16],
+-        recipient: Pubkey,
+-        amount: u64,
+-    ) -> Result<()> {
+-        require!(payment_id != [0u8; 16] && amount > 0, Error::Invalid);
+-        token::mint_to(
+-            CpiContext::new(
+-                ctx.accounts.token_program.key(),
+-                MintTo {
+-                    mint: ctx.accounts.usdc_mint.to_account_info(),
+-                    to: ctx.accounts.destination.to_account_info(),
+-                    authority: ctx.accounts.mint_authority.to_account_info(),
+-                },
+-            ),
+-            amount,
+-        )?;
+-        ctx.accounts.payment.set_inner(Payment {
+-            mint_authority: ctx.accounts.mint_authority.key(),
+-            recipient,
+-            mint: ctx.accounts.usdc_mint.key(),
+-            amount,
+-            payment_id,
+-        });
+-        Ok(())
+-    }
+-
+-    /// One durable liability per judgment. Retrying never increments twice.
+-    pub fn reserve_judgment(
+-        ctx: Context<ReserveJudgment>,
+-        worker: Pubkey,
+-        resolution_id: [u8; 16],
+-    ) -> Result<()> {
+-        let liability = &mut ctx.accounts.liability;
+-        if liability.worker != Pubkey::default() {
+-            require!(!liability.resolved, Error::Invalid);
+-            return Ok(());
+-        }
+-        require!(ctx.accounts.bond.warnings < 2, Error::Slashed);
+-        require!(
+-            ctx.accounts.bond_vault.amount >= ctx.accounts.config.min_bond,
+-            Error::Invalid
+-        );
+-        ctx.accounts.bond.pending = ctx
+-            .accounts
+-            .bond
+-            .pending
+-            .checked_add(1)
+-            .ok_or(Error::Overflow)?;
+-        liability.set_inner(Liability {
+-            worker,
+-            resolution_id,
+-            resolved: false,
+-            penalize: false,
+-            warnings: 0,
+-        });
+-        Ok(())
+-    }
+-
+-    /// Enforcement and release happen atomically and at most once per resolution.
+-    pub fn resolve_judgment(
+-        ctx: Context<ResolveJudgment>,
+-        worker: Pubkey,
+-        resolution_id: [u8; 16],
+-        penalize: bool,
+     ) -> Result<()> {
+-        // A cancelled, not-yet-reserved submission gets a tombstone. This
+-        // also blocks a delayed reserve transaction after the pair resolves.
+-        if ctx.accounts.liability.worker == Pubkey::default() {
+-            require!(!penalize, Error::Invalid);
+-            ctx.accounts.liability.set_inner(Liability {
+-                worker,
+-                resolution_id,
+-                resolved: true,
+-                penalize: false,
+-                warnings: ctx.accounts.bond.warnings,
++        require!(payment_id != [0u8; 16], Error::Invalid);
++        ctx.accounts
++            .payment
++            .set_inner(Payment {
++                mint_authority: ctx.accounts.mint_authority.key(),
+             });
+-            return Ok(());
+-        }
+-        if ctx.accounts.liability.resolved {
+-            require!(ctx.accounts.liability.penalize == penalize, Error::Invalid);
+-            return Ok(());
+-        }
+-        let warnings = resolution_warnings(ctx.accounts.bond.warnings, penalize);
+-        if warnings == TERMINAL_WARNINGS && ctx.accounts.bond.warnings != TERMINAL_WARNINGS {
+-            let seeds: &[&[u8]] = &[b"bond", worker.as_ref(), &[ctx.bumps.bond]];
+-            token::transfer(
+-                CpiContext::new_with_signer(
+-                    ctx.accounts.token_program.key(),
+-                    Transfer {
+-                        from: ctx.accounts.bond_vault.to_account_info(),
+-                        to: ctx.accounts.penalty_vault.to_account_info(),
+-                        authority: ctx.accounts.bond.to_account_info(),
+-                    },
+-                    &[seeds],
+-                ),
+-                ctx.accounts.bond_vault.amount,
+-            )?;
+-        }
+-        ctx.accounts.bond.warnings = warnings;
+-        ctx.accounts.bond.pending = ctx
+-            .accounts
+-            .bond
+-            .pending
+-            .checked_sub(1)
+-            .ok_or(Error::Invalid)?;
+-        ctx.accounts.liability.resolved = true;
+-        ctx.accounts.liability.penalize = penalize;
+-        ctx.accounts.liability.warnings = warnings;
+         Ok(())
+     }
+ }
+ 
+-pub fn resolution_warnings(warnings: u8, penalize: bool) -> u8 {
+-    if !penalize || warnings == TERMINAL_WARNINGS {
+-        warnings
+-    } else if warnings == 0 {
+-        1
+-    } else {
+-        TERMINAL_WARNINGS
+-    }
+-}
+-
+ /// Apply one warning. Refused once the bond is already at the two-strike
+ /// threshold or terminally slashed. Saturating, so it can never wrap past 255.
+ pub fn add_warning(warnings: u8) -> Result<u8> {
+@@ -325,7 +219,7 @@ pub fn valid_merkle_root(root: [u8; 32]) -> bool {
+ pub struct Config {
+     pub admin: Pubkey,
+     pub verifier: Pubkey,
+-    pub usdc_mint: Pubkey,
++    pub skr_mint: Pubkey,
+     pub min_bond: u64,
+     pub slash_authority: Pubkey,
+ }
+@@ -350,20 +244,6 @@ pub struct Batch {
+ pub struct Payment {
+     /// The treasury keypair that recorded (and mints) this payment id.
+     pub mint_authority: Pubkey,
+-    pub recipient: Pubkey,
+-    pub mint: Pubkey,
+-    pub amount: u64,
+-    pub payment_id: [u8; 16],
+-}
+-
+-#[account]
+-#[derive(InitSpace)]
+-pub struct Liability {
+-    pub worker: Pubkey,
+-    pub resolution_id: [u8; 16],
+-    pub resolved: bool,
+-    pub penalize: bool,
+-    pub warnings: u8,
+ }
+ 
+ #[derive(Accounts)]
+@@ -372,8 +252,8 @@ pub struct Initialize<'info> {
+     pub admin: Signer<'info>,
+     #[account(init, payer=admin, space=8+Config::INIT_SPACE, seeds=[b"config"], bump)]
+     pub config: Account<'info, Config>,
+-    pub usdc_mint: Account<'info, Mint>,
+-    #[account(init, payer=admin, seeds=[b"penalty-vault", usdc_mint.key().as_ref()], bump, token::mint=usdc_mint, token::authority=config)]
++    pub skr_mint: Account<'info, Mint>,
++    #[account(init, payer=admin, seeds=[b"penalty-vault", skr_mint.key().as_ref()], bump, token::mint=skr_mint, token::authority=config)]
+     pub penalty_vault: Account<'info, TokenAccount>,
+     #[account(constraint=program.programdata_address()? == Some(program_data.key()) @ Error::Unauthorized)]
+     pub program: Program<'info, crate::program::SeekerBounty>,
+@@ -388,14 +268,14 @@ pub struct Initialize<'info> {
+ pub struct DepositBond<'info> {
+     #[account(mut)]
+     pub worker: Signer<'info>,
+-    #[account(seeds=[b"config"], bump, has_one=usdc_mint)]
++    #[account(seeds=[b"config"], bump, has_one=skr_mint)]
+     pub config: Account<'info, Config>,
+-    pub usdc_mint: Account<'info, Mint>,
++    pub skr_mint: Account<'info, Mint>,
+     #[account(init_if_needed, payer=worker, space=8+Bond::INIT_SPACE, seeds=[b"bond", worker.key().as_ref()], bump)]
+     pub bond: Account<'info, Bond>,
+-    #[account(init_if_needed, payer=worker, seeds=[b"bond-vault", worker.key().as_ref(), usdc_mint.key().as_ref()], bump, token::mint=usdc_mint, token::authority=bond)]
++    #[account(init_if_needed, payer=worker, seeds=[b"bond-vault", worker.key().as_ref(), skr_mint.key().as_ref()], bump, token::mint=skr_mint, token::authority=bond)]
+     pub vault: Account<'info, TokenAccount>,
+-    #[account(mut, token::mint=usdc_mint, token::authority=worker)]
++    #[account(mut, token::mint=skr_mint, token::authority=worker)]
+     pub source: Account<'info, TokenAccount>,
+     pub token_program: Program<'info, Token>,
+     pub system_program: Program<'info, System>,
+@@ -405,14 +285,14 @@ pub struct DepositBond<'info> {
+ #[derive(Accounts)]
+ pub struct WithdrawBond<'info> {
+     pub worker: Signer<'info>,
+-    #[account(seeds=[b"config"], bump, has_one=usdc_mint)]
++    #[account(seeds=[b"config"], bump, has_one=skr_mint)]
+     pub config: Account<'info, Config>,
+-    pub usdc_mint: Account<'info, Mint>,
++    pub skr_mint: Account<'info, Mint>,
+     #[account(seeds=[b"bond", worker.key().as_ref()], bump, has_one=worker)]
+     pub bond: Account<'info, Bond>,
+-    #[account(mut, seeds=[b"bond-vault", worker.key().as_ref(), usdc_mint.key().as_ref()], bump, token::mint=usdc_mint, token::authority=bond)]
++    #[account(mut, seeds=[b"bond-vault", worker.key().as_ref(), skr_mint.key().as_ref()], bump, token::mint=skr_mint, token::authority=bond)]
+     pub vault: Account<'info, TokenAccount>,
+-    #[account(mut, token::mint=usdc_mint, token::authority=worker)]
++    #[account(mut, token::mint=skr_mint, token::authority=worker)]
+     pub destination: Account<'info, TokenAccount>,
+     pub token_program: Program<'info, Token>,
+ }
+@@ -457,9 +337,9 @@ pub struct Slash<'info> {
+     pub config: Account<'info, Config>,
+     #[account(mut, seeds=[b"bond", worker.as_ref()], bump)]
+     pub bond: Account<'info, Bond>,
+-    #[account(mut, seeds=[b"bond-vault", worker.as_ref(), config.usdc_mint.as_ref()], bump, token::mint=config.usdc_mint, token::authority=bond)]
++    #[account(mut, seeds=[b"bond-vault", worker.as_ref(), config.skr_mint.as_ref()], bump, token::mint=config.skr_mint, token::authority=bond)]
+     pub bond_vault: Account<'info, TokenAccount>,
+-    #[account(mut, seeds=[b"penalty-vault", config.usdc_mint.as_ref()], bump, token::mint=config.usdc_mint, token::authority=config)]
++    #[account(mut, seeds=[b"penalty-vault", config.skr_mint.as_ref()], bump, token::mint=config.skr_mint, token::authority=config)]
+     pub penalty_vault: Account<'info, TokenAccount>,
+     pub token_program: Program<'info, Token>,
+ }
+@@ -478,57 +358,12 @@ pub struct PostBatch<'info> {
+ }
+ 
+ #[derive(Accounts)]
+-#[instruction(payment_id: [u8; 16], recipient: Pubkey, amount: u64)]
++#[instruction(payment_id: [u8; 16])]
+ pub struct RecordPayment<'info> {
+-    #[account(mut, constraint=usdc_mint.mint_authority == Some(mint_authority.key()).into() @ Error::Unauthorized)]
+-    pub mint_authority: Signer<'info>,
+-    #[account(seeds=[b"config"], bump, has_one=usdc_mint)]
+-    pub config: Account<'info, Config>,
+     #[account(mut)]
+-    pub usdc_mint: Account<'info, Mint>,
+-    #[account(init, payer=mint_authority, space=8+Payment::INIT_SPACE,
+-        seeds=[b"payment-v2", usdc_mint.key().as_ref(), recipient.as_ref(), &amount.to_le_bytes(), payment_id.as_ref()], bump)]
++    pub mint_authority: Signer<'info>,
++    #[account(init, payer=mint_authority, space=8+Payment::INIT_SPACE, seeds=[b"payment", payment_id.as_ref()], bump)]
+     pub payment: Account<'info, Payment>,
+-    #[account(mut, token::mint=usdc_mint, token::authority=recipient)]
+-    pub destination: Account<'info, TokenAccount>,
+-    pub system_program: Program<'info, System>,
+-    pub token_program: Program<'info, Token>,
+-}
+-
+-#[derive(Accounts)]
+-#[instruction(worker: Pubkey, resolution_id: [u8; 16])]
+-pub struct ReserveJudgment<'info> {
+-    #[account(mut, constraint=authority.key() == config.verifier @ Error::Unauthorized)]
+-    pub authority: Signer<'info>,
+-    #[account(seeds=[b"config"], bump)]
+-    pub config: Account<'info, Config>,
+-    #[account(mut, seeds=[b"bond", worker.as_ref()], bump, constraint=bond.worker == worker @ Error::Unauthorized)]
+-    pub bond: Account<'info, Bond>,
+-    #[account(seeds=[b"bond-vault", worker.as_ref(), config.usdc_mint.as_ref()], bump, token::mint=config.usdc_mint, token::authority=bond)]
+-    pub bond_vault: Account<'info, TokenAccount>,
+-    #[account(init_if_needed, payer=authority, space=8+Liability::INIT_SPACE,
+-        seeds=[b"liability", worker.as_ref(), resolution_id.as_ref()], bump)]
+-    pub liability: Account<'info, Liability>,
+-    pub system_program: Program<'info, System>,
+-}
+-
+-#[derive(Accounts)]
+-#[instruction(worker: Pubkey, resolution_id: [u8; 16])]
+-pub struct ResolveJudgment<'info> {
+-    #[account(mut, constraint=authority.key() == config.slash_authority @ Error::Unauthorized)]
+-    pub authority: Signer<'info>,
+-    #[account(seeds=[b"config"], bump)]
+-    pub config: Account<'info, Config>,
+-    #[account(mut, seeds=[b"bond", worker.as_ref()], bump, constraint=bond.worker == worker @ Error::Unauthorized)]
+-    pub bond: Account<'info, Bond>,
+-    #[account(mut, seeds=[b"bond-vault", worker.as_ref(), config.usdc_mint.as_ref()], bump, token::mint=config.usdc_mint, token::authority=bond)]
+-    pub bond_vault: Account<'info, TokenAccount>,
+-    #[account(init_if_needed, payer=authority, space=8+Liability::INIT_SPACE,
+-        seeds=[b"liability", worker.as_ref(), resolution_id.as_ref()], bump)]
+-    pub liability: Account<'info, Liability>,
+-    #[account(mut, seeds=[b"penalty-vault", config.usdc_mint.as_ref()], bump, token::mint=config.usdc_mint, token::authority=config)]
+-    pub penalty_vault: Account<'info, TokenAccount>,
+-    pub token_program: Program<'info, Token>,
+     pub system_program: Program<'info, System>,
+ }
+ 
+@@ -572,23 +407,6 @@ pub enum Error {
+ mod tests {
+     use super::*;
+ 
+-    #[test]
+-    fn resolution_penalty_is_two_strikes_and_terminal_is_preserved() {
+-        assert_eq!(resolution_warnings(0, false), 0);
+-        assert_eq!(resolution_warnings(1, false), 1);
+-        assert_eq!(resolution_warnings(0, true), 1);
+-        assert_eq!(resolution_warnings(1, true), TERMINAL_WARNINGS);
+-        assert_eq!(resolution_warnings(2, true), TERMINAL_WARNINGS);
+-        assert_eq!(
+-            resolution_warnings(TERMINAL_WARNINGS, true),
+-            TERMINAL_WARNINGS
+-        );
+-        assert_eq!(
+-            resolution_warnings(TERMINAL_WARNINGS, false),
+-            TERMINAL_WARNINGS
+-        );
+-    }
+-
+     // -- warning ladder --------------------------------------------------
+ 
+     #[test]
+diff --git a/scripts/dev_bootstrap.sh b/scripts/dev_bootstrap.sh
+index be716a2..d9b496f 100755
+--- a/scripts/dev_bootstrap.sh
++++ b/scripts/dev_bootstrap.sh
+@@ -23,7 +23,7 @@ VENV="$BACKEND_DIR/.venv"
+ ENV_FILE="$BACKEND_DIR/.env"
+ VERIFIER_DEV="$BACKEND_DIR/verifier.dev.json"
+ 
+-PUBLIC_PROGRAM_ID="8pY9dpwhe4Tbv9Ud9r13WCrNkugirsELNKA3hwfUUdpu"
++PUBLIC_PROGRAM_ID="5TiDwP86k95yfQWzExrPTj5qcKxED99z8pW9fN81u5SV"
+ PUBLIC_USDC_MINT="TXtqUVPDj6JuDoeyFJvwuUqy5jGYTgF98kEkbeN6U8Z"
+ PUBLIC_SKR_MINT="3aGKaVL7GpcTcTuKjkyirnVeyNG1JGFNyGGueu8mAGbM"
+ 
+diff --git a/scripts/load_judgment_images.py b/scripts/load_judgment_images.py
+new file mode 120000
+index 0000000..af20554
+--- /dev/null
++++ b/scripts/load_judgment_images.py
+@@ -0,0 +1 @@
++/home/hermes/capture-images/load_judgment_images.py
+\ No newline at end of file
