@@ -1,4 +1,4 @@
-package ai.loosh.union
+package app.capture.usdc
 
 /**
  * Minimal Base58 encoder for displaying transaction signatures.

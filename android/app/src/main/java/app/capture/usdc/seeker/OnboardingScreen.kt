@@ -1,12 +1,12 @@
-package ai.loosh.union.seeker
+package app.capture.usdc.seeker
 
-import ai.loosh.union.CaptureAccentBright
-import ai.loosh.union.CaptureBaseDeep
-import ai.loosh.union.CaptureInk
-import ai.loosh.union.CaptureOutline
-import ai.loosh.union.CaptureRadii
-import ai.loosh.union.CaptureSurface2
-import ai.loosh.union.MutedGray
+import app.capture.usdc.CaptureAccentBright
+import app.capture.usdc.CaptureBaseDeep
+import app.capture.usdc.CaptureInk
+import app.capture.usdc.CaptureOutline
+import app.capture.usdc.CaptureRadii
+import app.capture.usdc.CaptureSurface2
+import app.capture.usdc.MutedGray
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement

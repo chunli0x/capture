@@ -1,4 +1,4 @@
-package ai.loosh.union
+package app.capture.usdc
 
 /**
  * Passive anti-spoofing, layered under the motion challenge.

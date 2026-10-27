@@ -1,7 +1,7 @@
-package ai.loosh.union.seeker
+package app.capture.usdc.seeker
 
-import ai.loosh.union.Base58
-import ai.loosh.union.BuildConfig
+import app.capture.usdc.Base58
+import app.capture.usdc.BuildConfig
 import android.app.Application
 import android.net.Uri
 import android.util.Base64

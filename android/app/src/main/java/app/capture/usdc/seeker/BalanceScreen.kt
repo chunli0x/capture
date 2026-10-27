@@ -1,6 +1,6 @@
-package ai.loosh.union.seeker
+package app.capture.usdc.seeker
 
-import ai.loosh.union.*
+import app.capture.usdc.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll

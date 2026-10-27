@@ -1,6 +1,6 @@
-package ai.loosh.union.seeker
+package app.capture.usdc.seeker
 
-import ai.loosh.union.*
+import app.capture.usdc.*
 import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background

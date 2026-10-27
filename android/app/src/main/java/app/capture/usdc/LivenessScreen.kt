@@ -1,4 +1,4 @@
-package ai.loosh.union
+package app.capture.usdc
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -11,10 +11,10 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import ai.loosh.union.seeker.ActionButton
-import ai.loosh.union.seeker.CaptureIcon
-import ai.loosh.union.seeker.CapturePanel
-import ai.loosh.union.seeker.CaptureSymbol
+import app.capture.usdc.seeker.ActionButton
+import app.capture.usdc.seeker.CaptureIcon
+import app.capture.usdc.seeker.CapturePanel
+import app.capture.usdc.seeker.CaptureSymbol
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState

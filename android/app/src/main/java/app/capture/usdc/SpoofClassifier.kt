@@ -1,4 +1,4 @@
-package ai.loosh.union
+package app.capture.usdc
 
 import android.content.Context
 import android.graphics.Bitmap

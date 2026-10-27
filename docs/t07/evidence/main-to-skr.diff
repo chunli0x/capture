@@ -93,7 +93,7 @@ index b587296..5d8b176 100644
 -}
 -
  android {
-     namespace = "ai.loosh.union"
+     namespace = "app.capture.usdc"
      compileSdk = 37
 @@ -73,8 +18,11 @@ android {
          versionCode = 1
@@ -130,10 +130,10 @@ index b587296..5d8b176 100644
          }
      }
  
-diff --git a/android/app/src/main/java/ai/loosh/union/LivenessDetector.kt b/android/app/src/main/java/ai/loosh/union/LivenessDetector.kt
+diff --git a/android/app/src/main/java/app/capture/usdc/LivenessDetector.kt b/android/app/src/main/java/app/capture/usdc/LivenessDetector.kt
 index 2d3772f..6ff606d 100644
---- a/android/app/src/main/java/ai/loosh/union/LivenessDetector.kt
-+++ b/android/app/src/main/java/ai/loosh/union/LivenessDetector.kt
+--- a/android/app/src/main/java/app/capture/usdc/LivenessDetector.kt
++++ b/android/app/src/main/java/app/capture/usdc/LivenessDetector.kt
 @@ -137,24 +137,17 @@ class LivenessDetector(val challenge: LivenessChallenge) {
          }
      }
@@ -165,10 +165,10 @@ index 2d3772f..6ff606d 100644
              return phase
          }
  
-diff --git a/android/app/src/main/java/ai/loosh/union/LivenessScreen.kt b/android/app/src/main/java/ai/loosh/union/LivenessScreen.kt
+diff --git a/android/app/src/main/java/app/capture/usdc/LivenessScreen.kt b/android/app/src/main/java/app/capture/usdc/LivenessScreen.kt
 index f55ebed..820ce34 100644
---- a/android/app/src/main/java/ai/loosh/union/LivenessScreen.kt
-+++ b/android/app/src/main/java/ai/loosh/union/LivenessScreen.kt
+--- a/android/app/src/main/java/app/capture/usdc/LivenessScreen.kt
++++ b/android/app/src/main/java/app/capture/usdc/LivenessScreen.kt
 @@ -133,6 +133,8 @@ fun LivenessScreen(
          Spacer(Modifier.height(8.dp))
          busy?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
@@ -315,10 +315,10 @@ index f55ebed..820ce34 100644
 +        }
 +        .addOnCompleteListener { proxy.close() }
  }
-diff --git a/android/app/src/main/java/ai/loosh/union/SpoofDetector.kt b/android/app/src/main/java/ai/loosh/union/SpoofDetector.kt
+diff --git a/android/app/src/main/java/app/capture/usdc/SpoofDetector.kt b/android/app/src/main/java/app/capture/usdc/SpoofDetector.kt
 index 79de763..6e9ca4d 100644
---- a/android/app/src/main/java/ai/loosh/union/SpoofDetector.kt
-+++ b/android/app/src/main/java/ai/loosh/union/SpoofDetector.kt
+--- a/android/app/src/main/java/app/capture/usdc/SpoofDetector.kt
++++ b/android/app/src/main/java/app/capture/usdc/SpoofDetector.kt
 @@ -181,56 +181,27 @@ enum class LivenessOutcome { PENDING, PASSED, SPOOF_SUSPECTED }
   * cheap - hold a real face up for an instant mid-replay - so the classifier's
   * verdict is taken over the frames during which the motion actually happened.
@@ -388,10 +388,10 @@ index 79de763..6e9ca4d 100644
          else -> LivenessOutcome.PENDING
      }
  }
-diff --git a/android/app/src/main/java/ai/loosh/union/seeker/BalanceScreen.kt b/android/app/src/main/java/ai/loosh/union/seeker/BalanceScreen.kt
+diff --git a/android/app/src/main/java/app/capture/usdc/seeker/BalanceScreen.kt b/android/app/src/main/java/app/capture/usdc/seeker/BalanceScreen.kt
 index cbdbf54..07942cc 100644
---- a/android/app/src/main/java/ai/loosh/union/seeker/BalanceScreen.kt
-+++ b/android/app/src/main/java/ai/loosh/union/seeker/BalanceScreen.kt
+--- a/android/app/src/main/java/app/capture/usdc/seeker/BalanceScreen.kt
++++ b/android/app/src/main/java/app/capture/usdc/seeker/BalanceScreen.kt
 @@ -20,7 +20,7 @@ fun formatToken(units: Long): String {
      return if (tokens == floor(tokens)) "%.0f".format(tokens) else "%.2f".format(tokens)
  }
@@ -435,10 +435,10 @@ index cbdbf54..07942cc 100644
 +        Text("\$SKR", style = MaterialTheme.typography.labelSmall, color = MutedGray)
      }
  }
-diff --git a/android/app/src/main/java/ai/loosh/union/seeker/BondScreen.kt b/android/app/src/main/java/ai/loosh/union/seeker/BondScreen.kt
+diff --git a/android/app/src/main/java/app/capture/usdc/seeker/BondScreen.kt b/android/app/src/main/java/app/capture/usdc/seeker/BondScreen.kt
 index 1b842bd..70b6d3e 100644
---- a/android/app/src/main/java/ai/loosh/union/seeker/BondScreen.kt
-+++ b/android/app/src/main/java/ai/loosh/union/seeker/BondScreen.kt
+--- a/android/app/src/main/java/app/capture/usdc/seeker/BondScreen.kt
++++ b/android/app/src/main/java/app/capture/usdc/seeker/BondScreen.kt
 @@ -25,7 +25,7 @@ import androidx.compose.ui.unit.dp
  import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
  
@@ -489,10 +489,10 @@ index 1b842bd..70b6d3e 100644
                          style = MaterialTheme.typography.labelSmall,
                          color = MutedGray,
                      )
-diff --git a/android/app/src/main/java/ai/loosh/union/seeker/CalibrationScreen.kt b/android/app/src/main/java/ai/loosh/union/seeker/CalibrationScreen.kt
+diff --git a/android/app/src/main/java/app/capture/usdc/seeker/CalibrationScreen.kt b/android/app/src/main/java/app/capture/usdc/seeker/CalibrationScreen.kt
 index 5768318..63b6fc4 100644
---- a/android/app/src/main/java/ai/loosh/union/seeker/CalibrationScreen.kt
-+++ b/android/app/src/main/java/ai/loosh/union/seeker/CalibrationScreen.kt
+--- a/android/app/src/main/java/app/capture/usdc/seeker/CalibrationScreen.kt
++++ b/android/app/src/main/java/app/capture/usdc/seeker/CalibrationScreen.kt
 @@ -94,7 +94,7 @@ private fun CalibrationAppBar(onBack: () -> Unit) {
              )
          }
@@ -547,10 +547,10 @@ index 5768318..63b6fc4 100644
              Metric("Warnings", "${s.judgeWarnings}", Modifier.weight(1f))
          }
      }
-diff --git a/android/app/src/main/java/ai/loosh/union/seeker/JudgeLeveling.kt b/android/app/src/main/java/ai/loosh/union/seeker/JudgeLeveling.kt
+diff --git a/android/app/src/main/java/app/capture/usdc/seeker/JudgeLeveling.kt b/android/app/src/main/java/app/capture/usdc/seeker/JudgeLeveling.kt
 index 04f2ef8..9b1222a 100644
---- a/android/app/src/main/java/ai/loosh/union/seeker/JudgeLeveling.kt
-+++ b/android/app/src/main/java/ai/loosh/union/seeker/JudgeLeveling.kt
+--- a/android/app/src/main/java/app/capture/usdc/seeker/JudgeLeveling.kt
++++ b/android/app/src/main/java/app/capture/usdc/seeker/JudgeLeveling.kt
 @@ -6,7 +6,7 @@ import kotlin.math.roundToInt
   * The judge accuracy ladder (parallel to [Leveling.kt], which stays capture-only).
   *
@@ -560,10 +560,10 @@ index 04f2ef8..9b1222a 100644
   * judgment. Kept free of Android so every decision is JVM-testable.
   */
  
-diff --git a/android/app/src/main/java/ai/loosh/union/seeker/JudgmentScreen.kt b/android/app/src/main/java/ai/loosh/union/seeker/JudgmentScreen.kt
+diff --git a/android/app/src/main/java/app/capture/usdc/seeker/JudgmentScreen.kt b/android/app/src/main/java/app/capture/usdc/seeker/JudgmentScreen.kt
 index 788ed0a..a7dfb8a 100644
---- a/android/app/src/main/java/ai/loosh/union/seeker/JudgmentScreen.kt
-+++ b/android/app/src/main/java/ai/loosh/union/seeker/JudgmentScreen.kt
+--- a/android/app/src/main/java/app/capture/usdc/seeker/JudgmentScreen.kt
++++ b/android/app/src/main/java/app/capture/usdc/seeker/JudgmentScreen.kt
 @@ -22,13 +22,13 @@ import androidx.compose.ui.draw.clip
  import androidx.compose.ui.layout.ContentScale
  import coil3.compose.AsyncImage
@@ -618,10 +618,10 @@ index 788ed0a..a7dfb8a 100644
                  SecondaryButton("Refresh", onClick = { vm.judgeNext() }, enabled = !s.busy)
              }
              else -> {
-diff --git a/android/app/src/main/java/ai/loosh/union/seeker/OnboardingScreen.kt b/android/app/src/main/java/ai/loosh/union/seeker/OnboardingScreen.kt
+diff --git a/android/app/src/main/java/app/capture/usdc/seeker/OnboardingScreen.kt b/android/app/src/main/java/app/capture/usdc/seeker/OnboardingScreen.kt
 index 7ccd8b9..b1980d7 100644
---- a/android/app/src/main/java/ai/loosh/union/seeker/OnboardingScreen.kt
-+++ b/android/app/src/main/java/ai/loosh/union/seeker/OnboardingScreen.kt
+--- a/android/app/src/main/java/app/capture/usdc/seeker/OnboardingScreen.kt
++++ b/android/app/src/main/java/app/capture/usdc/seeker/OnboardingScreen.kt
 @@ -45,7 +45,7 @@ fun OnboardingScreen(onDone: () -> Unit) {
              CaptureWordmark()
              EditorialHeading("HOW IT WORKS.")
@@ -649,10 +649,10 @@ index 7ccd8b9..b1980d7 100644
              style = MaterialTheme.typography.labelSmall,
              color = MutedGray,
          )
-diff --git a/android/app/src/main/java/ai/loosh/union/seeker/SeekerApp.kt b/android/app/src/main/java/ai/loosh/union/seeker/SeekerApp.kt
+diff --git a/android/app/src/main/java/app/capture/usdc/seeker/SeekerApp.kt b/android/app/src/main/java/app/capture/usdc/seeker/SeekerApp.kt
 index 9de346d..7e10792 100644
---- a/android/app/src/main/java/ai/loosh/union/seeker/SeekerApp.kt
-+++ b/android/app/src/main/java/ai/loosh/union/seeker/SeekerApp.kt
+--- a/android/app/src/main/java/app/capture/usdc/seeker/SeekerApp.kt
++++ b/android/app/src/main/java/app/capture/usdc/seeker/SeekerApp.kt
 @@ -35,8 +35,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
  import com.solana.mobilewalletadapter.clientlib.ActivityResultSender
  
@@ -682,10 +682,10 @@ index 9de346d..7e10792 100644
                  style = MaterialTheme.typography.bodyMedium,
                  color = CaptureInk,
              )
-diff --git a/android/app/src/main/java/ai/loosh/union/seeker/SeekerViewModel.kt b/android/app/src/main/java/ai/loosh/union/seeker/SeekerViewModel.kt
+diff --git a/android/app/src/main/java/app/capture/usdc/seeker/SeekerViewModel.kt b/android/app/src/main/java/app/capture/usdc/seeker/SeekerViewModel.kt
 index 8755a66..130fd57 100644
---- a/android/app/src/main/java/ai/loosh/union/seeker/SeekerViewModel.kt
-+++ b/android/app/src/main/java/ai/loosh/union/seeker/SeekerViewModel.kt
+--- a/android/app/src/main/java/app/capture/usdc/seeker/SeekerViewModel.kt
++++ b/android/app/src/main/java/app/capture/usdc/seeker/SeekerViewModel.kt
 @@ -55,15 +55,15 @@ data class PilotState(
      val error: String? = null,
      val status: AsyncStatus = AsyncStatus.Idle,
@@ -773,10 +773,10 @@ index 8755a66..130fd57 100644
                  calibrationCompleted = progress?.optInt("completed", 0) ?: 0,
                  calibrationRequired = progress?.optInt("required", 10) ?: 10,
                  calibrationCorrect = progress?.optInt("correct", 0) ?: 0,
-diff --git a/android/app/src/test/java/ai/loosh/union/LivenessDetectorTest.kt b/android/app/src/test/java/ai/loosh/union/LivenessDetectorTest.kt
+diff --git a/android/app/src/test/java/app/capture/usdc/LivenessDetectorTest.kt b/android/app/src/test/java/app/capture/usdc/LivenessDetectorTest.kt
 index 22b35d1..f419ac8 100644
---- a/android/app/src/test/java/ai/loosh/union/LivenessDetectorTest.kt
-+++ b/android/app/src/test/java/ai/loosh/union/LivenessDetectorTest.kt
+--- a/android/app/src/test/java/app/capture/usdc/LivenessDetectorTest.kt
++++ b/android/app/src/test/java/app/capture/usdc/LivenessDetectorTest.kt
 @@ -91,12 +91,12 @@ class LivenessDetectorTest {
      }
  
@@ -792,10 +792,10 @@ index 22b35d1..f419ac8 100644
      }
  
      @Test
-diff --git a/android/app/src/test/java/ai/loosh/union/SpoofDetectorTest.kt b/android/app/src/test/java/ai/loosh/union/SpoofDetectorTest.kt
+diff --git a/android/app/src/test/java/app/capture/usdc/SpoofDetectorTest.kt b/android/app/src/test/java/app/capture/usdc/SpoofDetectorTest.kt
 index c604297..51fdca8 100644
---- a/android/app/src/test/java/ai/loosh/union/SpoofDetectorTest.kt
-+++ b/android/app/src/test/java/ai/loosh/union/SpoofDetectorTest.kt
+--- a/android/app/src/test/java/app/capture/usdc/SpoofDetectorTest.kt
++++ b/android/app/src/test/java/app/capture/usdc/SpoofDetectorTest.kt
 @@ -206,13 +206,11 @@ class SpoofDetectorTest {
      }
  

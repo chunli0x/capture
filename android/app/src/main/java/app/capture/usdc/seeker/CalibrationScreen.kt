@@ -1,11 +1,11 @@
-package ai.loosh.union.seeker
+package app.capture.usdc.seeker
 
-import ai.loosh.union.CaptureAccent
-import ai.loosh.union.CaptureBase
-import ai.loosh.union.CaptureCoral
-import ai.loosh.union.CaptureInk
-import ai.loosh.union.CaptureRadii
-import ai.loosh.union.CaptureYellow
+import app.capture.usdc.CaptureAccent
+import app.capture.usdc.CaptureBase
+import app.capture.usdc.CaptureCoral
+import app.capture.usdc.CaptureInk
+import app.capture.usdc.CaptureRadii
+import app.capture.usdc.CaptureYellow
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border

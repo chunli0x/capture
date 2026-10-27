@@ -1,4 +1,4 @@
-package ai.loosh.union
+package app.capture.usdc
 
 import java.security.MessageDigest
 
