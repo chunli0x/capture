@@ -175,9 +175,10 @@ Notes:
 - `dev_bootstrap.sh` generates a freshly generated dev-only verifier keypair
   (`backend/verifier.dev.json`) and writes it to `backend/.env`. This is
   intentionally **not** the real verifier — the real key authorizes every
-  warn/slash/anchor and is never committed. Anything that needs the real
-  verifier on-chain will fail until you point `SEEKER_VERIFIER_KEY_FILE` at
-  your own keypair.
+  warn/slash/anchor and is never committed. Set `SEEKER_VERIFIER_PUBKEY` to
+  the on-chain verifier for the API. Only the worker receives
+  `SEEKER_VERIFIER_KEY_FILE` and `SEEKER_TREASURY_KEY_FILE`; see
+  [signer configuration](docs/judgment-api-contract.md#signer-separation).
 - No Docker? Use SQLite instead — set `SEEKER_LOCAL_SQLITE=true` and
   `SEEKER_DATABASE_URL=sqlite:///./seeker.db`.
 - The dependency set is tested on Python 3.11. If `python3` is a newer minor,

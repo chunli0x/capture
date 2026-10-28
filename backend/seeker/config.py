@@ -13,7 +13,10 @@ class Settings(BaseSettings):
     cluster: str = "devnet"
     program_id: str
     usdc_mint: str
-    verifier_key_file: Path
+    # API chain access uses public addresses; key-file settings are worker-only.
+    verifier_pubkey: str | None = None
+    treasury_pubkey: str | None = None
+    verifier_key_file: Path | None = None
     # Devnet treasury: holds the USDC mint authority (the faucet, the bond, and
     # the settle_usdc payout — one token, three jobs). Optional (0600,
     # gitignored). Unset -> the on-chain mint is unavailable and the backend
