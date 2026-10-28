@@ -238,10 +238,10 @@ def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
         raise AssertionError(f"unexpected rpc method: {method}")
 
     chain.rpc = fake_rpc
-    # Faucet mints min_bond USDC to the worker (mint authority = treasury).
+    # Faucet mints min_bond $USDC to the worker (mint authority = treasury).
     sig = chain.faucet(str(worker.pubkey()))
     assert sig == "sig_sendTransaction"
-    # Settlement mints test USDC to the judge (mint authority = treasury).
+    # Settlement mints test $USDC to the judge (mint authority = treasury).
     journal = []
     sig = chain.settle_usdc(str(worker.pubkey()), 100_000, memo="judgment-1", persist=journal.append)
     assert sig == journal[0]["signature"]
@@ -251,6 +251,24 @@ def test_faucet_and_settle_build_signed_instructions(chain, tmp_path):
     # instructions serialized without a Keypair/Pubkey type mismatch.
     sends = [c for c in sent if c[0] == "sendTransaction"]
     assert len(sends) == 2
+
+
+def test_faucet_refuses_when_below_sol_floor(chain, tmp_path):
+    # Global faucet budget: refuse a tap that would drop the treasury below
+    # the SOL floor, so a swarm of fresh wallets cannot drain the devnet funder.
+    treasury = Keypair()
+    p = tmp_path / "treasury.json"
+    p.write_text(json.dumps(list(bytes(treasury))))
+    chain.treasury = treasury
+
+    def fake_rpc(method, params):
+        if method == "getBalance":
+            return {"value": 500_000_000}  # below floor (1 SOL) + tap (0.05)
+        raise AssertionError(f"unexpected rpc method: {method}")
+
+    chain.rpc = fake_rpc
+    with pytest.raises(ChainUnavailable):
+        chain.faucet(str(Keypair().pubkey()))
 
 
 def test_payment_journal_failure_prevents_broadcast(chain, payer):
@@ -318,3 +336,59 @@ def test_expired_payment_transaction_rebuilt_and_journaled_before_send(chain, pa
     assert len(journal) == 2 and len(sends) == 2 and sends[0] != sends[1]
     txs = [Transaction.from_bytes(base64.b64decode(raw)) for raw in sends]
     assert message_fingerprint(txs[0].message) == message_fingerprint(txs[1].message)
+
+
+@pytest.mark.parametrize("window", ["signed", "sent"])
+def test_crashed_payout_reuses_exact_signed_bytes(chain, payer, window):
+    chain.treasury = payer
+    journal, sends = [], []
+    crash = True
+
+    class Death(BaseException):
+        pass
+
+    def persist(prepared):
+        journal.append(prepared)
+        if crash and window == "signed":
+            raise Death()
+
+    def rpc(method, params):
+        if method == "getAccountInfo":
+            return {"value": None}
+        if method == "getLatestBlockhash":
+            return {"value": {"blockhash": str(Hash.new_unique()), "lastValidBlockHeight": 100}}
+        if method == "getBlockHeight":
+            return 10
+        if method == "sendTransaction":
+            assert journal[-1]["transaction"] == params[0]
+            sends.append(params[0])
+            if crash and window == "sent":
+                raise Death()
+            return journal[-1]["signature"]
+        if method == "getSignatureStatuses":
+            return {"value": [{"err": None, "confirmationStatus": "finalized"}]}
+        raise AssertionError(method)
+
+    chain.rpc = rpc
+    with pytest.raises(Death):
+        chain.settle_usdc(str(payer.pubkey()), 100, "crash-window", persist=persist)
+    crash = False
+    signature = chain.settle_usdc(str(payer.pubkey()), 100, "crash-window", persist=persist, prepared=journal[0])
+    assert len(journal) == 1 and signature == journal[0]["signature"]
+    assert len(sends) == (2 if window == "sent" else 1)
+    assert all(raw == journal[0]["transaction"] for raw in sends)
+
+
+def test_anchor_recovers_exact_finalized_receipt_and_rejects_mismatch(chain):
+    from unittest.mock import Mock
+    root, batch = "ab" * 32, "cd" * 16
+    raw = discriminator("Batch", "account") + bytes.fromhex(root)
+    chain.rpc = Mock(return_value={"value": {"owner": str(chain.program),
+                     "data": [base64.b64encode(raw).decode(), "base64"]}})
+    chain.post_batch(batch, root)
+    assert [c.args[0] for c in chain.rpc.call_args_list] == ["getAccountInfo"]
+    with pytest.raises(ChainUnavailable, match="immutable root"):
+        chain.post_batch(batch, "ef" * 32)
+    chain.rpc.return_value["value"]["owner"] = str(Keypair().pubkey())
+    with pytest.raises(ChainUnavailable, match="wrong owner"):
+        chain.post_batch(batch, root)
