@@ -65,11 +65,10 @@ The worker logs `Worker signer readiness: {'verifier': 'ready', 'treasury': 'rea
 on startup — if either is not `ready`, the corresponding keypair file is missing
 or does not match the configured public key.
 
-## Known gap (blocked on Lisa)
+## Known gap (blocked on operator)
 
-The public `usdc.capture.magnumopus.ai` subdomain has **no DNS record**, so the
-USDC backend is reachable only on the host (`172.18.0.1:8102`) / through the
-Caddy route that references it. The main `capture.magnumopus.ai` domain currently
-proxies to the **SKR** backend on `8101`. DNS + the planned domain move are
-documented in `capture-infra/DOMAIN-MOVE-RUNBOOK.md` and need registrar/Hetzner
-access.
+The public USDC subdomain has **no DNS record**, so the USDC backend is reachable
+only on the host (`172.18.0.1:8102`) / through the Caddy route that references
+it. The main capture domain currently proxies to the **SKR** backend on `8101`.
+DNS + the planned domain move are documented in
+`capture-infra/DOMAIN-MOVE-RUNBOOK.md` and need registrar/Hetzner access.
