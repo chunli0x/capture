@@ -1,6 +1,6 @@
 # Capture — Operations runbook (restart + health)
 
-Owner: operator (PM + Lisa). Applies to the live devnet deployment on the VPS.
+Owner: operator (PM). Applies to the live devnet deployment on the VPS.
 
 ## Services (systemd)
 
