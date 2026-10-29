@@ -1,6 +1,6 @@
 # T07 — token status and claim audit
 
-Verdict: **both source snapshots are devnet/localnet test-only designs; neither is evidence of real-value USDC or SKR settlement.** A implements test USDC; B implements test `$SKR` in backend/client names but retains USDC README, wire contract and screenshots. Token choice is unresolved and belongs to Lisa. No external RPC, token metadata, live service or deployed program was queried.
+Verdict: **both source snapshots are devnet/localnet test-only designs; neither is evidence of real-value USDC or SKR settlement.** A implements test USDC; B implements test `$SKR` in backend/client names but retains USDC README, wire contract and screenshots. Token choice is unresolved and belongs to the operator. No external RPC, token metadata, live service or deployed program was queried.
 
 ## Exact token identity evidence
 
@@ -40,7 +40,7 @@ These are audit findings; no public copy was edited.
 
 Positive qualifiers that must not be lost: README:50–54 explicitly states no real value and majority-preference bias; Android onboarding/balances/footer likewise disclaim value; `/health` always includes `test_tokens=true` and `dataset_bias="majority-preference"`. Majority agreement must never be relabeled factual truth. Dollar signs within the symbol `$SKR` alone are a ticker style, not evidence of USD denomination; the numeric dollar prefixes above are a separate ambiguity.
 
-## Decisions needed from Lisa
+## Decisions needed from the operator
 
 - Canonical test-token name **and** network/program/mint identity; migration treatment of old demo records and outstanding obligations.
 - T01-approved boundaries for earnings/economics, on-chain/provenance, liveness and readiness claims; owner to refresh screenshots after the approved client works.

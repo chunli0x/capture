@@ -44,12 +44,12 @@ from seeker.db import (  # noqa: E402
 from seeker.migrate import apply_migrations  # noqa: E402
 
 
-def placeholder(batch_id, side, i):
+def placeholder(base, side, i):
     # Real served demo images (shared across batches). "a" = natural, "b" =
     # degraded, cycling the 6 images. Replace with the real vision-model outputs
-    # when Lisa's pipeline commissions a batch.
+    # once a dataset batch is commissioned.
     kind = "natural" if side == "a" else "degraded"
-    return f"https://capture.magnumopus.ai/seed/{kind}-{i % 6}.png"
+    return f"{base}/{kind}-{i % 6}.png"
 
 
 def count(db, model):
@@ -58,6 +58,9 @@ def count(db, model):
 
 def main():
     settings = Settings()
+    # Seed image base derives from the configured auth domain so the tracked
+    # source does not hardcode the operator's hostname.
+    seed_base = f"https://{settings.domain}/seed"
     engine = connect(settings.database_url)
     Base.metadata.create_all(engine)
     apply_migrations(engine)
@@ -84,8 +87,8 @@ def main():
                         known_consensus=0.9,
                         media_type="image",
                         task_type="preference",
-                        output_a_url=placeholder(batch_id, "a" if i % 2 == 0 else "b", i),
-                        output_b_url=placeholder(batch_id, "b" if i % 2 == 0 else "a", i),
+                        output_a_url=placeholder(seed_base, "a" if i % 2 == 0 else "b", i),
+                        output_b_url=placeholder(seed_base, "b" if i % 2 == 0 else "a", i),
                         rubric="prefer naturalness over diversity",
                     )
                 )
@@ -101,8 +104,8 @@ def main():
                     batch_id=batch_id,
                     media_type="image",
                     task_type="preference" if is_pref else "rating",
-                    output_a_url=placeholder(batch_id, "a", 100 + i),
-                    output_b_url=None if not is_pref else placeholder(batch_id, "b", 100 + i),
+                    output_a_url=placeholder(seed_base, "a", 100 + i),
+                    output_b_url=None if not is_pref else placeholder(seed_base, "b", 100 + i),
                     rubric="which output is more natural" if is_pref else "rate quality 1-5",
                     k=settings.judge_k,
                 )

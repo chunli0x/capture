@@ -27,13 +27,11 @@ from seeker.db import (  # noqa: E402
 )
 from sqlalchemy import func, select  # noqa: E402
 
-BASE = "https://capture.magnumopus.ai/seed"
-natural = [f"{BASE}/natural-{i}.png" for i in range(6)]
-degraded = [f"{BASE}/degraded-{i}.png" for i in range(6)]
-
-
 def main() -> None:
     settings = Settings()
+    base = f"https://{settings.domain}/seed"
+    natural = [f"{base}/natural-{i}.png" for i in range(6)]
+    degraded = [f"{base}/degraded-{i}.png" for i in range(6)]
     engine = connect(settings.database_url)
     Session = sessionmaker(engine)
 

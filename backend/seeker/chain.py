@@ -96,24 +96,55 @@ class Chain:
         self.treasury_pubkey = Pubkey.from_string(treasury) if treasury else None
         self.config = self.pda(b"config")
         self.penalty_vault = self.pda(b"penalty-vault", bytes(self.usdc))
+        # Failover + retry config for the public RPC. Primary first; the
+        # fallback is tried only after the primary's 429 backoff is spent or it
+        # errors. rpc_attempts bounds each endpoint's 429 retries.
+        self._rpc_endpoints = [settings.rpc_url]
+        fallback = getattr(settings, "rpc_fallback_url", None)
+        if fallback and fallback != settings.rpc_url:
+            self._rpc_endpoints.append(fallback)
+        self._rpc_attempts = getattr(settings, "rpc_attempts", 3)
 
     def pda(self, *seeds):
         return Pubkey.find_program_address(list(seeds), self.program)[0]
 
     def rpc(self, method, params):
-        try:
-            response = httpx.post(
-                self.settings.rpc_url,
-                json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
-                timeout=15,
-            )
-            response.raise_for_status()
-            data = response.json()
-            if "error" in data or "result" not in data:
-                raise ChainUnavailable("RPC rejected request")
-            return data["result"]
-        except (httpx.HTTPError, ValueError) as exc:
-            raise ChainUnavailable("RPC unavailable; no settlement recorded") from exc
+        """JSON-RPC call with 429 backoff and automatic endpoint failover.
+
+        The public api.devnet.solana.com endpoint rate-limits (HTTP 429) and a
+        single rejected call must not wedge the demo: retry the same endpoint
+        with capped exponential backoff, then fall through to the next
+        configured endpoint. An authoritative ``error`` response (a real RPC
+        rejection such as a missing account) is deterministic, so it raises
+        immediately rather than retrying against every endpoint. Fail closed —
+        raise ChainUnavailable only after every endpoint is exhausted."""
+        last_error = None
+        for url in self._rpc_endpoints:
+            for attempt in range(self._rpc_attempts):
+                try:
+                    response = httpx.post(
+                        url,
+                        json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+                        timeout=15,
+                    )
+                except httpx.HTTPError as exc:
+                    last_error = exc
+                    break  # transport failure: try the next endpoint
+                if response.status_code == 429:
+                    time.sleep(min(2.0 ** attempt, 8.0))
+                    continue  # rate-limited: back off and retry this endpoint
+                try:
+                    response.raise_for_status()
+                    data = response.json()
+                except (httpx.HTTPError, ValueError) as exc:
+                    last_error = exc
+                    break
+                if "error" in data or "result" not in data:
+                    raise ChainUnavailable("RPC rejected request")
+                return data["result"]
+            if last_error is None:
+                last_error = ChainUnavailable("RPC rate-limited; no settlement recorded")
+        raise ChainUnavailable("RPC unavailable; no settlement recorded") from last_error
 
     def check_environment(self):
         genesis = self.rpc("getGenesisHash", [])

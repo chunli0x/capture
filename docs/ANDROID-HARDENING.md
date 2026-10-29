@@ -131,7 +131,7 @@ require the approved per-app Sentry DSNs; no live reporting was exercised here.
 - `testDebugUnitTest`: **67 passed**, no failures/errors/skips, including the
   three crash privacy tests. `assembleDebug`: **passed**.
 - Normal `assembleRelease` and `lintRelease`, with
-  `SEEKER_API_BASE=https://usdc.capture.magnumopus.ai`: **blocked** by the existing
+  `SEEKER_API_BASE=https://usdc.capture.example`: **blocked** by the existing
   `validateReleaseDistribution` task (`UnknownHostException`). This hostname
   comes from the separate USDC host in the infra Caddy configuration; it did not
   resolve during verification. The SKR backend was not substituted.

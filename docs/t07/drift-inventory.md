@@ -2,7 +2,7 @@
 
 Audit date: 2026-10-24. Owner: A6. Reviewers: A10 + A4. Status: audit and proposed plans only; reconciliation has **not** been executed. No token is selected.
 
-Sources read: T07 packet, page 13 of `Teddy-Companion-30-Day-Execution-Plan.pdf` (cached `doc_ba50ccea93dc_…`); `/home/hermes/companion/docs/30-day-plan/execution-board.md`, A6 role and T07 row; repository README and both requested documents. T07 depends on T01 and A7's chosen experiment. This slice does not deliver the later dataset manifest, expert quality report, or cost-per-example calculation.
+Sources read: T07 packet, page 13 of the 30-day execution plan (cached `doc_ba50ccea93dc_…`); the companion project's execution board, A6 role and T07 row; repository README and both requested documents. T07 depends on T01 and A7's chosen experiment. This slice does not deliver the later dataset manifest, expert quality report, or cost-per-example calculation.
 
 | Snapshot | Local ref | Exact commit |
 |---|---|---|
@@ -110,6 +110,6 @@ B's Android screens change `USDC` → `$SKR` in balances, bond, calibration, jud
 
 B's backend is newer than its Rust contract in important ways. Both `chain.py:383–419` call `reserve_judgment` / `resolve_judgment`, but B's Rust has neither instruction nor `Liability` account. Both backends use a `payment-v2` PDA bound to mint, recipient, amount and payment ID (`chain.py:434–448`), and expect the program to mint atomically. A's Rust implements this (`lib.rs:175–285,350–369,481–533`); B's `record_payment` accepts only the ID, creates the old `payment` PDA, stores only `mint_authority`, has no mint CPI and does not bind the signer to a configured mint authority (`lib.rs:179–193,244–247,361–370`). These are source-level incompatibilities, not live RPC findings.
 
-B also resets `bond.pending=0` on a terminal-slash redeposit (`lib.rs:55–57`), where A requires pending zero before resetting warnings (`53–55`). B lacks A's resolution-warning host test and many adversarial LiteSVM tests. B's Android has the explicit camera bypass and weaker spoof continuity described in [bypass inventory](demo-bypass-inventory.md), and lacks A's release distribution checks. Preserve the stronger invariants whichever token Lisa selects; that recommendation does not select a token or authorize deployment.
+B also resets `bond.pending=0` on a terminal-slash redeposit (`lib.rs:55–57`), where A requires pending zero before resetting warnings (`53–55`). B lacks A's resolution-warning host test and many adversarial LiteSVM tests. B's Android has the explicit camera bypass and weaker spoof continuity described in [bypass inventory](demo-bypass-inventory.md), and lacks A's release distribution checks. Preserve the stronger invariants whichever token the operator selects; that recommendation does not select a token or authorize deployment.
 
 Read next: [reconciliation and rollback plan](reconciliation-plan.md), [token claims](token-claim-audit.md), [demo bypasses](demo-bypass-inventory.md), [actual verification](verification.md).

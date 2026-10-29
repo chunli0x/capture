@@ -11,6 +11,14 @@ class Settings(BaseSettings):
     local_sqlite: bool = False
     domain: str = "localhost"
     rpc_url: str = "https://api.devnet.solana.com"
+    # Optional second devnet RPC endpoint. The public api.devnet.solana.com
+    # rate-limits (HTTP 429) under load and a single wedged endpoint stalls the
+    # demo. When set, chain.py retries each endpoint with capped exponential
+    # backoff on 429 and fails over to this one. Unset -> single-endpoint
+    # behaviour (unchanged). A keyed devnet endpoint (Helius / Alchemy /
+    # QuickNode) is recommended for a judge-facing demo.
+    rpc_fallback_url: str | None = None
+    rpc_attempts: int = Field(default=3, ge=1, le=10)
     cluster: str = "devnet"
     program_id: str
     usdc_mint: str
